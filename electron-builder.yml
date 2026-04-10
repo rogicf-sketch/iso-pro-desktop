@@ -1,0 +1,41 @@
+# https://www.electron.build/configuration/configuration
+#
+# Assinatura Windows (SmartScreen / Authenticode), opcional:
+#   Definir antes de `npm run dist:win:signed` ou no CI:
+#   - CSC_LINK ou WIN_CSC_LINK — caminho para .pfx (ou URL, ver documentação)
+#   - CSC_KEY_PASSWORD ou WIN_CSC_KEY_PASSWORD — palavra-passe do certificado
+#   GitHub Actions (repo secrets): WINDOWS_PFX_BASE64 (.pfx em base64) + WINDOWS_CERTIFICATE_PASSWORD.
+#   O workflow .github/workflows/build-windows.yml escreve o PFX e corre dist:win:signed se ambos existirem.
+#   Com certificado, podes usar dist:win:signed (signAndEditExecutable: true). Em PCs sem symlinks
+#   / Developer Mode, builds não assinados usam dist:win (signAndEditExecutable: false).
+#
+appId: com.isopro.desktop
+productName: I.S.O PRO
+copyright: Copyright © I.S.O PRO
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+asar: true
+
+win:
+  # Evita download/extração do winCodeSign quando não há assinatura (útil em Windows sem symlinks / Developer Mode).
+  signAndEditExecutable: false
+  target:
+    - nsis
+    - portable
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+portable:
+  artifactName: '${productName}-${version}-portable.exe'

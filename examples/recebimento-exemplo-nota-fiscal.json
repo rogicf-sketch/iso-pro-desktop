@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "exportedAt": "2026-04-02T14:00:00.000Z",
+  "recebimentos": [
+    {
+      "fornecedor": "Metalurgica Sul Brasil LTDA",
+      "dataRecebimento": "2026-04-02",
+      "notaFiscal": "NF-456789",
+      "romaneio": "ROM-2026-884",
+      "conferente": "Joao Silva",
+      "modoRecebimento": "direto",
+      "observacoes": "Exemplo didatico — voce pode apagar este recebimento depois de testar.",
+      "itens": [
+        {
+          "codigoMaterial": "TB-304-2POL",
+          "descricaoMaterial": "Tubo inox AISI 304 2 polegadas",
+          "unidade": "BR",
+          "disciplina": "Tubulacao",
+          "quantidadeRecebida": 24,
+          "quantidadeConferida": 24
+        },
+        {
+          "codigoMaterial": "FL-ANSI-150-2",
+          "descricaoMaterial": "Flange ANSI 150 lbs 2 pol",
+          "unidade": "UN",
+          "disciplina": "Tubulacao",
+          "quantidadeRecebida": 48,
+          "quantidadeConferida": 48
+        },
+        {
+          "codigoMaterial": "EL-COB-10MM",
+          "descricaoMaterial": "Cabo eletrico cobreado 10 mm2",
+          "unidade": "M",
+          "disciplina": "Eletrica",
+          "quantidadeRecebida": 500,
+          "quantidadeConferida": 500
+        },
+        {
+          "codigoMaterial": "CH-GALV-3MM",
+          "descricaoMaterial": "Chapa galvanizada 3 mm",
+          "unidade": "M2",
+          "disciplina": "Estruturas",
+          "quantidadeRecebida": 12,
+          "quantidadeConferida": 12
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+# CI sem certificado: typecheck, testes, lint, build (Vite + Electron), ícone Windows, auditoria (lista B).
+# Local (mesma sequência): npm run ci
+
+name: CI
+
+run-name: CI · ${{ github.event_name }} · ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build (Vite + Electron main/preload)
+        run: npm run build:app
+
+      - name: Build Windows icon (sharp + png-to-ico)
+        run: npm run build:icon
+
+      - name: Audit dependencies (falha em high+)
+        run: npm audit --audit-level=high

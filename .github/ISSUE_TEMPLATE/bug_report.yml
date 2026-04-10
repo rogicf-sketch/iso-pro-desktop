@@ -1,0 +1,44 @@
+name: Bug
+description: Reportar um erro ou comportamento inesperado
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Antes de abrir: verifica se já existe um issue semelhante.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado
+      description: O que deveria acontecer?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamento atual
+      description: O que acontece em vez disso?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+      description: Lista numerada, se possível.
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versão da app / commit (se souberes)
+  - type: textarea
+    id: env
+    attributes:
+      label: Ambiente
+      description: SO, browser ou app desktop, etc.
+      placeholder: "Ex.: Windows 11, I.S.O PRO 0.1.0"

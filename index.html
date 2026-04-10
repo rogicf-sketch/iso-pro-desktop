@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cusersrogicdownloadsiso-pro-desktop</title>
+  </head>
+  <body>
+    <script>
+      (function () {
+        var tema = 'neon';
+        try {
+          var raw = localStorage.getItem('iso-pro-desktop-configuracoes-sistema');
+          if (raw) {
+            var p = JSON.parse(raw);
+            if (p && typeof p.tema === 'string' && /^(padrao|escuro|claro|verde|neon)$/.test(p.tema)) {
+              tema = p.tema;
+            }
+          }
+        } catch (e) {
+          /* fallback: neon (mesmo default que configuracoes.service) */
+        }
+        document.body.className = 'theme-' + tema;
+      })();
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

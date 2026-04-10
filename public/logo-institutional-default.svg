@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 288 92" width="288" height="92" role="img" aria-label="I.S.O PRO Gestao de Materiais">
+  <defs>
+    <filter id="isoProLogoGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="0.8" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="1.5" y="1.5" width="285" height="89" rx="14" fill="#0f111a" stroke="#1f3d2e" stroke-width="1.5" />
+  <line x1="144" y1="22" x2="144" y2="54" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1.2" />
+  <text x="72" y="46" text-anchor="middle" fill="#f8fafc" font-family="system-ui, Segoe UI, Roboto, sans-serif" font-size="19" font-weight="700" letter-spacing="0.12em">I &#183; S &#183; O</text>
+  <text x="216" y="46" text-anchor="middle" fill="#39ff14" font-family="system-ui, Segoe UI, Roboto, sans-serif" font-size="19" font-weight="700" letter-spacing="0.14em" filter="url(#isoProLogoGlow)">PRO</text>
+  <text x="144" y="76" text-anchor="middle" fill="#39ff14" font-family="system-ui, Segoe UI, Roboto, sans-serif" font-size="10" font-weight="600" letter-spacing="0.12em" filter="url(#isoProLogoGlow)">GEST&#227;O DE MATERIAIS</text>
+</svg>

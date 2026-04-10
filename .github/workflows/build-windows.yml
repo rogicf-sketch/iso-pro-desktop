@@ -1,0 +1,128 @@
+# Gera instalador NSIS + portable em Windows (sem assinatura por defeito).
+# Push de tag v* (ex.: v0.2.0): build + artefacto + GitHub Release com .exe anexados.
+# Prerelease: tag no formato semver com sufixo (ex.: v0.2.0-beta.1), não basta um hífen em qualquer sítio.
+# Variável RELEASE_ATTACH_PORTABLE=false na repo → Release só com instalador NSIS (*Setup*.exe), não anexa o portable
+# (o artefacto do workflow continua com todos os .exe).
+# Por defeito exige que o commit da tag esteja na história do branch padrão do repo
+# (Settings → General → Default branch); desativa com SKIP_TAG_ON_MAIN_CHECK=true.
+# Assinatura no CI: secrets WINDOWS_PFX_BASE64 (PFX em base64) + WINDOWS_CERTIFICATE_PASSWORD;
+# se ambos estiverem definidos, corre npm run dist:win:signed.
+# RELEASE_AS_DRAFT=true → cria a Release como rascunho (revisão antes de publicar).
+# RELEASE_SKIP_TESTS=true → não corre npm run test (só em situações pontuais).
+# Ver também comentários em electron-builder.yml.
+
+name: Build Windows
+
+run-name: Build Windows · ${{ github.ref_name }}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Saltar testes (npm run test) — usar só quando necessário'
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Verify tag commit is on default branch
+        if: ${{ startsWith(github.ref, 'refs/tags/') && vars.SKIP_TAG_ON_MAIN_CHECK != 'true' }}
+        shell: pwsh
+        env:
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          if (-not $env:BASE) { $env:BASE = 'main' }
+          git fetch origin $env:BASE
+          git merge-base --is-ancestor $env:GITHUB_SHA "origin/$($env:BASE)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        if: ${{ vars.RELEASE_SKIP_TESTS != 'true' && (github.event_name != 'workflow_dispatch' || inputs.skip_tests != true) }}
+        run: npm run test
+
+      - name: Package (Vite + Electron + icon + electron-builder)
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $useSign = ($env:PFX_B64 -and $env:PFX_PASS)
+          if ($useSign) {
+            $pfxPath = Join-Path $env:RUNNER_TEMP 'windows-sign.pfx'
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:PFX_B64))
+            $env:CSC_LINK = $pfxPath
+            $env:CSC_KEY_PASSWORD = $env:PFX_PASS
+            npm run dist:win:signed
+          } else {
+            npm run dist:win
+          }
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso-pro-windows-${{ github.ref_name }}
+          retention-days: 14
+          path: |
+            release/*.exe
+            release/*.blockmap
+
+      - name: Prepare GitHub Release assets
+        id: release-prep
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          ATTACH_PORTABLE: ${{ vars.RELEASE_ATTACH_PORTABLE }}
+        run: |
+          $name = $env:GITHUB_REF_NAME
+          $pr = 'false'
+          if ($name -match '^v\d+\.\d+\.\d+-.+') { $pr = 'true' }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "prerelease=$pr"
+
+          New-Item -ItemType Directory -Force release-gh | Out-Null
+          Copy-Item "release/*Setup*.exe" "release-gh/"
+          Get-ChildItem "release" -Filter "*Setup*.exe.blockmap" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName -Destination "release-gh/" }
+          if ($env:ATTACH_PORTABLE -ne 'false') {
+            Get-ChildItem "release" -Filter "*portable*.exe" -ErrorAction SilentlyContinue |
+              ForEach-Object { Copy-Item $_.FullName -Destination "release-gh/" }
+            Get-ChildItem "release" -Filter "*portable*.exe.blockmap" -ErrorAction SilentlyContinue |
+              ForEach-Object { Copy-Item $_.FullName -Destination "release-gh/" }
+          }
+          if (Test-Path "release/SHA256SUMS.txt") {
+            Copy-Item "release/SHA256SUMS.txt" "release-gh/"
+          }
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-gh/*
+          generate_release_notes: true
+          prerelease: ${{ steps.release-prep.outputs.prerelease == 'true' }}
+          draft: ${{ vars.RELEASE_AS_DRAFT == 'true' }}
+          fail_on_unmatched_files: false
