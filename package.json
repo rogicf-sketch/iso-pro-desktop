@@ -36,7 +36,7 @@
     "license:generate": "tsx scripts/generateDesktopLicense.ts"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.101.1",
+    "@supabase/supabase-js": "^2.103.3",
     "jsbarcode": "^3.12.3",
     "qrcode": "^1.5.4",
     "react": "^19.2.4",
