@@ -23,6 +23,9 @@ electron/.dev-main.mjs.map
 !.env.example
 scripts/deploy-web.env
 
+# Supabase CLI estado local (não versionar)
+supabase/.temp/
+
 # Export manual do snapshot (npm run snapshot:export)
 backups
 
