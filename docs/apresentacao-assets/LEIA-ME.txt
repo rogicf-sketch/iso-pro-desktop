@@ -1,0 +1,49 @@
+Deck HTML: ../apresentacao-iso-pro-slides.html
+Versao com fotos DENTRO do ficheiro (base64, ~11 MB): ../apresentacao-iso-pro-slides-embedded.html
+  Regenerar: na pasta docs, executar: .\gerar-apresentacao-slides-embedded.ps1
+Ordem: igual ao menu do desktop (navigation.ts) + slide «Temas» + mobile no Campo (último slide do deck).
+
+Execute na pasta docs:
+  .\remap-apresentacao-assets-ordem-menu.ps1
+para copiar nomes antigos (slide-01...18) para os novos nomes abaixo.
+
+Ficheiros esperados (PNG ou JPG com o mesmo nome base):
+
+  slide-01-capa.png           (não usado — slide 1 é só marca e texto)
+  slide-02-login.png
+  slide-03-painel.png
+  slide-04-fornecedores.png
+  slide-05-colaboradores.png
+  slide-06-materiais.png
+  slide-07-planejamento.png
+  slide-08-recebimentos.png
+  slide-09-conferencia.png
+  slide-10-etiquetas.png           — módulo Etiquetas (Neon)
+  slide-10-etiquetas-amostra.png  (origem: etiqueta.png — exemplo físico ao lado do módulo)
+  slide-11-atendimento.png
+  slide-11-recibo.png        (origem: RECIBO ATENDIMENTO.png — lado a lado com atendimento)
+  slide-12-inventario.png
+  slide-13-equipamentos.png
+  slide-14-rir.png
+  slide-14-relatorio-rir.png (origem: RIR.png — relatório / impressão RIR)
+  slide-15-rnc.png
+  slide-15-relatorio-rnc.png   (relatório RNC / impressão — ao lado do módulo)
+  slide-16-relatorios.png
+  slide-17-rel-fotografico.png   (cuidado: algumas capturas antigas são o painel «Relatórios» — não confundir com o módulo «Rel. fotográfico»)
+  slide-20-modulo-rel-fotografico.png — módulo «Rel. fotográfico» na sidebar (slide 20; não confundir com slide-17-rel-fotografico.png = painel «Relatórios»)
+  slide-17-relatorio-fotografico.png (relatório fotográfico — documento)
+  slide-18-dispositivos-mobile.png  (opcional — o deck usa primeiro slide-15-mobile.png se este não existir)
+  slide-19-usuarios.png
+  slide-20-licencas-desktop.png     (opcional — o deck usa primeiro slide-15-desktop.png se este não existir)
+  slide-15-mobile.png / slide-15-desktop.png — usados no deck para slides «Dispositivos mobile» e «Licenças desktop» quando faltam os nomes slide-18 / slide-20.
+  slide-22-modulo-dispositivos-mobile.png — ecrã desktop «Dispositivos mobile» na sidebar (não usar slide-15-desktop.png: é Planejamento). Pode copiar de Dispositivo Mobile.png.
+  slide-25-licencas-desktop.png — módulo «Licenças desktop» na sidebar (não copiar de slide-11-desktop/slide-11-atendimento: são o mesmo ficheiro que Atendimento). Não usar slide-15-desktop.png: é Planejamento.
+  slide-23-app-dispositivos-campo.png — app no Campo (ex.: separador Documentos); por omissão cópia de slide-15-mobile até exportar a captura final.
+  slide-21-configuracoes.png
+  slide-22-tema-neon.png    — mesmo modulo em tema Neon (demo)
+  slide-22-tema-azul.png    — mesmo modulo em tema azul (só para comparar neste slide)
+  slide-23-mobile-campo.png
+  slide-24-cta.png   (opcional — login/CTA; o deck HTML atual termina no slide «Campo», sem slide CTA)
+
+Recomendacao: nas demos gravar todos os modulos em tema Neon; usar o slide 22
+apenas para mostrar os dois temas lado a lado.
