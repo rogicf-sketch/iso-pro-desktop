@@ -23,7 +23,7 @@ Aplica-se ao **iso-pro-desktop** e ao **iso_pro_mobile** no mesmo projecto Supab
 |------|--------|----------------|
 | RLS/políticas revistas em `iso_pro_snapshot` e tabelas expostas ao cliente | [ ] | |
 | RLS/políticas em tabelas de **materiais** na nuvem (se usarem) | [ ] | |
-| SQL `004_mobile_access.sql` (e anteriores) aplicado se usarem vínculo de dispositivo mobile | [ ] | |
+| Migrações `supabase/migrations/` aplicadas (ordem por timestamp) se usarem vínculo de dispositivo mobile | [ ] | |
 | **Supabase Storage** (se usarem ficheiros): permissões alinhadas + caminho único por documento | [ ] | |
 | Plano do projecto com **backups automáticos** activos | [ ] | |
 | **Teste de restauração** feito ao menos uma vez (registar data) | [ ] | |
@@ -37,7 +37,7 @@ Aplica-se ao **iso-pro-desktop** e ao **iso_pro_mobile** no mesmo projecto Supab
 |------|--------|----------------|
 | Equipa alinhada: evitar dois utilizadores a gravar o **mesmo** fluxo crítico ao mesmo tempo sem coordenação | [ ] | |
 | Mensagens de erro/conflito compreendidas (recarregar e tentar de novo quando aplicável) | [ ] | |
-| Backlog técnico: alinhar gravação mobile ao controlo de versão do desktop **ou** partir dados críticos em tabelas (quando prioridade) | [ ] | |
+| Gravação mobile usa controlo de versão do snapshot (`updated_at`, conflito + retry) — evitar PC e telemóvel a gravar o mesmo fluxo em simultâneo | [ ] | |
 
 ---
 

@@ -58,16 +58,17 @@ VITE_SUPABASE_ANON_KEY=sua_chave_anon
 
 ## SQL necessario no Supabase
 
-Execute os ficheiros da pasta `supabase` do repositório (ou a cópia que acompanha o projecto) nesta ordem:
+Execute as **migrações** em `supabase/migrations/` do repositório, **por ordem de nome** (timestamp):
 
-1. `001_schema_inicial.sql`
-2. `002_iso_pro_snapshot.sql`
-3. `003_relatorio_fotografico.sql`
-4. `004_mobile_access.sql`
-5. `005_auth_access.sql`
-6. `006_desktop_licenses.sql`
+1. `20260205120000_iso_pro_multi_tenant.sql`
+2. `20260207130000_iso_pro_auth_membership_auto_sync.sql`
+3. `20260208120000_perfis_acesso_codigo_unique_per_tenant.sql`
+4. `20260503120000_iso_pro_usuarios_colaborador_id.sql`
+5. `20260503120100_iso_pro_usuario_admin_rpcs.sql`
 
-Com isso, o modulo `Dispositivos Mobile` do desktop consegue:
+Para setup inicial ou novo tenant, use também os snippets em `supabase/snippets/` (ex.: `cole_uma_vez_sql_editor_setup_iso_pro.sql`, `provision_novo_tenant.sql`). Edge Functions em `supabase/functions/` exigem deploy separado — ver `supabase/functions/README.md`.
+
+Com as migrações aplicadas, o modulo `Dispositivos Mobile` do desktop consegue:
 
 - listar aparelhos cadastrados
 - autorizar aparelho
@@ -117,7 +118,7 @@ Fluxo recomendado:
 
 ## Revogacao central de licenca desktop
 
-Depois de executar `006_desktop_licenses.sql`, o desktop passa a consultar no Supabase se a licenca continua `active`.
+Com tabelas de licença desktop configuradas no Supabase (ver migrações/snippets do projecto), o desktop passa a consultar se a licenca continua `active`.
 
 Se a licenca estiver marcada como `revoked`, o executavel bloqueia a abertura mesmo que o token assinado ainda esteja salvo localmente.
 
