@@ -2,6 +2,8 @@
  * CSV helpers for Excel-friendly import/export (UTF-8 with BOM on export).
  */
 
+import { yieldCooperativeAfterRowCount } from './yieldCooperativeImport';
+
 export function stripBom(text: string): string {
   if (text.charCodeAt(0) === 0xfeff) {
     return text.slice(1);
@@ -22,6 +24,17 @@ export function escapeCsvCellSemicolon(value: string): string {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+/**
+ * Formata número para células de exportação Excel (PT-BR): vírgula decimal, sem separador de milhares.
+ * Não altera dados persistidos — só o texto do ficheiro CSV.
+ */
+export function formatDecimalExcelPtBr(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const s = value.toFixed(6);
+  const trimmed = s.replace(/\.?0+$/, '') || '0';
+  return trimmed.replace('.', ',');
 }
 
 function splitCsvLine(line: string, delimiter: ',' | ';'): string[] {
@@ -128,6 +141,59 @@ export function parseCsvToRecords(text: string): CsvRecords | null {
       row[headers[j]] = cells[j] ?? '';
     }
     rows.push(row);
+  }
+
+  return { delimiter, headers, rows };
+}
+
+/**
+ * So a primeira linha (cabecalhos normalizados). Evita percorrer o ficheiro inteiro
+ * para validacoes leves (ex.: deteccao do modelo de importacao).
+ */
+export function parseCsvHeadersOnly(text: string): string[] | null {
+  const raw = stripBom(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = splitCsvLogicalRows(raw).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) {
+    return null;
+  }
+  const delimiter = detectDelimiter(lines[0]);
+  const headerCells = splitCsvLine(lines[0], delimiter);
+  return headerCells.map((cell, index) => {
+    const key = normalizeHeaderKey(cell);
+    return key || `col_${index}`;
+  });
+}
+
+/**
+ * Igual a {@link parseCsvToRecords}, mas cede o event loop a cada N linhas de dados
+ * para ficheiros grandes nao bloquearem a janela durante o parse.
+ */
+export async function parseCsvToRecordsCooperative(text: string): Promise<CsvRecords | null> {
+  const raw = stripBom(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = splitCsvLogicalRows(raw).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) {
+    return null;
+  }
+
+  const delimiter = detectDelimiter(lines[0]);
+  const headerCells = splitCsvLine(lines[0], delimiter);
+  const headers = headerCells.map((cell, index) => {
+    const key = normalizeHeaderKey(cell);
+    return key || `col_${index}`;
+  });
+
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = splitCsvLine(lines[i], delimiter);
+    if (cells.every((c) => c === '')) {
+      continue;
+    }
+    const row: Record<string, string> = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = cells[j] ?? '';
+    }
+    rows.push(row);
+    await yieldCooperativeAfterRowCount(rows.length);
   }
 
   return { delimiter, headers, rows };

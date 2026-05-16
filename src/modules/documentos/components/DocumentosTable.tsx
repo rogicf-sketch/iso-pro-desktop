@@ -23,11 +23,11 @@ type Props = {
 };
 
 function getStatusMeta(status: DocumentoListItem['status']) {
-  if (status === 'atendido') return createStatusMeta(status, 'ok');
-  if (status === 'recebido') return createStatusMeta(status, 'neutral');
-  if (status === 'cancelado') return createStatusMeta(status, 'neutral');
-  if (status === 'parcial') return createStatusMeta(status, 'warning');
-  return createStatusMeta(status, 'danger');
+  if (status === 'atendido') return createStatusMeta('Atendido', 'ok');
+  if (status === 'recebido') return createStatusMeta('Recebido', 'info');
+  if (status === 'cancelado') return createStatusMeta('Cancelado', 'neutral');
+  if (status === 'parcial') return createStatusMeta('Parcial', 'warning');
+  return createStatusMeta('Pendente', 'danger');
 }
 
 function fmtQty(n: number) {

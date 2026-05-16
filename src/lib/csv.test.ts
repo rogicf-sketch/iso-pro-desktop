@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { escapeCsvCellSemicolon, parseCsvToRecords } from './csv';
+import {
+  escapeCsvCellSemicolon,
+  formatDecimalExcelPtBr,
+  parseCsvToRecords,
+  parseCsvToRecordsCooperative,
+} from './csv';
 
 describe('parseCsvToRecords', () => {
   it('parses comma-delimited CSV with header and one row', () => {
@@ -40,8 +45,26 @@ describe('parseCsvToRecords', () => {
   });
 });
 
+describe('parseCsvToRecordsCooperative', () => {
+  it('produz o mesmo resultado que parseCsvToRecords para ficheiro pequeno', async () => {
+    const text = 'codigo;descricao;peso\nX;Item;12,5\nY;Outro;1';
+    const sync = parseCsvToRecords(text);
+    const coop = await parseCsvToRecordsCooperative(text);
+    expect(coop).toEqual(sync);
+  });
+});
+
 describe('escapeCsvCellSemicolon', () => {
   it('quotes values that contain semicolon', () => {
     expect(escapeCsvCellSemicolon('a;b')).toBe('"a;b"');
+  });
+});
+
+describe('formatDecimalExcelPtBr', () => {
+  it('usa virgula decimal e corta zeros a direita', () => {
+    expect(formatDecimalExcelPtBr(330.4)).toBe('330,4');
+    expect(formatDecimalExcelPtBr(2.5)).toBe('2,5');
+    expect(formatDecimalExcelPtBr(7)).toBe('7');
+    expect(formatDecimalExcelPtBr(0)).toBe('0');
   });
 });

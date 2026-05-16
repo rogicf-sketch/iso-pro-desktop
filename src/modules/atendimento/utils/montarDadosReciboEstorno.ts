@@ -1,4 +1,4 @@
-import { buscarDocumentoPorId } from '../../documentos/services/documentos.service';
+import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
 import type { Atendimento, AtendimentoItem, DadosReciboEstorno } from '../types/atendimento.types';
 
 export async function montarDadosReciboEstorno(
@@ -7,7 +7,7 @@ export async function montarDadosReciboEstorno(
   itensEstorno: AtendimentoItem[],
   estornoParcial: boolean,
 ): Promise<DadosReciboEstorno> {
-  const docResult = await buscarDocumentoPorId(at.documentoId);
+  const docResult = await buscarDocumentoPorIdOuNumero(at.documentoId, at.documentoNumero);
   const doc = docResult.success && docResult.data ? docResult.data : null;
 
   return {

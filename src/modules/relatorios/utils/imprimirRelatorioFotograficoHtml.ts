@@ -1,8 +1,12 @@
 import {
   abrirImpressaoHtmlRelatorio,
+  cssBarraPreVisualizacaoImpressaoHtml,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
+  htmlBarraPreVisualizacaoImpressao,
   htmlBlocoLogoInstitucional,
+  segmentoInstituicaoRodapeEletronico,
+  scriptBarraPreVisualizacaoImpressao,
 } from '../../../lib/htmlRelatorioInstitucional';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
@@ -37,7 +41,9 @@ function celulaFoto(f: RelatorioFotograficoFoto, indiceGlobal: number): string {
   return `
     <div class="rf-celula">
       <div class="rf-foto-num">Foto ${indiceGlobal + 1}</div>
-      <img class="rf-foto-img" src="${escapeHtmlRelatorio(f.dataUrl)}" alt="" />
+      <div class="rf-foto-wrap">
+        <img class="rf-foto-img" src="${escapeHtmlRelatorio(f.dataUrl ?? '')}" alt="" />
+      </div>
       ${legendaHtml}
     </div>`;
 }
@@ -48,6 +54,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
   const projetoImpressao = cfg.projeto.trim() || p.projeto.trim();
   const localImpressao = cfg.local.trim() || p.localObra.trim();
   const logo = resolverUrlLogoInstitucionalParaHtmlImpresso(cfg.logoInstitucionalUrl);
+  const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfg.documentoRodapeNome, cfg.documentoRodapeCnpj);
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const tituloPrincipal = p.titulo.trim() || 'Relatório fotográfico';
   const numeroDoc = p.numeroRelatorio.trim();
@@ -309,24 +316,27 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
     .rf-grid4 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-template-rows: 1fr 1fr;
-      gap: 4px;
+      grid-auto-rows: 86mm;
+      gap: 6px;
       width: 100%;
-      min-height: 0;
+      align-items: stretch;
     }
     .rf-grid4--parcial {
-      grid-template-rows: none;
       align-content: start;
     }
+    /* Três faixas: rótulo | área de imagem (sempre igual na mesma linha) | legenda */
     .rf-celula {
       border: 1px solid #cbd5e1;
       border-radius: 3px;
-      padding: 2px;
+      padding: 4px;
       background: #fff;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      align-items: stretch;
       min-height: 0;
+      min-width: 0;
+      height: 100%;
+      max-height: 86mm;
       page-break-inside: avoid;
     }
     .rf-foto-num {
@@ -334,25 +344,39 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       font-weight: 700;
       color: #475569;
       width: 100%;
-      margin-bottom: 1px;
+      margin-bottom: 2px;
       line-height: 1.1;
     }
+    .rf-foto-wrap {
+      min-height: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f1f5f9;
+      border-radius: 2px;
+      overflow: hidden;
+    }
     .rf-foto-img {
+      width: 100%;
+      height: 100%;
       max-width: 100%;
-      width: auto;
-      height: auto;
-      max-height: 130mm;
+      max-height: 100%;
       object-fit: contain;
+      object-position: center;
       display: block;
     }
     .rf-foto-legenda {
-      margin: 2px 0 0;
+      margin: 4px 0 0;
       font-size: 8pt;
       width: 100%;
       text-align: center;
       white-space: pre-wrap;
       color: #0f172a;
       line-height: 1.2;
+      max-height: 14mm;
+      overflow: hidden;
     }
     .rf-empty {
       padding: 16px;
@@ -362,10 +386,11 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       border-radius: 6px;
       font-size: 9pt;
     }
+    ${cssBarraPreVisualizacaoImpressaoHtml()}
     @media print {
       body { padding: 7mm 9mm; }
       .rf-quadro { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-shadow: none; }
-      .rf-foto-img { max-height: 118mm; }
+      .rf-foto-wrap { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
     @media screen and (max-width: 560px) {
       .rf-capa-linha {
@@ -380,6 +405,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
   </style>
 </head>
 <body>
+  ${htmlBarraPreVisualizacaoImpressao()}
   <div class="rf-doc">
     <div class="inst-topbar">
       <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
@@ -396,8 +422,9 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
         : blocosPaginas
     }
 
-    <p style="margin-top:10px;font-size:8pt;color:#64748b;">Documento gerado pelo I.S.O PRO Desktop. Layout: 4 fotos por página quando possível.</p>
+    <p style="margin-top:10px;font-size:8pt;color:#64748b;">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Layout: 4 fotos por página quando possível.</p>
   </div>
+  ${scriptBarraPreVisualizacaoImpressao()}
 </body>
 </html>`;
 }

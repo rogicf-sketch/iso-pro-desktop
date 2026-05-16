@@ -1,8 +1,13 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { resolverNomeFornecedorCadastradoAtivo } from '../../fornecedores/services/fornecedores.service';
+import { validarCodigosMateriaisAtivosNoCadastroParaRecebimento } from '../../materiais/services/materiais.service';
 import { validateRecebimento } from '../schemas/recebimento.schema';
 import {
   buscarRecebimentoPorId,
@@ -46,16 +51,17 @@ const emptyForm: RecebimentoFormData = {
   itens: [],
 };
 
+function recebimentosListaQueryKey(filters: RecebimentoFiltro, userLogin: string | undefined) {
+  return ['recebimentos', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useRecebimentos() {
+  const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const [filters, setFilters] = useState<RecebimentoFiltro>(initialFilters);
-  const [items, setItems] = useState<RecebimentoListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fallbackReason, setFallbackReason] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   /** Somente leitura: ver cabecalho e itens sem editar (ex.: recebimento conferido). */
   const [isViewOnly, setIsViewOnly] = useState(false);
@@ -76,6 +82,10 @@ export function useRecebimentos() {
     setSelectedRecebimentoIds([]);
   }
   const [selectAllFilteredBusy, setSelectAllFilteredBusy] = useState(false);
+
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
   const importMassInputRef = useRef<HTMLInputElement>(null);
   const [importMassStaging, setImportMassStaging] = useState<{
     fileName: string;
@@ -99,32 +109,38 @@ export function useRecebimentos() {
     }
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const listQuery = useQuery({
+    queryKey: recebimentosListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarRecebimentos(filtersForLista);
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar recebimentos.');
+      }
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar recebimentos.'
+        : '';
+
+  const invalidateRecebimentosLista = useCallback(async () => {
     setError('');
     setSuccess('');
-    const result = await listarRecebimentos(filters);
-
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel carregar recebimentos.');
-      setItems([]);
-      setTotal(0);
-      setFallbackReason('');
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-      setFallbackReason(result.meta?.fallbackReason ?? '');
-    }
-
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    setImportMassSnapshotConflict(false);
+    await queryClient.invalidateQueries({ queryKey: ['recebimentos'] });
+  }, [queryClient]);
 
   useEffect(() => {
     if (!idsParaExcluirRecebimentos.length) {
@@ -183,12 +199,30 @@ export function useRecebimentos() {
       duplicatedCodes.add(code);
     }
 
-    const result = await salvarRecebimento(data, selected?.id);
+    const fornecedorCadastrado = await resolverNomeFornecedorCadastradoAtivo(data.fornecedor);
+    if (!fornecedorCadastrado) {
+      return {
+        success: false,
+        error:
+          'Fornecedor nao cadastrado ou inativo. Abra o modulo Fornecedores, cadastre o fornecedor como ativo e use o mesmo nome ao gravar (ou selecione na lista).',
+      };
+    }
+
+    const erroMateriais = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+      data.itens.map((it) => it.codigoMaterial),
+      'salvar',
+      'recebimento',
+    );
+    if (erroMateriais) {
+      return { success: false, error: erroMateriais };
+    }
+
+    const result = await salvarRecebimento({ ...data, fornecedor: fornecedorCadastrado }, selected?.id);
     if (result.success) {
-      setSuccess(result.meta?.source === 'local' ? 'Recebimento salvo localmente.' : 'Recebimento salvo com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateRecebimentosLista();
+      setSuccess(result.meta?.source === 'local' ? 'Recebimento salvo localmente.' : 'Recebimento salvo com sucesso.');
     }
 
     return result;
@@ -215,8 +249,8 @@ export function useRecebimentos() {
       setError(result.error ?? 'Nao foi possivel cancelar recebimento.');
       return;
     }
+    await invalidateRecebimentosLista();
     setSuccess(result.meta?.source === 'local' ? 'Recebimento cancelado localmente.' : 'Recebimento cancelado com sucesso.');
-    await load();
   }
 
   function toggleSelectRecebimentoId(id: string) {
@@ -240,7 +274,7 @@ export function useRecebimentos() {
     }
     setError('');
     setSelectAllFilteredBusy(true);
-    const result = await obterIdsRecebimentosFiltrados(filters);
+    const result = await obterIdsRecebimentosFiltrados(filtersForLista);
     setSelectAllFilteredBusy(false);
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel selecionar todos os recebimentos do filtro.');
@@ -325,7 +359,7 @@ export function useRecebimentos() {
     }
     setDestravarContext(null);
     setDestravarSenha('');
-    await load();
+    await invalidateRecebimentosLista();
     setSuccess(
       result.meta?.source === 'local'
         ? 'Recebimento destravado (gravacao local). Pode editar, cancelar ou excluir conforme as permissoes.'
@@ -371,7 +405,7 @@ export function useRecebimentos() {
       setIsViewOnly(false);
       setIsModalOpen(false);
     }
-    await load();
+    await invalidateRecebimentosLista();
     setSuccess(
       result.meta?.source === 'local'
         ? `Exclusao definitiva: ${rem} recebimento(s) removido(s) (gravacao local).`
@@ -396,7 +430,7 @@ export function useRecebimentos() {
     }
     setError('');
     const result = await montarExportacaoRecebimentosCsvItens({
-      filtroLista: { busca: filters.busca, status: filters.status, modo: filters.modo },
+      filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status, modo: filtersForLista.modo },
     });
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar o CSV.');
@@ -462,7 +496,7 @@ export function useRecebimentos() {
       return;
     }
 
-    const preview = previewImportacaoRecebimentosCsv(text);
+    const preview = await previewImportacaoRecebimentosCsv(text);
     if (!preview.ok) {
       setError(preview.error);
       return;
@@ -516,20 +550,20 @@ export function useRecebimentos() {
       setError('Resumo da importacao indisponivel.');
       return;
     }
-    await load();
+    await invalidateRecebimentosLista();
     setImportMassResultado(r);
   }
 
   async function reloadAfterImportMassSnapshotConflict() {
     setImportMassSnapshotConflict(false);
-    await load();
+    await invalidateRecebimentosLista();
   }
 
   return {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     fallbackReason,
     hasCloudConfig,
@@ -537,7 +571,7 @@ export function useRecebimentos() {
     formInitialValue,
     isModalOpen,
     selected,
-    load,
+    load: invalidateRecebimentosLista,
     setFilters,
     openCreateModal: () => {
       if (!canAccessAction('recebimentos', 'editar')) {

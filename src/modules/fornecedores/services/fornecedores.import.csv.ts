@@ -3,6 +3,7 @@
  */
 
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
+import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
 import type { FornecedorFormData } from '../types/fornecedor.types';
 
 function cell(row: Record<string, string>, ...aliases: string[]): string {
@@ -42,6 +43,10 @@ export function fornecedorRowToFormData(row: Record<string, string>): Fornecedor
 }
 
 export function previewImportacaoFornecedoresCsv(text: string): { ok: true; linhaCount: number } | { ok: false; error: string } {
+  const cabErr = mensagemSeCabecalhoImportCsvIncompativel('fornecedores', text);
+  if (cabErr) {
+    return { ok: false, error: cabErr };
+  }
   const parsed = parseCsvToRecords(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV invalido ou sem linhas de dados (cabecalho obrigatorio).' };

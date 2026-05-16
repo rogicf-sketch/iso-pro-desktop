@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { labelMatchesSearch } from './searchableSelectUtils';
 
 export type SearchableSelectOption = { value: string; label: string };
 
@@ -41,18 +42,27 @@ export function SearchableSelect({ label, value, options, onChange, placeholder,
   }, []);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     const maxList = 400;
-    if (!q) return options.slice(0, maxList);
-    return options
-      .filter(
-        (o) =>
-          o.label.toLowerCase().includes(q) ||
-          o.value.toLowerCase().includes(q) ||
-          (value !== '' && o.value === value),
-      )
-      .slice(0, maxList);
-  }, [options, query, value]);
+    const qLower = q.toLowerCase();
+    let list: SearchableSelectOption[];
+    if (!q) {
+      list = options.slice(0, maxList);
+    } else {
+      list = options
+        .filter(
+          (o) =>
+            labelMatchesSearch(o.label, q) ||
+            o.value.toLowerCase().includes(qLower) ||
+            (value !== '' && o.value === value),
+        )
+        .slice(0, maxList);
+    }
+    if (value && selected && !list.some((o) => o.value === value)) {
+      list = [selected, ...list.filter((o) => o.value !== value)].slice(0, maxList);
+    }
+    return list;
+  }, [options, query, value, selected]);
 
   const filteredKey = useMemo(() => filtered.map((o) => o.value).join('\u0001'), [filtered]);
   const [prevFilteredKey, setPrevFilteredKey] = useState(filteredKey);

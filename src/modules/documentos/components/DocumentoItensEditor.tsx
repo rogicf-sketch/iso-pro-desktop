@@ -21,12 +21,13 @@ function createEmptyItem(): DocumentoItem {
     unidade: 'UN',
     quantidadeProjeto: 0,
     quantidadeAtendida: 0,
+    localizacao: '',
   };
 }
 
 function statusPlanejamentoLinhaMeta(status: ReturnType<typeof resolverStatusLinhaDocumento>) {
   if (status === 'atendido') return createStatusMeta('Atendido', 'ok');
-  if (status === 'recebido') return createStatusMeta('Recebido', 'neutral');
+  if (status === 'recebido') return createStatusMeta('Recebido', 'info');
   if (status === 'parcial') return createStatusMeta('Parcial', 'warning');
   return createStatusMeta('Pendente', 'danger');
 }
@@ -79,6 +80,20 @@ export function DocumentoItensEditor({ items, onChange, metricasPorCodigo }: Pro
                   value={item.unidade}
                 />
               </div>
+
+              <label className="field" style={{ gridColumn: '1 / -1' }}>
+                <span>Localização no estoque (separação) — opcional</span>
+                <textarea
+                  className="input-control"
+                  onChange={(event) => updateItem(item.id, { localizacao: event.target.value })}
+                  placeholder={
+                    'Na folha de campo, o sistema usa primeiro as localizações dos recebimentos (várias NFs). Preencha aqui só como complemento quando ainda não houver recebimento com endereço para este código.'
+                  }
+                  rows={3}
+                  spellCheck={false}
+                  value={item.localizacao ?? ''}
+                />
+              </label>
 
               <div className="form-columns">
                 <Input

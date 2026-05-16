@@ -33,6 +33,7 @@ const BASE_CONFIG: ConfiguracaoSistema = {
   contrato: '',
   local: '',
   tema: 'neon',
+  mostrarAjudaModulos: true,
   sequenciaAtendimento: 0,
   rirModoNumeracao: 'auto',
   rirProcedimentosCadastro: [],
@@ -41,6 +42,8 @@ const BASE_CONFIG: ConfiguracaoSistema = {
   materiaisNuvem: false,
   supabaseUrl: '',
   supabaseAnonKey: '',
+  isoProLinkAuthSecret: '',
+  isoProAdminUserSecret: '',
   desktopVinculoAtivo: false,
   desktopInstalacaoAutorizadaId: '',
   desktopInstalacaoAutorizadaNome: '',
@@ -49,6 +52,8 @@ const BASE_CONFIG: ConfiguracaoSistema = {
   desktopLicencaEmitidaPara: '',
   desktopLicencaExpiraEm: '',
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+  documentoRodapeNome: '',
+  documentoRodapeCnpj: '',
 };
 
 function base64UrlJson(obj: DesktopLicensePayload) {
@@ -159,7 +164,9 @@ describe('desktopSecurity.service', () => {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: { status: 'active' }, error: null }),
+              }),
             }),
           }),
         }),
@@ -176,7 +183,9 @@ describe('desktopSecurity.service', () => {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data: { status: 'revoked' }, error: null }),
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: { status: 'revoked' }, error: null }),
+              }),
             }),
           }),
         }),
@@ -192,7 +201,9 @@ describe('desktopSecurity.service', () => {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+              }),
             }),
           }),
         }),
@@ -207,7 +218,9 @@ describe('desktopSecurity.service', () => {
         from: vi.fn().mockReturnValue({
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'fail' } }),
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'fail' } }),
+              }),
             }),
           }),
         }),

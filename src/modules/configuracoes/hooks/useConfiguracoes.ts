@@ -12,6 +12,7 @@ import {
   type DesktopLicenseRegistryStatus,
   type DesktopSecurityContext,
 } from '../services/desktopSecurity.service';
+import { parseDesktopLicencaImportFile } from '../schemas/desktopLicencaImportFile.zod';
 import { carregarConfiguracoes, salvarConfiguracoes } from '../services/configuracoes.service';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 
@@ -159,7 +160,18 @@ export function useConfiguracoes() {
 
     try {
       const content = await file.text();
-      const parsed = JSON.parse(content) as { token?: string };
+      let jsonParsed: unknown;
+      try {
+        jsonParsed = JSON.parse(content);
+      } catch {
+        setError('O arquivo informado nao e um JSON valido.');
+        return;
+      }
+      const parsed = parseDesktopLicencaImportFile(jsonParsed);
+      if (!parsed) {
+        setError('O arquivo informado nao contem um objeto JSON valido para licenca.');
+        return;
+      }
       const token = parsed.token?.trim();
 
       if (!token) {
@@ -294,6 +306,7 @@ export function useConfiguracoes() {
     loading,
     error,
     success,
+    setSuccess,
     runtimeSupabase,
     hasCloudConfig,
     cloudMaterialsEnabled,

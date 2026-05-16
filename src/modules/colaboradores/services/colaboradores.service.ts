@@ -1,3 +1,5 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
 import {
@@ -5,16 +7,26 @@ import {
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { validateColaborador } from '../schemas/colaborador.schema';
+import { parseColaboradoresPersistidosRaw } from '../schemas/colaboradorPersistido.zod';
 import type { Colaborador, ColaboradorFiltro, ColaboradorFormData } from '../types/colaborador.types';
 import {
   colaboradorRowToFormData,
   type ResultadoImportacaoColaboradoresCsv,
 } from './colaboradores.import.csv';
 
-const STORAGE_KEY = 'iso-pro-desktop-colaboradores';
+function colaboradoresStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-colaboradores');
+}
+
+function bloqueioLocalColaboradores(tamanhoListaGravacao: number): string | null {
+  return mensagemSeSubstituirLocalPerderiaCadastros([
+    { storageKey: colaboradoresStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'colaborador(es)' },
+  ]);
+}
 
 const seedData: Colaborador[] = [
   {
@@ -59,22 +71,28 @@ function normalizeColaborador(item: Partial<Colaborador> & Pick<Colaborador, 'id
 }
 
 function readAll(): Colaborador[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(colaboradoresStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
+    localStorage.setItem(colaboradoresStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
 
   try {
-    return (JSON.parse(raw) as Array<Partial<Colaborador> & Pick<Colaborador, 'id' | 'nome'>>).map(normalizeColaborador);
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseColaboradoresPersistidosRaw(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Colaboradores', colaboradoresStorageKey());
+      return [];
+    }
+    return validated.map(normalizeColaborador);
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
-    return seedData;
+    avisarPreservacaoLocalStorageCorrupto('Colaboradores', colaboradoresStorageKey());
+    return [];
   }
 }
 
 function writeAll(items: Colaborador[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(colaboradoresStorageKey(), JSON.stringify(items));
 }
 
 async function loadColaboradores() {
@@ -234,6 +252,10 @@ export async function salvarColaborador(payload: ColaboradorFormData, currentId?
         nome: payload.nome,
       }),
     };
+    if (hasSupabaseConfig()) {
+      const bloqueio = bloqueioLocalColaboradores(items.length);
+      if (bloqueio) return { success: false, error: bloqueio };
+    }
     return executeWrite({
       shouldWriteRemote: hasSupabaseConfig(),
       writeRemote: () => writeSnapshotColaboradores(items),
@@ -251,6 +273,10 @@ export async function salvarColaborador(payload: ColaboradorFormData, currentId?
     }),
   };
   items.push(created);
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalColaboradores(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
   return executeWrite({
     shouldWriteRemote: hasSupabaseConfig(),
     writeRemote: () => writeSnapshotColaboradores(items),
@@ -298,6 +324,10 @@ export async function registrarRetiranteExterno(payload: {
       ativo: true,
     });
     items[existingIndex] = updated;
+    if (hasSupabaseConfig()) {
+      const bloqueio = bloqueioLocalColaboradores(items.length);
+      if (bloqueio) return { success: false, error: bloqueio };
+    }
     return executeWrite({
       shouldWriteRemote: hasSupabaseConfig(),
       writeRemote: () => writeSnapshotColaboradores(items),
@@ -320,6 +350,10 @@ export async function registrarRetiranteExterno(payload: {
     ativo: true,
   });
   items.push(created);
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalColaboradores(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
   return executeWrite({
     shouldWriteRemote: hasSupabaseConfig(),
     writeRemote: () => writeSnapshotColaboradores(items),
@@ -334,6 +368,10 @@ export async function toggleColaboradorStatus(id: string, ativo: boolean): Promi
   const index = items.findIndex((item) => item.id === id);
   if (index === -1) return { success: false, error: 'Colaborador nao encontrado.' };
   items[index] = { ...items[index], ativo };
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalColaboradores(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
   return executeWrite({
     shouldWriteRemote: hasSupabaseConfig(),
     writeRemote: () => writeSnapshotColaboradores(items),
@@ -412,7 +450,8 @@ export async function importarColaboradoresDoArquivoCsv(
     return { success: false, error: 'CSV invalido ou sem linhas de dados (cabecalho obrigatorio).' };
   }
 
-  const cache = await loadColaboradores();
+  /** Copia mutavel: aplicamos todas as linhas em memoria e gravamos o snapshot **uma vez** (evita centenas de round-trips ao Supabase). */
+  const items: Colaborador[] = [...(await loadColaboradores())];
 
   let criados = 0;
   let atualizados = 0;
@@ -449,23 +488,69 @@ export async function importarColaboradoresDoArquivoCsv(
       continue;
     }
 
-    const existing = cache.find((c) => normalizeLookupValue(c.nome) === nk);
-    const result = await salvarColaborador(form, existing?.id);
+    const normalizedNome = normalizeLookupValue(form.nome);
+    const normalizedDocumento = normalizeLookupValue(form.documento);
+    const existing = items.find((c) => normalizeLookupValue(c.nome) === nk);
 
-    if (!result.success || !result.data) {
+    const duplicated = items.find((item) => {
+      const sameName = normalizeLookupValue(item.nome) === normalizedNome;
+      const sameDocument =
+        Boolean(normalizedDocumento) && normalizeLookupValue(item.documento) === normalizedDocumento;
+      return item.id !== existing?.id && (sameName || sameDocument);
+    });
+    if (duplicated) {
       ignorados += 1;
-      detalhes.push(`Linha ${lineNum}: ${result.error ?? 'Falha ao salvar.'}`);
+      detalhes.push(`Linha ${lineNum}: Ja existe um colaborador com esse nome ou documento.`);
       continue;
     }
 
     if (existing) {
-      const idx = cache.findIndex((c) => c.id === existing.id);
-      if (idx !== -1) cache[idx] = result.data;
+      const index = items.findIndex((item) => item.id === existing.id);
+      if (index === -1) {
+        ignorados += 1;
+        detalhes.push(`Linha ${lineNum}: colaborador nao encontrado para atualizacao.`);
+        continue;
+      }
+      items[index] = normalizeColaborador({
+        ...items[index],
+        ...form,
+        id: items[index].id,
+        nome: form.nome,
+      });
       atualizados += 1;
     } else {
-      cache.push(result.data);
+      items.push(
+        normalizeColaborador({
+          id: crypto.randomUUID(),
+          ...form,
+          nome: form.nome,
+        }),
+      );
       criados += 1;
     }
+  }
+
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalColaboradores(items.length);
+    if (bloqueio) {
+      return { success: false, error: bloqueio };
+    }
+  }
+
+  const writeResult = await executeWrite({
+    shouldWriteRemote: hasSupabaseConfig(),
+    writeRemote: () => writeSnapshotColaboradores(items),
+    writeLocal: () => writeAll(items),
+    successData: items[0] ?? readAll()[0],
+    fallbackMessage: 'Falha ao gravar colaboradores importados no Supabase.',
+  });
+
+  if (!writeResult.success) {
+    return {
+      success: false,
+      error: writeResult.error ?? 'Falha ao concluir importacao.',
+      meta: writeResult.meta,
+    };
   }
 
   return {

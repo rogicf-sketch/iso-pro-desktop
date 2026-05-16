@@ -1,0 +1,61 @@
+1
+00:00:00,000 --> 00:00:05,000
+I.S.O PRO — Gestão de Materiais.
+Apresentação pelo menu do sistema: do acesso
+à operação, qualidade, relatórios e campo.
+
+2
+00:00:05,000 --> 00:00:09,000
+Acesso por perfil e um painel que mostra o pulso da operação:
+armazenamento, nuvem e o que precisa de atenção.
+
+3
+00:00:09,000 --> 00:00:14,000
+Cadastros que sustentam tudo: fornecedores, equipas
+e o catálogo de materiais — base para NF, etiquetas e baixa.
+
+4
+00:00:14,000 --> 00:00:19,000
+No planejamento, cada documento leva a demanda até à execução.
+Nos recebimentos, a entrada amarra NF, romaneio e stock.
+
+5
+00:00:19,000 --> 00:00:23,000
+Conferência valida antes de libertar material.
+Etiquetas ligam o físico ao mesmo código que o campo vai ler.
+
+6
+00:00:23,000 --> 00:00:29,000
+Atendimento com rasto e recibo para auditoria.
+Inventário — também no mobile — fecha a posição;
+equipamentos apoiam o património da obra.
+
+7
+00:00:29,000 --> 00:00:34,000
+Qualidade integrada: RIR e RNC,
+do registo ao relatório para arquivo e fornecedor.
+
+8
+00:00:34,000 --> 00:00:39,000
+Relatórios gerenciais e relatório fotográfico:
+indicadores no desktop e evidência por NF quando a obra precisa provar.
+
+9
+00:00:39,000 --> 00:00:45,000
+No desktop autorizas os telemóveis; no Campo, o app usa o mesmo snapshot —
+conferência, atendimento, documentos, inventário.
+
+10
+00:00:45,000 --> 00:00:50,000
+Utilizadores, licenças e configurações fecham a governança:
+quem faz o quê, onde está instalado e como se apresenta o sistema.
+
+11
+00:00:50,000 --> 00:00:53,000
+E ainda: vários temas visuais —
+escolhe o que a tua equipa prefere para operar.
+
+12
+00:00:53,000 --> 00:00:55,500
+I.S.O PRO no Campo —
+começa no desktop, desempenha na obra.

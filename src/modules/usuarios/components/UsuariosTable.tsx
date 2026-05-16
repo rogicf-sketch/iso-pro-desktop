@@ -29,6 +29,20 @@ export function UsuariosTable({ items, onEdit, onToggleStatus, canEdit, canAdmin
           ),
         },
         {
+          key: 'colaborador',
+          header: 'Colaborador',
+          render: (item) =>
+            item.colaboradorId ? (
+              <div>
+                <div className="panel-copy">
+                  mat. {item.colaboradorMatricula?.trim() || '—'} · {item.colaboradorFuncao?.trim() || '—'}
+                </div>
+              </div>
+            ) : (
+              <span className="panel-copy">—</span>
+            ),
+        },
+        {
           key: 'perfil',
           header: 'Perfil',
           render: (item) => item.perfilNome,

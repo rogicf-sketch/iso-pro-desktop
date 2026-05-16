@@ -7,6 +7,7 @@ export type AppModule =
   | 'recebimentos'
   | 'conferencia'
   | 'etiquetas'
+  | 'equipamentos'
   | 'configuracoes'
   | 'atendimento'
   | 'inventario'

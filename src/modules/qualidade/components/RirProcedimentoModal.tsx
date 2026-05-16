@@ -81,7 +81,7 @@ export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
   }
 
   return (
-    <Modal onClose={onClose} open={open} title="Nº do procedimento — cadastro" wide={false}>
+    <Modal onClose={onClose} open={open} title="Nº do procedimento — cadastro" wide>
       <OperationalNotice tone="warning">
         Cadastre o procedimento vigente (base + revisao). As entradas aparecem como sugestoes no campo <strong>Nº Procedimento</strong> ao criar ou editar um RIR.
       </OperationalNotice>

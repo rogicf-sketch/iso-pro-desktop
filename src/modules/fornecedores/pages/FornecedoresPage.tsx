@@ -1,6 +1,7 @@
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -94,13 +95,15 @@ export function FornecedoresPage() {
         ) : null}
       </div>
 
-      <p className="panel-copy">
-        Cadastro base de fornecedores para recebimentos, qualidade, etiquetas e operacao futura do sistema. Importe planilhas CSV
-        (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Use <strong>Baixar modelo CSV</strong> para o cabecalho
-        correto. Colunas: <code>nome</code>, <code>cnpj</code>, <code>telefone</code>, <code>email</code>, <code>endereco</code>,{' '}
-        <code>ativo</code> (sim/nao). Nome ja cadastrado e atualizado; nome repetido no mesmo arquivo e ignorado apos a primeira linha.{' '}
-        <strong>Excel — todos</strong> exporta o cadastro completo; <strong>Excel — filtro</strong> apenas o que esta visivel com os filtros da lista.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Cadastro base de fornecedores para recebimentos, qualidade, etiquetas e operacao futura do sistema. Importe planilhas CSV
+          (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Use <strong>Baixar modelo CSV</strong> para o cabecalho
+          correto. Colunas: <code>nome</code>, <code>cnpj</code>, <code>telefone</code>, <code>email</code>, <code>endereco</code>,{' '}
+          <code>ativo</code> (sim/nao). Nome ja cadastrado e atualizado; nome repetido no mesmo arquivo e ignorado apos a primeira linha.{' '}
+          <strong>Excel — todos</strong> exporta o cadastro completo; <strong>Excel — filtro</strong> apenas o que esta visivel com os filtros da lista.
+        </p>
+      </ModuleHelp>
 
       <OperationalNotice>
         {cloudStatus === 'ready' && hasCloudConfig
@@ -135,7 +138,7 @@ export function FornecedoresPage() {
         <OperationalNotice>Seu perfil pode visualizar fornecedores, mas nao pode alterar cadastro.</OperationalNotice>
       ) : null}
 
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar fornecedor' : 'Novo fornecedor'}>
+      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar fornecedor' : 'Novo fornecedor'} wide>
         <FornecedorForm
           key={selected?.id ?? 'new-fornecedor'}
           initialValue={formInitialValue}
@@ -154,6 +157,7 @@ export function FornecedoresPage() {
         }}
         open={Boolean(importStaging) && canEdit}
         title="Confirmar importacao"
+        wide
       >
         {importStaging ? (
           <div className="editor-block">
@@ -173,7 +177,7 @@ export function FornecedoresPage() {
         ) : null}
       </Modal>
 
-      <Modal onClose={closeImportFornecedoresResultado} open={Boolean(importResultado)} title="Importacao concluida">
+      <Modal onClose={closeImportFornecedoresResultado} open={Boolean(importResultado)} title="Importacao concluida" wide>
         {importResultado ? (
           <div className="editor-block">
             <p>

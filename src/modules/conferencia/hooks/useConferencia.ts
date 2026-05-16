@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { buscarConferenciaPorId, concluirConferencia, listarConferencias } from '../services/conferencia.service';
-import type { Conferencia, ConferenciaFiltro, ConferenciaListItem } from '../types/conferencia.types';
+import type { Conferencia, ConferenciaFiltro } from '../types/conferencia.types';
 
 const initialFilters: ConferenciaFiltro = {
   busca: '',
@@ -11,44 +14,55 @@ const initialFilters: ConferenciaFiltro = {
   pageSize: 6,
 };
 
+function conferenciasListaQueryKey(filters: ConferenciaFiltro, userLogin: string | undefined) {
+  return ['conferencia', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useConferencia() {
-  const { canAccessAction } = useAuth();
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const [filters, setFilters] = useState<ConferenciaFiltro>(initialFilters);
-  const [items, setItems] = useState<ConferenciaListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fallbackReason, setFallbackReason] = useState('');
   const [selected, setSelected] = useState<Conferencia | null>(null);
   const [snapshotConflict, setSnapshotConflict] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: conferenciasListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarConferencias(filtersForLista);
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar conferencias.');
+      }
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar conferencias.'
+        : '';
+
+  const invalidateConferenciasLista = useCallback(async () => {
     setError('');
     setSuccess('');
     setSnapshotConflict(false);
-    const result = await listarConferencias(filters);
-    if (!result.success || !result.data) {
-      setItems([]);
-      setTotal(0);
-      setError(result.error ?? 'Nao foi possivel carregar conferencias.');
-      setFallbackReason('');
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-      setFallbackReason(result.meta?.fallbackReason ?? '');
-    }
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['conferencia'] });
+  }, [queryClient]);
 
   const totaisSelecionados = useMemo(() => {
     if (!selected) return { recebido: 0, conferido: 0 };
@@ -145,15 +159,15 @@ export function useConferencia() {
 
     setSnapshotConflict(false);
     setSelected(result.data);
+    await invalidateConferenciasLista();
     setSuccess(`Conferencia do recebimento ${result.data.notaFiscal || result.data.id} salva com sucesso.`);
-    await load();
   }
 
   return {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     fallbackReason,
     snapshotConflict,
@@ -166,6 +180,6 @@ export function useConferencia() {
     setSelected,
     updateQuantidade,
     submitConferencia,
-    load,
+    load: invalidateConferenciasLista,
   };
 }

@@ -1,4 +1,9 @@
+import { parseIsoSnapshotPayloadFromUnknown, type IsoSnapshotPayload } from 'iso-pro-shared';
+import { getActiveTenantId } from './isoProTenant';
 import { getSupabase } from './supabase';
+
+/** Intersecção para o genérico do snapshot (JSON em `iso_pro_snapshot.payload`). */
+type IsoSnapshotPayloadRecord = IsoSnapshotPayload & Record<string, unknown>;
 
 /** Leitura em cache, gravacao com baseline `updated_at` e retry em conflito de versao (`iso_pro_snapshot`). */
 const SNAPSHOT_ID = 'default';
@@ -16,6 +21,25 @@ export function invalidateIsoProSnapshotCache() {
 
 function snapshotCopy<T extends Record<string, unknown>>(payload: Record<string, unknown>): T {
   return structuredClone(payload) as T;
+}
+
+/** Leitura da BD: valida o contrato e descarta dados corrompidos (defesa em profundidade). */
+function snapshotPayloadFromDatabase(raw: Record<string, unknown>): Record<string, unknown> {
+  const parsed = parseIsoSnapshotPayloadFromUnknown(raw);
+  if (!parsed.ok) {
+    console.warn('[I.S.O PRO] Payload do snapshot rejeitado na leitura:', parsed.error);
+    return {};
+  }
+  return parsed.data as Record<string, unknown>;
+}
+
+/** Gravação: garante que só entra JSON conforme o contrato partilhado com o app campo. */
+function assertPayloadSafeForWrite(payload: Record<string, unknown>): IsoSnapshotPayloadRecord {
+  const parsed = parseIsoSnapshotPayloadFromUnknown(payload);
+  if (!parsed.ok) {
+    throw new Error(`Snapshot invalido para gravacao: ${parsed.error}`);
+  }
+  return parsed.data as IsoSnapshotPayloadRecord;
 }
 
 export type IsoProSnapshotWriteBaseline<T extends Record<string, unknown>> = {
@@ -38,12 +62,18 @@ export async function readIsoProSnapshotPayloadForWrite<T extends Record<string,
     throw new Error('Supabase nao configurado.');
   }
 
-  const { data, error } = await supabase.from('iso_pro_snapshot').select('payload, updated_at').eq('id', SNAPSHOT_ID).maybeSingle();
+  const { data, error } = await supabase
+    .from('iso_pro_snapshot')
+    .select('payload, updated_at')
+    .eq('id', SNAPSHOT_ID)
+    .eq('tenant_id', getActiveTenantId())
+    .maybeSingle();
   if (error) {
     throw new Error(error.message);
   }
 
-  const payload = ((data?.payload ?? {}) as Record<string, unknown>) ?? {};
+  const raw = ((data?.payload ?? {}) as Record<string, unknown>) ?? {};
+  const payload = snapshotPayloadFromDatabase(raw);
   cachedPayload = payload;
   cachedAt = Date.now();
 
@@ -51,7 +81,7 @@ export async function readIsoProSnapshotPayloadForWrite<T extends Record<string,
   return { payload: snapshotCopy<T>(payload), baselineUpdatedAt };
 }
 
-export async function readIsoProSnapshotPayload<T extends Record<string, unknown>>() {
+export async function readIsoProSnapshotPayload<T extends Record<string, unknown> = IsoSnapshotPayloadRecord>() {
   const now = Date.now();
   if (cachedPayload && now - cachedAt <= SNAPSHOT_CACHE_TTL_MS) {
     return snapshotCopy<T>(cachedPayload);
@@ -68,12 +98,18 @@ export async function readIsoProSnapshotPayload<T extends Record<string, unknown
   }
 
   inflightRead = (async () => {
-    const { data, error } = await supabase.from('iso_pro_snapshot').select('payload').eq('id', SNAPSHOT_ID).maybeSingle();
+    const { data, error } = await supabase
+      .from('iso_pro_snapshot')
+      .select('payload')
+      .eq('id', SNAPSHOT_ID)
+      .eq('tenant_id', getActiveTenantId())
+      .maybeSingle();
     if (error) {
       throw new Error(error.message);
     }
 
-    const payload = ((data?.payload ?? {}) as Record<string, unknown>) ?? {};
+    const raw = ((data?.payload ?? {}) as Record<string, unknown>) ?? {};
+    const payload = snapshotPayloadFromDatabase(raw);
     cachedPayload = payload;
     cachedAt = Date.now();
     return payload;
@@ -144,16 +180,18 @@ export async function upsertIsoProSnapshotPayload(
     throw new Error('Supabase nao configurado.');
   }
 
+  const safePayload = assertPayloadSafeForWrite(nextPayload);
   const nextUpdatedAt = new Date().toISOString();
 
   if (baselineUpdatedAt === null) {
     const { error } = await supabase.from('iso_pro_snapshot').upsert(
       {
         id: SNAPSHOT_ID,
-        payload: nextPayload,
+        tenant_id: getActiveTenantId(),
+        payload: safePayload,
         updated_at: nextUpdatedAt,
       },
-      { onConflict: 'id' },
+      { onConflict: 'id,tenant_id' },
     );
 
     if (error) {
@@ -167,10 +205,11 @@ export async function upsertIsoProSnapshotPayload(
   const { data, error } = await supabase
     .from('iso_pro_snapshot')
     .update({
-      payload: nextPayload,
+      payload: safePayload,
       updated_at: nextUpdatedAt,
     })
     .eq('id', SNAPSHOT_ID)
+    .eq('tenant_id', getActiveTenantId())
     .eq('updated_at', baselineUpdatedAt)
     .select('id');
 

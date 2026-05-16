@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
   authorizeMobileDevice,
@@ -8,7 +11,7 @@ import {
   revokeMobileDevice,
   unblockMobileDevice,
 } from '../services/mobileDevices.service';
-import type { MobileDevice, MobileDeviceFilter } from '../types/mobileDevice.types';
+import type { MobileDeviceFilter } from '../types/mobileDevice.types';
 
 export type PendingMobileConfirm =
   | null
@@ -21,53 +24,61 @@ const initialFilters: MobileDeviceFilter = {
   pageSize: 10,
 };
 
+function mobileDevicesListaQueryKey(filters: MobileDeviceFilter, userLogin: string | undefined) {
+  return ['mobile', 'devices', userLogin ?? '', filters] as const;
+}
+
 export function useMobileDevices() {
-  const { canAccessAction } = useAuth();
-  const [items, setItems] = useState<MobileDevice[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<MobileDeviceFilter>(initialFilters);
-  const [indicators, setIndicators] = useState({
-    total: 0,
-    autorizados: 0,
-    pendentes: 0,
-    bloqueados: 0,
-  });
-  const [syncSource, setSyncSource] = useState<'supabase' | 'local'>('local');
-  const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState<PendingMobileConfirm>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
-    try {
+  const listQuery = useQuery({
+    queryKey: mobileDevicesListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
       const [devices, nextIndicators] = await Promise.all([
-        listMobileDevices(filters),
+        listMobileDevices(filtersForLista),
         getMobileDeviceIndicators(),
       ]);
+      return {
+        items: devices.items,
+        total: devices.total,
+        indicators: nextIndicators,
+        syncSource: (devices.source === 'supabase' || nextIndicators.source === 'supabase' ? 'supabase' : 'local') as
+          | 'supabase'
+          | 'local',
+        syncWarning: devices.warning ?? nextIndicators.warning,
+      };
+    },
+  });
 
-      setItems(devices.items);
-      setTotal(devices.total);
-      setIndicators(nextIndicators);
-      setSyncSource(devices.source === 'supabase' || nextIndicators.source === 'supabase' ? 'supabase' : 'local');
-      setSyncWarning(devices.warning ?? nextIndicators.warning);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Falha ao carregar dispositivos mobile.');
-    } finally {
-      setLoading(false);
-    }
-  }, [filters]);
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const indicators = listQuery.data?.indicators ?? { total: 0, autorizados: 0, pendentes: 0, bloqueados: 0 };
+  const syncSource = listQuery.data?.syncSource ?? 'local';
+  const syncWarning = listQuery.data?.syncWarning ?? null;
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Falha ao carregar dispositivos mobile.'
+        : null;
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const invalidateMobileDevices = useCallback(async () => {
+    setError(null);
+    await queryClient.invalidateQueries({ queryKey: ['mobile'] });
+  }, [queryClient]);
 
   const reload = useCallback(async () => {
-    await load();
-  }, [load]);
+    await invalidateMobileDevices();
+  }, [invalidateMobileDevices]);
 
   const guardAdminOrSetError = useCallback((): boolean => {
     if (!canAccessAction('mobile', 'administrar')) {
@@ -148,13 +159,13 @@ export function useMobileDevices() {
           return;
         }
       }
-      await load();
+      await invalidateMobileDevices();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao atualizar dispositivo mobile.');
     } finally {
       setConfirmLoading(false);
     }
-  }, [pendingConfirm, load, total, items.length, filters.page]);
+  }, [pendingConfirm, invalidateMobileDevices, total, items.length, filters.page]);
 
   const updateFilters = useCallback((next: MobileDeviceFilter) => {
     setFilters(next);
@@ -164,7 +175,7 @@ export function useMobileDevices() {
     items,
     total,
     loading,
-    error,
+    error: error ?? listError,
     filters,
     indicators,
     syncSource,

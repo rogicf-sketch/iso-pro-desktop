@@ -3,7 +3,12 @@
  * Persistencia local; combinadas na UI com valores ja usados nos materiais.
  */
 
-const STORAGE_KEY = 'iso-pro-desktop-materiais-dominios';
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { parseMateriaisDominiosPersistido } from '../schemas/materiaisDominiosPersistido.zod';
+
+function materiaisDominiosStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-materiais-dominios');
+}
 
 export const DEFAULT_DISCIPLINAS_CADASTRO = [
   'Tubulação',
@@ -25,15 +30,29 @@ function normalizarLista(arr: string[]): string[] {
 }
 
 export function readMateriaisDominiosListas(): MateriaisDominiosListas {
+  const defaults: MateriaisDominiosListas = {
+    disciplinas: [...DEFAULT_DISCIPLINAS_CADASTRO],
+    unidades: [...DEFAULT_UNIDADES_CADASTRO],
+  };
+
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(materiaisDominiosStorageKey());
     if (!raw) {
-      return {
-        disciplinas: [...DEFAULT_DISCIPLINAS_CADASTRO],
-        unidades: [...DEFAULT_UNIDADES_CADASTRO],
-      };
+      return defaults;
     }
-    const p = JSON.parse(raw) as Partial<MateriaisDominiosListas>;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return defaults;
+    }
+
+    const p = parseMateriaisDominiosPersistido(parsed);
+    if (!p) {
+      return defaults;
+    }
+
     return {
       disciplinas:
         Array.isArray(p.disciplinas) && p.disciplinas.length > 0
@@ -45,16 +64,13 @@ export function readMateriaisDominiosListas(): MateriaisDominiosListas {
           : [...DEFAULT_UNIDADES_CADASTRO],
     };
   } catch {
-    return {
-      disciplinas: [...DEFAULT_DISCIPLINAS_CADASTRO],
-      unidades: [...DEFAULT_UNIDADES_CADASTRO],
-    };
+    return defaults;
   }
 }
 
 export function writeMateriaisDominiosListas(next: MateriaisDominiosListas): void {
   localStorage.setItem(
-    STORAGE_KEY,
+    materiaisDominiosStorageKey(),
     JSON.stringify({
       disciplinas: normalizarLista(next.disciplinas),
       unidades: normalizarLista(next.unidades),

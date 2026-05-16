@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { collectAllPages } from '../../../lib/collectAllPages';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
+import { Select } from '../../../components/ui/Select';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { colaboradoresElegiveisAssinaturaRir, listarColaboradores } from '../../colaboradores/services/colaboradores.service';
@@ -10,21 +11,41 @@ import { buscarRecebimentoPorId } from '../../recebimentos/services/recebimentos
 import type { Recebimento } from '../../recebimentos/types/recebimento.types';
 import type { ServiceWriteResult } from '../../../types/common.types';
 import { normalizeRirRegistro, obterSugestaoCodigoRir, validateRir } from '../services/qualidade.service';
-import type { RirFormData, RirItemLinha, RirRegistro } from '../types/qualidade.types';
+import type { RirFormData, RirItemLinha, RirRecebimentoChoice, RirRegistro } from '../types/qualidade.types';
 import { codigoHelpLinhaRir } from '../utils/rirNumeracaoCopy';
-import { mapRecebimentoItensParaRirItens } from '../utils/rirMapeamento';
+import {
+  mapRecebimentoItensParaRirItens,
+  montarCorpoObservacoesItensRecebimento,
+  substituirBlocoObservacoesItensNoTexto,
+} from '../utils/rirMapeamento';
+
+function textoBuscaRecebimentoInicialRir(iv: RirFormData): string {
+  if (!iv.recebimentoId?.trim()) return '';
+  const nf = iv.recebimentoNotaFiscal ?? '';
+  const fo = iv.recebimentoFornecedor ?? '';
+  return [nf, fo].filter(Boolean).join(' · ');
+}
+
+function recebimentoDisponivelSomenteSemRir(c: RirRecebimentoChoice, editId?: string): boolean {
+  if (!c.possuiRirNaoCancelado) return true;
+  if (!editId) return false;
+  const outros = c.rirExistentes.filter((r) => r.id !== editId);
+  return outros.length === 0;
+}
 
 type Props = {
   initialValue: RirFormData;
   codigoLocked?: boolean;
   editId?: string;
-  recebimentoChoices: Array<{ id: string; label: string; notaFiscal: string }>;
+  recebimentoChoices: RirRecebimentoChoice[];
   recebimentosChoicesLoading?: boolean;
   modoNumeracao: 'auto' | 'disciplina' | 'manual';
   onCancel: () => void;
   onSubmit: (data: RirFormData) => Promise<ServiceWriteResult>;
   onReloadAfterConflict?: () => void | Promise<void>;
   onPreview: (registro: RirRegistro) => void;
+  /** Abre o RIR existente (edição ou só visualização se finalizado). */
+  onAbrirRirExistente?: (rirId: string) => void | Promise<void>;
 };
 
 function linhaVazia(): RirItemLinha {
@@ -50,11 +71,14 @@ export function RirForm({
   onSubmit,
   onReloadAfterConflict,
   onPreview,
+  onAbrirRirExistente,
 }: Props) {
   const [form, setForm] = useState<RirFormData>(initialValue);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
-  const [recSearch, setRecSearch] = useState('');
+  /** Por defeito ligado em novo RIR: esconde NFs que já têm RIR ativo. */
+  const [somenteSemRir, setSomenteSemRir] = useState(() => !editId);
+  const [recSearch, setRecSearch] = useState(() => textoBuscaRecebimentoInicialRir(initialValue));
   const [recOpen, setRecOpen] = useState(false);
   const [recLoading, setRecLoading] = useState(false);
   const [recebimentoCarregado, setRecebimentoCarregado] = useState<Recebimento | null>(null);
@@ -94,18 +118,6 @@ export function RirForm({
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset form when props.initialValue muda (novo/edicao)
-    setForm(initialValue);
-    if (initialValue.recebimentoId) {
-      const nf = initialValue.recebimentoNotaFiscal ?? '';
-      const fo = initialValue.recebimentoFornecedor ?? '';
-      setRecSearch([nf, fo].filter(Boolean).join(' · '));
-    } else {
-      setRecSearch('');
-    }
-  }, [initialValue]);
-
-  useEffect(() => {
     let cancelled = false;
     void (async () => {
       const id = initialValue.recebimentoId?.trim();
@@ -131,10 +143,27 @@ export function RirForm({
   const procedimentoDatalist = useMemo(() => readConfiguracoes().rirProcedimentosCadastro ?? [], []);
 
   const filtradosRecebimento = useMemo(() => {
+    const base = recebimentoChoices.filter((c) => {
+      if (!somenteSemRir) return true;
+      return recebimentoDisponivelSomenteSemRir(c, editId);
+    });
     const t = recSearch.trim().toLowerCase();
-    if (!t) return recebimentoChoices.slice(0, 40);
-    return recebimentoChoices.filter((c) => c.label.toLowerCase().includes(t)).slice(0, 40);
-  }, [recebimentoChoices, recSearch]);
+    if (!t) return base.slice(0, 40);
+    return base.filter((c) => c.label.toLowerCase().includes(t)).slice(0, 40);
+  }, [recebimentoChoices, recSearch, somenteSemRir, editId]);
+
+  const avisoRirDuplicado = useMemo(() => {
+    const rid = form.recebimentoId?.trim();
+    if (!rid) return null;
+    const choice = recebimentoChoices.find((c) => c.id === rid);
+    if (!choice?.possuiRirNaoCancelado || choice.rirExistentes.length === 0) return null;
+    if (editId) {
+      const outros = choice.rirExistentes.filter((r) => r.id !== editId);
+      if (outros.length === 0) return null;
+      return outros;
+    }
+    return choice.rirExistentes;
+  }, [form.recebimentoId, recebimentoChoices, editId]);
 
   async function aplicarRecebimento(id: string) {
     if (!id) return;
@@ -147,6 +176,7 @@ export function RirForm({
     }
     const rec = result.data;
     const itens = mapRecebimentoItensParaRirItens(rec);
+    const corpoObsItens = montarCorpoObservacoesItensRecebimento(rec);
     setRecebimentoCarregado(rec);
     setForm((f) => ({
       ...f,
@@ -157,6 +187,7 @@ export function RirForm({
       recebimentoFornecedor: rec.fornecedor,
       fornecedorNome: rec.fornecedor,
       obsCurta: rec.observacoes?.trim() ? rec.observacoes : f.obsCurta,
+      observacoesQc: substituirBlocoObservacoesItensNoTexto(f.observacoesQc ?? '', corpoObsItens),
       origem: f.origem.trim() ? f.origem : `Recebimento · NF ${rec.notaFiscal || '—'}`,
       itensRir: itens.length ? itens : [linhaVazia()],
     }));
@@ -178,6 +209,7 @@ export function RirForm({
       recebimentoData: '',
       recebimentoFornecedor: '',
       itensRir: [],
+      observacoesQc: substituirBlocoObservacoesItensNoTexto(f.observacoesQc ?? '', ''),
     }));
     setRecSearch('');
   }
@@ -244,6 +276,18 @@ export function RirForm({
         <p className="panel-copy" style={{ marginBottom: 10 }}>
           Digite a NF, romaneio ou fornecedor e escolha na lista — os campos do RIR abaixo ficam prontos para editar e salvar.
         </p>
+        {!recebimentosChoicesLoading ? (
+          <label className="rir-rec-filter">
+            <input
+              checked={somenteSemRir}
+              onChange={(e) => setSomenteSemRir(e.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              Mostrar apenas recebimentos <strong>sem RIR</strong> (evita duplicar relatório). Desmarque para ver todas as NFs.
+            </span>
+          </label>
+        ) : null}
         <div className="rir-rec-wrap">
           <Input
             disabled={recebimentosChoicesLoading || recLoading}
@@ -256,17 +300,26 @@ export function RirForm({
             placeholder="Ex.: NF-2544 ou fornecedor"
             value={recSearch}
           />
+          {recOpen && filtradosRecebimento.length === 0 && recSearch.trim() && !recebimentosChoicesLoading ? (
+            <div className="rir-rec-dropdown rir-rec-dropdown--empty" role="status">
+              Nenhum recebimento corresponde à busca
+              {somenteSemRir ? ' com o filtro «sem RIR». Desmarque o filtro ou altere o texto.' : '.'}
+            </div>
+          ) : null}
           {recOpen && filtradosRecebimento.length > 0 ? (
             <div className="rir-rec-dropdown" role="listbox">
               {filtradosRecebimento.map((c) => (
                 <button
-                  className="rir-rec-option"
+                  className={`rir-rec-option${c.possuiRirNaoCancelado ? ' rir-rec-option--ja-rir' : ''}`}
                   key={c.id}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => void aplicarRecebimento(c.id)}
                   type="button"
                 >
-                  {c.label}
+                  <span className="rir-rec-option-label">{c.label}</span>
+                  {c.possuiRirNaoCancelado ? (
+                    <span className="rir-rec-option-badge">Já tem RIR</span>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -306,6 +359,28 @@ export function RirForm({
                 Trocar recebimento
               </Button>
             </div>
+            {avisoRirDuplicado && avisoRirDuplicado.length > 0 ? (
+              <div className="rir-duplicado-banner" role="status">
+                <p>
+                  <strong>Atenção:</strong> já existe relatório RIR para este recebimento:{' '}
+                  {avisoRirDuplicado.map((r) => r.codigo).join(', ')}. Evite duplicar salvo exceção documentada.
+                </p>
+                {onAbrirRirExistente ? (
+                  <div className="rir-duplicado-banner-actions">
+                    {avisoRirDuplicado.map((r) => (
+                      <Button
+                        key={r.id}
+                        onClick={() => void onAbrirRirExistente(r.id)}
+                        type="button"
+                        variant="ghost"
+                      >
+                        Abrir {r.codigo}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
         {form.recebimentoId && !recebimentoCarregado && !carregandoDetalheNf ? (
@@ -607,6 +682,11 @@ export function RirForm({
 
       <section className="rir-card">
         <h4 className="rir-card-title">Inspecao de recebimento</h4>
+        <p className="panel-copy" style={{ margin: '0 0 10px', fontSize: 12 }}>
+          Ao escolher o recebimento acima, as <strong>observações por item</strong> (conferência no Recebimentos / campo) são reunidas num bloco no
+          início deste campo; pode editar ou acrescentar texto. Se mudar de recebimento, o bloco é atualizado; observações que escrever à parte
+          mantêm-se abaixo do bloco.
+        </p>
         <label className="field">
           <span>Observacoes da inspecao</span>
           <textarea
@@ -649,6 +729,36 @@ export function RirForm({
             Conforme observacoes
           </label>
         </div>
+      </section>
+
+      <section className="rir-card">
+        <h4 className="rir-card-title">Fluxo do registro</h4>
+        <p className="panel-copy">
+          O <strong>laudo</strong> (Aprovado / Reprovado) descreve o resultado da inspecao. O <strong>status</strong> na lista indica o andamento administrativo do RIR:
+          em aberto, em analise, tratado (encerrado) ou cancelado. Para &quot;finalizar&quot; o processo, escolha <strong>Tratado</strong> e salve.
+        </p>
+        <div className="form-columns">
+          <Select
+            label="Status do RIR"
+            onChange={(e) => setForm({ ...form, status: e.target.value as RirFormData['status'] })}
+            value={form.status ?? 'aberto'}
+          >
+            <option value="aberto">Aberto</option>
+            <option value="em_analise">Em analise</option>
+            <option value="tratado">Tratado (finalizado)</option>
+            <option value="cancelado">Cancelado</option>
+          </Select>
+        </div>
+        <label className="field">
+          <span>Observacoes — tratativa / justificativa</span>
+          <textarea
+            className="input-control text-area"
+            onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
+            placeholder="Registo interno, NC relacionada, motivo de cancelamento, etc."
+            rows={3}
+            value={form.observacoes ?? ''}
+          />
+        </label>
       </section>
 
       <section className="rir-card">
@@ -712,7 +822,7 @@ export function RirForm({
           Cancelar
         </Button>
         <Button onClick={() => preview()} type="button" variant="ghost">
-          Visualizar relatorio
+          Visualizar
         </Button>
         <Button type="submit">Salvar RIR</Button>
       </div>

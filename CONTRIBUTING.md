@@ -21,6 +21,10 @@ Corre localmente o mesmo fluxo do CI:
 npm run ci
 ```
 
+Se o repositório tiver acabado de adicionar dependências (ex.: `@sentry/react`), corre **`npm install`** antes para actualizar o `package-lock.json` e evita falhas de `npm ci` no GitHub.
+
+Smoke E2E sobre o bundle web (Playwright, sem Electron): `npm run build:web` e depois `npm run test:e2e` (usa `npx` para não obrigar dependência no lockfile).
+
 Inclui typecheck, testes, lint, build (Vite + Electron), ícone e `npm audit`.
 
 ## Desenvolvimento
@@ -39,3 +43,9 @@ Usa o modelo que o GitHub sugere ao abrir o PR; referencia issues quando fizer s
 ## Workflows (GitHub Actions)
 
 Alterações em `.github/workflows/` disparam o workflow **Lint workflows** ([actionlint](https://github.com/rhysd/actionlint)) para validar sintaxe e expressões `${{ }}`.
+
+O workflow **CI** na raiz corre `npm run ci` **e** smoke E2E web (Playwright) após o build — ver `README.md` e `npm run test:e2e`.
+
+## Releases Windows e EULA
+
+Antes de publicar um instalador NSIS a clientes, confirma que **`legal/EULA.txt`** está actualizado com o texto jurídico definitivo (o modelo no repositório não substitui revisão por advogado). Ver também `README.md` → *Direitos de autor, EULA e terceiros*.

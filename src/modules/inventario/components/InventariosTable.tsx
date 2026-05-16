@@ -10,8 +10,10 @@ type Props = {
   items: InventarioListItem[];
   onEdit: (item: InventarioListItem) => void;
   onClose: (item: InventarioListItem) => void;
+  onExportCsv?: (item: InventarioListItem) => void;
   canEdit: boolean;
   canAdminister: boolean;
+  canExportCsv: boolean;
 };
 
 function statusMeta(status: InventarioListItem['status']) {
@@ -20,7 +22,15 @@ function statusMeta(status: InventarioListItem['status']) {
   return createStatusMeta('Aberto', 'warning');
 }
 
-export function InventariosTable({ items, onEdit, onClose, canEdit, canAdminister }: Props) {
+export function InventariosTable({
+  items,
+  onEdit,
+  onClose,
+  onExportCsv,
+  canEdit,
+  canAdminister,
+  canExportCsv,
+}: Props) {
   return (
     <DataTable
       getRowClassName={(item) => getTableRowClassName(item.status === 'cancelado' ? 'critical' : item.status === 'aberto' ? 'warning' : 'normal')}
@@ -44,6 +54,11 @@ export function InventariosTable({ items, onEdit, onClose, canEdit, canAdministe
           key: 'data',
           header: 'Data',
           render: (item) => item.dataInventario,
+        },
+        {
+          key: 'mobile',
+          header: 'Mobile',
+          render: (item) => (item.contagemMobileHabilitada ? 'Sim' : 'Nao'),
         },
         {
           key: 'itens',
@@ -81,6 +96,22 @@ export function InventariosTable({ items, onEdit, onClose, canEdit, canAdministe
                   enabledTitle="Fechar inventario e consolidar apuracao."
                   onClick={() => onClose(item)}
                 />
+              ) : null}
+              {canExportCsv && onExportCsv ? (
+                <Button
+                  disabled={item.status !== 'fechado'}
+                  onClick={() => onExportCsv(item)}
+                  title={
+                    item.status === 'fechado'
+                      ? 'Exporta linhas do inventario (CSV compativel com Excel).'
+                      : item.status === 'cancelado'
+                        ? 'Inventarios cancelados nao podem ser exportados.'
+                        : 'Feche o inventario para habilitar a exportacao (CSV compativel com Excel).'
+                  }
+                  variant="ghost"
+                >
+                  Exportar Excel (CSV)
+                </Button>
               ) : null}
             </div>
           ),

@@ -1,8 +1,12 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { validarCodigosMateriaisAtivosNoCadastroParaRecebimento } from '../../materiais/services/materiais.service';
 import { validateDocumento } from '../schemas/documento.schema';
 import {
   buscarDocumentoPorId,
@@ -44,19 +48,18 @@ const emptyForm: DocumentoFormData = {
   itens: [],
 };
 
+function documentosListaQueryKey(filters: DocumentoFiltro, userLogin: string | undefined) {
+  return ['documentos', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useDocumentos() {
+  const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const [filters, setFilters] = useState<DocumentoFiltro>(initialFilters);
-  const [items, setItems] = useState<DocumentoListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fallbackReason, setFallbackReason] = useState('');
-  const [documentosSource, setDocumentosSource] = useState<'supabase' | 'local' | null>(null);
   const [syncingLocalParaNuvem, setSyncingLocalParaNuvem] = useState(false);
-  const [planejamentoDiag, setPlanejamentoDiag] = useState<{ noNavegador: number; noSnapshot: number } | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Documento | null>(null);
   const [viewDocument, setViewDocument] = useState<Documento | null>(null);
@@ -99,31 +102,59 @@ export function useDocumentos() {
     }
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: documentosListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarDocumentos(filtersForLista);
+
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar documentos.');
+      }
+
+      const diag = await diagnosticarPlanejamentoLocalVersusNuvem();
+      const documentosSource =
+        result.meta?.source === 'local' ? 'local' : result.meta?.source === 'supabase' ? 'supabase' : null;
+      const planejamentoMaisNoLocal =
+        hasCloudConfig &&
+        documentosSource === 'supabase' &&
+        !result.meta?.fallbackReason &&
+        diag.noSnapshot >= 0 &&
+        diag.noNavegador > diag.noSnapshot;
+
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+        documentosSource,
+        planejamentoDiag: diag,
+        planejamentoMaisNoLocal,
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const documentosSource = listQuery.data?.documentosSource ?? null;
+  const planejamentoDiag = listQuery.data?.planejamentoDiag ?? null;
+  const planejamentoMaisNoLocal = listQuery.data?.planejamentoMaisNoLocal ?? false;
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar documentos.'
+        : '';
+
+  const invalidateDocumentosLista = useCallback(async () => {
     setError('');
     setSuccess('');
     setImportSnapshotConflict(false);
-    const result = await listarDocumentos(filters);
-
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel carregar documentos.');
-      setItems([]);
-      setTotal(0);
-      setFallbackReason('');
-      setDocumentosSource(null);
-      setPlanejamentoDiag(null);
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-      setFallbackReason(result.meta?.fallbackReason ?? '');
-      setDocumentosSource(result.meta?.source === 'local' ? 'local' : result.meta?.source === 'supabase' ? 'supabase' : null);
-      const diag = await diagnosticarPlanejamentoLocalVersusNuvem();
-      setPlanejamentoDiag(diag);
-    }
-
-    setLoading(false);
-  }, [filters]);
+    await queryClient.invalidateQueries({ queryKey: ['documentos'] });
+  }, [queryClient]);
 
   const enviarPlanejamentoLocalParaNuvem = useCallback(async () => {
     if (!canAccessAction('documentos', 'editar')) {
@@ -143,18 +174,11 @@ export function useDocumentos() {
       setError(result.error ?? 'Falha ao sincronizar.');
       return;
     }
+    await invalidateDocumentosLista();
     setSuccess(
-      `Planejamento enviado para a nuvem (${result.data.total} documento(s)). Recarregue o mobile e toque em Carregar dados da nuvem.`,
+      `Planejamento enviado e verificado na nuvem: ${result.data.confirmadoNaNuvem} documento(s) confirmados no snapshot (igual ao enviado). Recarregue o mobile e toque em Carregar dados da nuvem.`,
     );
-    await load();
-  }, [canAccessAction, load]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [canAccessAction, invalidateDocumentosLista]);
 
   useEffect(() => {
     if (!idsParaExcluirDocumentos.length) {
@@ -203,12 +227,21 @@ export function useDocumentos() {
     const validationError = validateDocumento(data);
     if (validationError) return { success: false, error: validationError };
 
+    const erroMateriais = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+      data.itens.map((it) => it.codigoMaterial),
+      'salvar',
+      'documento',
+    );
+    if (erroMateriais) {
+      return { success: false, error: erroMateriais };
+    }
+
     const result = await salvarDocumento(data, selected?.id);
     if (result.success) {
-      setSuccess(result.meta?.source === 'local' ? 'Documento salvo localmente.' : 'Documento salvo com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateDocumentosLista();
+      setSuccess(result.meta?.source === 'local' ? 'Documento salvo localmente.' : 'Documento salvo com sucesso.');
     }
     return result;
   }
@@ -245,8 +278,8 @@ export function useDocumentos() {
         setError(result.error ?? 'Nao foi possivel cancelar documento.');
         return;
       }
+      await invalidateDocumentosLista();
       setSuccess(result.meta?.source === 'local' ? 'Documento cancelado localmente.' : 'Documento cancelado com sucesso.');
-      await load();
       return;
     }
 
@@ -279,7 +312,7 @@ export function useDocumentos() {
     }
     setError('');
     setSelectAllFilteredBusy(true);
-    const result = await obterIdsDocumentosFiltrados(filters);
+    const result = await obterIdsDocumentosFiltrados(filtersForLista);
     setSelectAllFilteredBusy(false);
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel selecionar todos os documentos do filtro.');
@@ -353,7 +386,7 @@ export function useDocumentos() {
     if (viewDocument && ids.includes(viewDocument.id)) {
       setViewDocument(null);
     }
-    await load();
+    await invalidateDocumentosLista();
     setSuccess(
       result.meta?.source === 'local'
         ? `Exclusao definitiva: ${rem} documento(s) removido(s) (gravacao local).`
@@ -380,8 +413,8 @@ export function useDocumentos() {
       return;
     }
     fecharCancelamentoAdministrativo();
+    await invalidateDocumentosLista();
     setSuccess(result.meta?.source === 'local' ? 'Documento cancelado localmente.' : 'Documento cancelado com sucesso.');
-    await load();
   }
 
   function baixarBlob(blob: Blob, fileName: string) {
@@ -417,7 +450,7 @@ export function useDocumentos() {
     setError('');
     setImportSnapshotConflict(false);
     const result = await montarExportacaoDocumentosCsvResumo({
-      filtroLista: { busca: filters.busca, status: filters.status },
+      filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status },
     });
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar o CSV.');
@@ -472,7 +505,7 @@ export function useDocumentos() {
       return;
     }
 
-    const preview = previewImportacaoDocumentosCsv(text);
+    const preview = await previewImportacaoDocumentosCsv(text);
     if (!preview.ok) {
       setError(preview.error);
       return;
@@ -521,32 +554,33 @@ export function useDocumentos() {
       setError('Resumo da importacao indisponivel.');
       return;
     }
-    await load();
+    await invalidateDocumentosLista();
     setImportResultado(r);
   }
 
   async function reloadAfterImportSnapshotConflict() {
     setImportSnapshotConflict(false);
-    await load();
+    await invalidateDocumentosLista();
   }
 
   return {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     fallbackReason,
     documentosSource,
     syncingLocalParaNuvem,
     enviarPlanejamentoLocalParaNuvem,
     planejamentoDiag,
+    planejamentoMaisNoLocal,
     hasCloudConfig,
     filters,
     formInitialValue,
     isModalOpen,
     selected,
-    load,
+    load: invalidateDocumentosLista,
     setFilters,
     openCreateModal: () => {
       if (!canAccessAction('documentos', 'editar')) {

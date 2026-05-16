@@ -25,6 +25,9 @@ export const ConferenciaPage = lazy(() =>
 export const EtiquetasPage = lazy(() =>
   import('@/modules/etiquetas/pages/EtiquetasPage').then((module) => ({ default: module.EtiquetasPage })),
 );
+export const EquipamentosPage = lazy(() =>
+  import('@/modules/equipamentos/pages/EquipamentosPage').then((module) => ({ default: module.EquipamentosPage })),
+);
 export const ConfiguracoesPage = lazy(() =>
   import('@/modules/configuracoes/pages/ConfiguracoesPage').then((module) => ({ default: module.ConfiguracoesPage })),
 );

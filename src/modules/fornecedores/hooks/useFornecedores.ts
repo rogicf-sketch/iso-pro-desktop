@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
@@ -33,47 +36,58 @@ const emptyForm: FornecedorFormData = {
   ativo: true,
 };
 
+function fornecedoresListaQueryKey(filters: FornecedorFiltro, userLogin: string | undefined) {
+  return ['fornecedores', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useFornecedores() {
-  const { canAccessAction } = useAuth();
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const importInputRef = useRef<HTMLInputElement>(null);
   const [filters, setFilters] = useState<FornecedorFiltro>(initialFilters);
-  const [items, setItems] = useState<Fornecedor[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fallbackReason, setFallbackReason] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Fornecedor | null>(null);
   const [importStaging, setImportStaging] = useState<{ fileName: string; text: string; linhaCount: number } | null>(null);
   const [importingFornecedores, setImportingFornecedores] = useState(false);
   const [importResultado, setImportResultado] = useState<ResultadoImportacaoFornecedoresCsv | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: fornecedoresListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarFornecedores(filtersForLista);
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar fornecedores.');
+      }
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar fornecedores.'
+        : '';
+
+  const invalidateFornecedoresLista = useCallback(async () => {
     setError('');
     setSuccess('');
-    const result = await listarFornecedores(filters);
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel carregar fornecedores.');
-      setItems([]);
-      setTotal(0);
-      setFallbackReason('');
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-      setFallbackReason(result.meta?.fallbackReason ?? '');
-    }
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['fornecedores'] });
+  }, [queryClient]);
 
   const formInitialValue = useMemo<FornecedorFormData>(
     () =>
@@ -98,10 +112,10 @@ export function useFornecedores() {
     if (validationError) return { success: false, error: validationError };
     const result = await salvarFornecedor(data, selected?.id);
     if (result.success) {
-      setSuccess(result.meta?.source === 'local' ? 'Fornecedor salvo localmente.' : 'Fornecedor salvo com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateFornecedoresLista();
+      setSuccess(result.meta?.source === 'local' ? 'Fornecedor salvo localmente.' : 'Fornecedor salvo com sucesso.');
     }
     return result;
   }
@@ -116,8 +130,8 @@ export function useFornecedores() {
       setError(result.error ?? 'Nao foi possivel atualizar fornecedor.');
       return;
     }
+    await invalidateFornecedoresLista();
     setSuccess(result.meta?.source === 'local' ? 'Status do fornecedor atualizado localmente.' : 'Status do fornecedor atualizado com sucesso.');
-    await load();
   }
 
   function baixarModeloCsvImportacaoFornecedores() {
@@ -212,7 +226,7 @@ export function useFornecedores() {
       setError('Resumo da importacao indisponivel.');
       return;
     }
-    await load();
+    await invalidateFornecedoresLista();
     setImportResultado(r);
   }
 
@@ -242,7 +256,7 @@ export function useFornecedores() {
       return;
     }
     setError('');
-    const result = await montarExportacaoFornecedoresCsv({ filtroLista: filters });
+    const result = await montarExportacaoFornecedoresCsv({ filtroLista: filtersForLista });
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar a planilha.');
       return;
@@ -260,7 +274,7 @@ export function useFornecedores() {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     fallbackReason,
     hasCloudConfig,
@@ -268,7 +282,7 @@ export function useFornecedores() {
     formInitialValue,
     isModalOpen,
     selected,
-    load,
+    load: invalidateFornecedoresLista,
     setFilters,
     openCreateModal: () => {
       if (!canAccessAction('fornecedores', 'editar')) {

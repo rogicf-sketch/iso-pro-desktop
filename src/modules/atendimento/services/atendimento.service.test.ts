@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import { hasSupabaseConfig } from '../../../lib/supabase';
-import { estornarAtendimento, montarExportacaoAtendimentosCsvItens, registrarAtendimento } from './atendimento.service';
+import {
+  estornarAtendimento,
+  listarHistoricoAtendimentos,
+  montarExportacaoAtendimentosCsvItens,
+  registrarAtendimento,
+} from './atendimento.service';
 
 const DOCUMENTOS_KEY = 'iso-pro-desktop-documentos';
 const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
@@ -37,13 +42,44 @@ vi.mock('../../colaboradores/services/colaboradores.service', () => ({
       data: {
         id: 'colab-1',
         nome: 'Joao Interno',
+        matricula: 'J1',
+        funcao: 'Mecanico',
         ativo: true,
         tipo: 'interno',
         empresa: 'Empresa X',
         documento: '123',
         telefone: '11987654321',
+        observacao: '',
       },
     }),
+  ),
+  listarColaboradoresAtivos: vi.fn(() =>
+    Promise.resolve([
+      {
+        id: 'colab-atd',
+        nome: 'Maria',
+        matricula: 'M-AT',
+        funcao: 'Conferente',
+        tipo: 'interno' as const,
+        ativo: true,
+        empresa: '',
+        documento: '',
+        telefone: '',
+        observacao: '',
+      },
+      {
+        id: 'colab-1',
+        nome: 'Joao Interno',
+        matricula: 'J1',
+        funcao: 'Mecanico',
+        tipo: 'interno' as const,
+        ativo: true,
+        empresa: 'Empresa X',
+        documento: '123',
+        telefone: '11987654321',
+        observacao: '',
+      },
+    ]),
   ),
   registrarRetiranteExterno: vi.fn(),
 }));
@@ -191,6 +227,101 @@ function snapshotDocumentoSemSaldoPendente() {
     atendimentoHistorico: [],
   };
 }
+
+describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('inclui lotes so em atendimentoHistorico quando ja existe array atendimentos (mobile + PC)', async () => {
+    mockReadPayload.mockResolvedValue({
+      documentos: [],
+      materiais: [],
+      atendimentos: [
+        {
+          id: 'a-pc',
+          numero: 'ATD-20260503-0002',
+          documentoId: 'd1',
+          documentoNumero: 'Agua',
+          atendente: 'Igor',
+          recebedorTipo: 'interno',
+          recebedor: 'Adauto',
+          origem: 'windows',
+          status: 'concluido',
+          dataAtendimento: '2026-05-03T16:00:50.000Z',
+          itens: [
+            {
+              id: 'i1',
+              documentoItemId: 'x',
+              codigoMaterial: 'TUB',
+              descricaoMaterial: 'Tubo',
+              unidade: 'M',
+              quantidadeAtendida: 60,
+            },
+          ],
+        },
+      ],
+      atendimentoHistorico: [
+        {
+          id: 99,
+          loteNumero: 'ATD-20260503-00026',
+          data: '2026-05-03T19:37:00.000Z',
+          documentoId: 'd1',
+          documento: 'Agua',
+          atendente: 'Administrador',
+          recebedor: 'Mauricio',
+          codigo: 'TUB',
+          descricao: 'Tubo',
+          unidade: 'M',
+          quantidade: 70,
+          origem: 'mobile',
+        },
+      ],
+    });
+
+    const list = await listarHistoricoAtendimentos();
+    const numeros = new Set(list.map((a) => a.numero));
+    expect(numeros.has('ATD-20260503-0002')).toBe(true);
+    expect(numeros.has('ATD-20260503-00026')).toBe(true);
+    expect(list.length).toBe(2);
+  });
+
+  it('mapeia matricula e funcoes das linhas de historico mobile para o modelo do PC', async () => {
+    mockReadPayload.mockResolvedValue({
+      documentos: [],
+      materiais: [],
+      atendimentos: [],
+      atendimentoHistorico: [
+        {
+          id: 1,
+          loteNumero: 'ATD-20260503-00099',
+          data: '2026-05-03T12:00:00.000Z',
+          documentoId: 'd1',
+          documento: 'Doc',
+          atendente: 'Administrador',
+          matricula: 'adm01',
+          atendenteFuncao: 'Supervisor',
+          recebedor: 'Joao Silva',
+          recebedorMatricula: '25924',
+          recebedorFuncao: 'Mecanico',
+          codigo: 'X',
+          descricao: 'Y',
+          unidade: 'UN',
+          quantidade: 1,
+          origem: 'mobile',
+        },
+      ],
+    });
+
+    const list = await listarHistoricoAtendimentos();
+    expect(list.length).toBe(1);
+    const a = list[0]!;
+    expect(a.atendenteMatricula).toBe('adm01');
+    expect(a.atendenteFuncao).toBe('Supervisor');
+    expect(a.recebedorMatricula).toBe('25924');
+    expect(a.recebedorFuncao).toBe('Mecanico');
+  });
+});
 
 describe('atendimento.service / registrarAtendimento (Supabase)', () => {
   let store: Record<string, string>;

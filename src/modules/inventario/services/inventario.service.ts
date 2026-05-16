@@ -1,24 +1,38 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import type { Inventario, InventarioFiltro, InventarioFormData, InventarioListItem } from '../types/inventario.types';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { parseInventariosPersistidos } from '../schemas/inventarioPersistido.zod';
 
-const STORAGE_KEY = 'iso-pro-desktop-inventarios';
+function inventariosStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-inventarios');
+}
+
+function bloqueioLocalInventarios(tamanhoListaGravacao: number): string | null {
+  return mensagemSeSubstituirLocalPerderiaCadastros([
+    { storageKey: inventariosStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'inventario(s)' },
+  ]);
+}
 
 const seedData: Inventario[] = [
   {
     id: 'inv-1',
     codigo: 'INV-2026-001',
-    descricao: 'Inventario geral almoxarifado central',
+    descricao: 'Inventario geral almoxarifado central (exemplo)',
     responsavel: 'Carlos Lima',
     dataInventario: '2026-04-01',
     status: 'aberto',
-    observacoes: 'Contagem por rua e disciplina.',
+    contagemMobileHabilitada: true,
+    observacoes: 'Exemplo de fabrica — some desta vista quando houver inventarios gravados no Supabase.',
     itens: [
       {
         id: 'inv-1-item-1',
@@ -41,11 +55,12 @@ const seedData: Inventario[] = [
   {
     id: 'inv-2',
     codigo: 'INV-2026-000',
-    descricao: 'Inventario rotativo eletrica',
+    descricao: 'Inventario rotativo eletrica (exemplo fechado — exportar CSV)',
     responsavel: 'Mariana Costa',
     dataInventario: '2026-03-28',
     status: 'fechado',
-    observacoes: 'Fechado sem divergencias criticas.',
+    contagemMobileHabilitada: false,
+    observacoes: 'Exemplo de fabrica fechado — use Exportar Excel (CSV) na linha para testar.',
     itens: [
       {
         id: 'inv-2-item-1',
@@ -60,26 +75,43 @@ const seedData: Inventario[] = [
 ];
 
 function readAll(): Inventario[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(inventariosStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
+    localStorage.setItem(inventariosStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
 
   try {
-    return JSON.parse(raw) as Inventario[];
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseInventariosPersistidos(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Inventario', inventariosStorageKey());
+      return [];
+    }
+    return validated;
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
-    return seedData;
+    avisarPreservacaoLocalStorageCorrupto('Inventario', inventariosStorageKey());
+    return [];
   }
 }
 
 function writeAll(items: Inventario[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(inventariosStorageKey(), JSON.stringify(items));
 }
 
-async function loadInventarios() {
-  return hasSupabaseConfig() ? await readSnapshotInventarios().catch(() => readAll()) : readAll();
+/**
+ * Leitura para listagem, detalhe e exportacao.
+ * Se o snapshot remoto ainda nao tiver inventarios, mostra os exemplos de fabrica (mesma seed que o modo local).
+ */
+async function loadInventarios(): Promise<Inventario[]> {
+  if (!hasSupabaseConfig()) return readAll();
+  try {
+    const remote = await readSnapshotInventarios();
+    if (remote.length === 0) return seedData;
+    return remote;
+  } catch {
+    return readAll();
+  }
 }
 
 function normalizeLookupValue(value: string) {
@@ -94,6 +126,7 @@ type SnapshotPayload = {
     responsavel?: string;
     dataInventario?: string;
     status?: 'aberto' | 'fechado' | 'cancelado';
+    contagemMobileHabilitada?: boolean;
     observacoes?: string;
     itens?: Array<{
       id?: string | number;
@@ -115,6 +148,7 @@ async function readSnapshotInventarios(): Promise<Inventario[]> {
     responsavel: String(inv.responsavel ?? ''),
     dataInventario: String(inv.dataInventario ?? new Date().toISOString().slice(0, 10)),
     status: inv.status ?? 'aberto',
+    contagemMobileHabilitada: Boolean(inv.contagemMobileHabilitada),
     observacoes: String(inv.observacoes ?? ''),
     itens: (inv.itens ?? []).map((item, itemIndex) => ({
       id: String(item.id ?? `${inv.id ?? index}-item-${itemIndex + 1}`),
@@ -141,6 +175,7 @@ async function writeSnapshotInventarios(items: Inventario[]): Promise<void> {
           responsavel: item.responsavel,
           dataInventario: item.dataInventario,
           status: item.status,
+          contagemMobileHabilitada: item.contagemMobileHabilitada,
           observacoes: item.observacoes,
           itens: item.itens.map((invItem) => ({
             id: invItem.id,
@@ -167,6 +202,7 @@ function normalizeInventarioPayload(payload: InventarioFormData): InventarioForm
     codigo: payload.codigo.trim(),
     descricao: payload.descricao.trim(),
     responsavel: payload.responsavel.trim(),
+    contagemMobileHabilitada: Boolean(payload.contagemMobileHabilitada),
     observacoes: payload.observacoes.trim(),
     itens: payload.itens.map((item) => ({
       ...item,
@@ -187,6 +223,7 @@ function toListItem(item: Inventario): InventarioListItem {
     responsavel: item.responsavel,
     dataInventario: item.dataInventario,
     status: item.status,
+    contagemMobileHabilitada: item.contagemMobileHabilitada,
     totalItens: item.itens.length,
     divergencias: item.itens.filter((current) => current.saldoSistema !== current.quantidadeContada).length,
   };
@@ -247,7 +284,10 @@ export async function listarInventarios(
 ): Promise<ServiceResult<PaginatedResult<InventarioListItem>>> {
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: hasSupabaseConfig(),
-    loadRemote: () => readSnapshotInventarios(),
+    loadRemote: async () => {
+      const remote = await readSnapshotInventarios();
+      return remote.length === 0 ? seedData : remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar inventarios no Supabase.',
   });
@@ -300,6 +340,8 @@ export async function salvarInventario(
         if (index === -1) return { success: false, error: 'Inventario nao encontrado.' };
         if (items[index].status !== 'aberto') return { success: false, error: 'Apenas inventarios em aberto podem ser editados.' };
         items[index] = { ...items[index], ...normalized };
+        const bloqueioEdit = bloqueioLocalInventarios(items.length);
+        if (bloqueioEdit) return { success: false, error: bloqueioEdit };
         return executeWrite({
           shouldWriteRemote: true,
           writeRemote: () => writeSnapshotInventarios(items),
@@ -315,6 +357,8 @@ export async function salvarInventario(
         ...normalized,
       };
       items.push(created);
+      const bloqueioNovo = bloqueioLocalInventarios(items.length);
+      if (bloqueioNovo) return { success: false, error: bloqueioNovo };
       return executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotInventarios(items),
@@ -367,6 +411,8 @@ export async function fecharInventario(id: string): Promise<ServiceResult<Invent
       const closingError = validateInventarioForClosing(items[index]);
       if (closingError) return { success: false, error: closingError };
       items[index] = { ...items[index], status: 'fechado' };
+      const bloqueioFechar = bloqueioLocalInventarios(items.length);
+      if (bloqueioFechar) return { success: false, error: bloqueioFechar };
       return executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotInventarios(items),
@@ -395,4 +441,80 @@ export async function buscarInventarioPorId(id: string): Promise<ServiceResult<I
   const item = (await loadInventarios()).find((inventario) => inventario.id === id);
   if (!item) return { success: false, error: 'Inventario nao encontrado.' };
   return { success: true, data: item };
+}
+
+function sanitizeInventarioExportFileSegment(codigo: string): string {
+  const illegalFileNameChar = /[<>:"/\\|?*]/;
+  let out = '';
+  for (const ch of codigo.trim()) {
+    const code = ch.charCodeAt(0);
+    if (code < 32 || illegalFileNameChar.test(ch)) {
+      out += '_';
+    } else {
+      out += ch;
+    }
+  }
+  return out.length > 0 ? out : 'inventario';
+}
+
+/**
+ * CSV com separador `;` e BOM UTF-8 para abrir no Excel (português).
+ * Somente inventários com status `fechado`.
+ */
+export async function montarExportacaoInventarioCsv(id: string): Promise<ServiceResult<{ csv: string; fileName: string }>> {
+  const loaded = await buscarInventarioPorId(id);
+  if (!loaded.success || !loaded.data) {
+    return { success: false, error: loaded.error ?? 'Inventario nao encontrado.' };
+  }
+  const inv = loaded.data;
+  if (inv.status !== 'fechado') {
+    return { success: false, error: 'Apenas inventarios fechados podem ser exportados.' };
+  }
+  if (!inv.itens.length) {
+    return { success: false, error: 'Inventario sem itens para exportar.' };
+  }
+
+  const header = [
+    'inventario_codigo',
+    'inventario_descricao',
+    'inventario_responsavel',
+    'inventario_data',
+    'inventario_status',
+    'contagem_mobile',
+    'inventario_observacoes',
+    'codigo_material',
+    'descricao_material',
+    'unidade',
+    'saldo_sistema',
+    'quantidade_contada',
+    'diferenca',
+  ];
+  const sep = ';';
+  const mobileLabel = inv.contagemMobileHabilitada ? 'Sim' : 'Nao';
+  const linhas = [
+    header.join(sep),
+    ...inv.itens.map((row) => {
+      const diferenca = row.quantidadeContada - row.saldoSistema;
+      const cells = [
+        inv.codigo,
+        inv.descricao,
+        inv.responsavel,
+        inv.dataInventario,
+        inv.status,
+        mobileLabel,
+        inv.observacoes,
+        row.codigoMaterial,
+        row.descricaoMaterial,
+        row.unidade,
+        formatDecimalExcelPtBr(Number(row.saldoSistema)),
+        formatDecimalExcelPtBr(Number(row.quantidadeContada)),
+        formatDecimalExcelPtBr(diferenca),
+      ];
+      return cells.map((c) => escapeCsvCellSemicolon(String(c))).join(sep);
+    }),
+  ];
+  const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const fileName = `iso-pro-inventario-${sanitizeInventarioExportFileSegment(inv.codigo)}-${stamp}.csv`;
+  return { success: true, data: { csv, fileName } };
 }

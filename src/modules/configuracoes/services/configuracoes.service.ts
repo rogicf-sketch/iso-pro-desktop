@@ -1,10 +1,20 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { dispatchIsoProConfigUpdatedEvent } from '../../../lib/configEvents';
+import { getCurrentUser } from '../../auth/services/auth.service';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
-import { resetSupabaseClient } from '../../../lib/supabase';
+import { getSupabaseConfigDiagnostics, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
+import { parseConfiguracaoJson } from '../schemas/configuracaoPersistido.zod';
 import type { ConfiguracaoSistema, RirProcedimentoCadastroItem } from '../types/configuracao.types';
+import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
 
-const STORAGE_KEY = 'iso-pro-desktop-configuracoes-sistema';
+const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
+
+function configStorageKey(): string {
+  return getScopedIsoProStorageKey(STORAGE_KEY_BASE);
+}
 
 const TEMAS_VALIDOS: ConfiguracaoSistema['tema'][] = ['padrao', 'escuro', 'claro', 'verde', 'neon'];
 const RIR_MODOS_VALIDOS: ConfiguracaoSistema['rirModoNumeracao'][] = ['auto', 'disciplina', 'manual'];
@@ -22,20 +32,34 @@ function normalizeTema(t: unknown): ConfiguracaoSistema['tema'] {
   return TEMAS_VALIDOS.includes(t as ConfiguracaoSistema['tema']) ? (t as ConfiguracaoSistema['tema']) : 'padrao';
 }
 
+/** Alinha site/embebido em producao: primeiro perfil ja usa tabela `materiais` na nuvem quando URL/chave vêm do build. */
+function materiaisNuvemPadraoParaPrimeiroPerfil(): boolean {
+  const v = import.meta.env.VITE_SUPABASE_PREFER_SAVED_CONFIG;
+  const s = v == null ? '' : String(v).trim().toLowerCase();
+  const preferSaved = s === 'true' || s === '1' || s === 'yes';
+  const envUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+  const envKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
+  if (!envUrl || !envKey || preferSaved) return false;
+  return import.meta.env.PROD;
+}
+
 const defaultConfig: ConfiguracaoSistema = {
   cliente: '',
   projeto: '',
   contrato: '',
   local: '',
   tema: 'neon',
+  mostrarAjudaModulos: true,
   sequenciaAtendimento: 0,
   rirModoNumeracao: 'auto',
   rirProcedimentosCadastro: [] as RirProcedimentoCadastroItem[],
   rirPrefSenha: '',
   rncPrefSenha: '',
-  materiaisNuvem: false,
+  materiaisNuvem: materiaisNuvemPadraoParaPrimeiroPerfil(),
   supabaseUrl: '',
   supabaseAnonKey: '',
+  isoProLinkAuthSecret: '',
+  isoProAdminUserSecret: '',
   desktopVinculoAtivo: false,
   desktopInstalacaoAutorizadaId: '',
   desktopInstalacaoAutorizadaNome: '',
@@ -44,6 +68,8 @@ const defaultConfig: ConfiguracaoSistema = {
   desktopLicencaEmitidaPara: '',
   desktopLicencaExpiraEm: '',
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+  documentoRodapeNome: 'I.S.O PRO Gestão de Materiais',
+  documentoRodapeCnpj: '66.234.531/0001-57',
 };
 
 export function aplicarTemaSistema(tema: ConfiguracaoSistema['tema']) {
@@ -52,46 +78,112 @@ export function aplicarTemaSistema(tema: ConfiguracaoSistema['tema']) {
   document.body.classList.add(`theme-${tema}`);
 }
 
+function normalizeLoginParaChaveArmazenamento(login: string): string {
+  const t = login
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+  const s = t.replace(/[^a-z0-9._-]/g, '_');
+  return s || 'anon';
+}
+
+function chaveLocalStorageTemaPreferidoUsuario(login: string): string {
+  return getScopedIsoProStorageKey(`iso-pro-desktop-usuario-tema-${normalizeLoginParaChaveArmazenamento(login)}`);
+}
+
+/** Tema escolhido só para este login neste ambiente (localStorage); `null` = seguir o tema da instalação. */
+export function readUsuarioTemaPreferido(): ConfiguracaoSistema['tema'] | null {
+  if (typeof localStorage === 'undefined') return null;
+  const u = getCurrentUser();
+  if (!u?.login?.trim()) return null;
+  const raw = localStorage.getItem(chaveLocalStorageTemaPreferidoUsuario(u.login))?.trim();
+  if (!raw) return null;
+  return TEMAS_VALIDOS.includes(raw as ConfiguracaoSistema['tema']) ? (raw as ConfiguracaoSistema['tema']) : null;
+}
+
+export function salvarUsuarioTemaPreferido(tema: ConfiguracaoSistema['tema']): void {
+  if (typeof localStorage === 'undefined') return;
+  const u = getCurrentUser();
+  if (!u?.login?.trim()) return;
+  localStorage.setItem(chaveLocalStorageTemaPreferidoUsuario(u.login), normalizeTema(tema));
+}
+
+export function limparUsuarioTemaPreferido(): void {
+  if (typeof localStorage === 'undefined') return;
+  const u = getCurrentUser();
+  if (!u?.login?.trim()) return;
+  localStorage.removeItem(chaveLocalStorageTemaPreferidoUsuario(u.login));
+}
+
 export function readConfiguracoes(): ConfiguracaoSistema {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(configStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultConfig));
+    localStorage.setItem(configStorageKey(), JSON.stringify(defaultConfig));
     return defaultConfig;
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<ConfiguracaoSistema> & { reciboLogoUrl?: string };
-    const logoBruto = (parsed.logoInstitucionalUrl ?? parsed.reciboLogoUrl ?? '').trim();
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseConfiguracaoJson(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
+      return { ...defaultConfig };
+    }
+    const parsedConfig = validated as Partial<ConfiguracaoSistema> & { reciboLogoUrl?: string };
+    const logoBruto = (parsedConfig.logoInstitucionalUrl ?? parsedConfig.reciboLogoUrl ?? '').trim();
     const logoInstitucionalUrl = logoBruto || LOGO_INSTITUCIONAL_PADRAO_FABRICA;
-    const rirProcedimentosCadastro = Array.isArray(parsed.rirProcedimentosCadastro)
-      ? (parsed.rirProcedimentosCadastro as RirProcedimentoCadastroItem[])
+    const rirProcedimentosCadastro = Array.isArray(parsedConfig.rirProcedimentosCadastro)
+      ? (parsedConfig.rirProcedimentosCadastro as RirProcedimentoCadastroItem[])
       : defaultConfig.rirProcedimentosCadastro;
     return {
       ...defaultConfig,
-      ...parsed,
-      tema: normalizeTema(parsed.tema),
-      rirModoNumeracao: normalizeRirModoNumeracao(parsed.rirModoNumeracao),
+      ...parsedConfig,
+      tema: normalizeTema(parsedConfig.tema),
+      mostrarAjudaModulos: parsedConfig.mostrarAjudaModulos !== false,
+      rirModoNumeracao: normalizeRirModoNumeracao(parsedConfig.rirModoNumeracao),
       logoInstitucionalUrl,
       rirProcedimentosCadastro,
     };
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultConfig));
-    return defaultConfig;
+    avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
+    return { ...defaultConfig };
   }
+}
+
+/** Tema visível na sessão: preferência pessoal (se existir) ou tema gravado na configuração da instalação. */
+export function readTemaEfetivoParaSessao(): ConfiguracaoSistema['tema'] {
+  return readUsuarioTemaPreferido() ?? readConfiguracoes().tema;
+}
+
+export function aplicarTemaEfetivoNaSessao(): void {
+  aplicarTemaSistema(readTemaEfetivoParaSessao());
 }
 
 export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
   const config = readConfiguracoes();
-  aplicarTemaSistema(config.tema);
+  aplicarTemaEfetivoNaSessao();
   return config;
 }
 
 export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise<ServiceResult<ConfiguracaoSistema>> {
   const previous = readConfiguracoes();
 
+  let credenciaisSupabaseParaPersistir = {
+    url: payload.supabaseUrl.trim(),
+    key: payload.supabaseAnonKey.trim(),
+  };
+  if (typeof window !== 'undefined') {
+    const d = getSupabaseConfigDiagnostics();
+    if (d.urlFrom === 'vite-env' && d.keyFrom === 'vite-env') {
+      credenciaisSupabaseParaPersistir = { url: '', key: '' };
+    }
+  }
+
   const normalizedBase: ConfiguracaoSistema = {
     ...payload,
     tema: normalizeTema(payload.tema),
+    mostrarAjudaModulos: payload.mostrarAjudaModulos !== false,
     rirModoNumeracao: normalizeRirModoNumeracao(payload.rirModoNumeracao),
     cliente: payload.cliente.trim(),
     projeto: payload.projeto.trim(),
@@ -105,12 +197,16 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     })),
     rirPrefSenha: payload.rirPrefSenha.trim(),
     rncPrefSenha: payload.rncPrefSenha.trim(),
-    supabaseUrl: payload.supabaseUrl.trim(),
-    supabaseAnonKey: payload.supabaseAnonKey.trim(),
+    supabaseUrl: credenciaisSupabaseParaPersistir.url,
+    supabaseAnonKey: credenciaisSupabaseParaPersistir.key,
+    isoProLinkAuthSecret: payload.isoProLinkAuthSecret.trim(),
+    isoProAdminUserSecret: payload.isoProAdminUserSecret.trim(),
     desktopLicencaToken: payload.desktopLicencaToken.trim(),
     desktopLicencaEmitidaPara: payload.desktopLicencaEmitidaPara.trim(),
     desktopLicencaExpiraEm: payload.desktopLicencaExpiraEm.trim(),
     logoInstitucionalUrl: payload.logoInstitucionalUrl.trim() || LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+    documentoRodapeNome: payload.documentoRodapeNome.trim(),
+    documentoRodapeCnpj: payload.documentoRodapeCnpj.trim(),
   };
 
   if (normalizedBase.desktopVinculoAtivo && !normalizedBase.desktopInstalacaoAutorizadaId.trim()) {
@@ -158,22 +254,25 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
         desktopLicencaExpiraEm: '',
       };
 
-  if (normalized.materiaisNuvem && (!normalized.supabaseUrl || !normalized.supabaseAnonKey)) {
+  if (normalized.materiaisNuvem && !hasSupabaseConfig()) {
     return {
       success: false,
-      error: 'Para ativar materiais em nuvem, informe a URL e a chave anon/publicavel do Supabase.',
+      error:
+        'Para ativar materiais em nuvem, a integracao Supabase precisa estar completa (URL e chave anon). No site em producao isso costuma vir do servidor; no desktop, preencha aqui ou no primeiro arranque.',
     };
   }
 
-  if ((normalized.supabaseUrl && !normalized.supabaseAnonKey) || (!normalized.supabaseUrl && normalized.supabaseAnonKey)) {
+  const formUrl = Boolean(normalized.supabaseUrl);
+  const formKey = Boolean(normalized.supabaseAnonKey);
+  if ((formUrl && !formKey) || (!formUrl && formKey)) {
     return {
       success: false,
       error: 'Preencha URL e chave do Supabase em conjunto para evitar configuracao incompleta.',
     };
   }
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
-  aplicarTemaSistema(normalized.tema);
+  localStorage.setItem(configStorageKey(), JSON.stringify(normalized));
+  aplicarTemaEfetivoNaSessao();
 
   const supabaseTargetChanged =
     normalized.supabaseUrl !== previous.supabaseUrl || normalized.supabaseAnonKey !== previous.supabaseAnonKey;
@@ -181,6 +280,13 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     invalidateIsoProSnapshotCache();
     resetSupabaseClient();
   }
+
+  dispatchIsoProConfigUpdatedEvent();
+
+  void syncOciUploadContextFromConfig({
+    cliente: normalized.cliente,
+    projeto: normalized.projeto,
+  });
 
   return { success: true, data: normalized };
 }
@@ -202,7 +308,7 @@ export function registrarValidacaoDesktop(timestamp = new Date().toISOString()) 
     ...current,
     desktopUltimaValidacaoEm: timestamp,
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  localStorage.setItem(configStorageKey(), JSON.stringify(next));
   return next;
 }
 
@@ -212,6 +318,6 @@ export function consumirSequenciaAtendimento() {
     ...current,
     sequenciaAtendimento: current.sequenciaAtendimento + 1,
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  localStorage.setItem(configStorageKey(), JSON.stringify(next));
   return next.sequenciaAtendimento;
 }

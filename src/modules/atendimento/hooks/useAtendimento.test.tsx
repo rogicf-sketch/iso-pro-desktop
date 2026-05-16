@@ -1,6 +1,8 @@
 /** @vitest-environment jsdom */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AtendimentoDocumento } from '../types/atendimento.types';
 import { obterErroRegistroAtendimento, useAtendimento } from './useAtendimento';
 
@@ -16,6 +18,7 @@ vi.mock('../../../lib/supabase', () => ({
 vi.mock('../../auth/hooks/useAuth', () => ({
   useAuth: () => ({
     canAccessAction: () => true,
+    user: undefined,
   }),
 }));
 
@@ -36,6 +39,12 @@ vi.mock('../services/atendimento.service', () => ({
   estornarAtendimento: vi.fn(),
   registrarAtendimento: vi.fn(),
 }));
+
+let testQueryClient: QueryClient;
+
+function TestQueryProvider({ children }: { children: ReactNode }) {
+  return <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>;
+}
 
 function buildDoc(): AtendimentoDocumento {
   return {
@@ -63,6 +72,12 @@ function buildDoc(): AtendimentoDocumento {
 }
 
 describe('useAtendimento — sugestao de quantidade', () => {
+  beforeEach(() => {
+    testQueryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+  });
+
   it('preenche quantidade sugerida ao selecionar documento apos o carregamento', async () => {
     mocks.listarDocumentosPendentesComMeta.mockResolvedValue({
       success: true,
@@ -73,7 +88,7 @@ describe('useAtendimento — sugestao de quantidade', () => {
       data: [],
     });
 
-    const { result } = renderHook(() => useAtendimento());
+    const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -99,7 +114,7 @@ describe('useAtendimento — sugestao de quantidade', () => {
       data: [],
     });
 
-    const { result } = renderHook(() => useAtendimento());
+    const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -132,7 +147,7 @@ describe('useAtendimento — sugestao de quantidade', () => {
       data: [],
     });
 
-    const { result } = renderHook(() => useAtendimento());
+    const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(true);

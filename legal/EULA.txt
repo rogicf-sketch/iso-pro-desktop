@@ -1,0 +1,57 @@
+================================================================================
+ACORDO DE LICENCA DE UTILIZADOR FINAL (EULA) — MODELO / RASCUNHO
+================================================================================
+
+AVISO IMPORTANTE
+----------------
+Este ficheiro e um MODELO apenas para integracao tecnica no instalador NSIS.
+ANTES de distribuir o I.S.O PRO a clientes, substitua-o integralmente pelo texto
+revisto e aprovado pelo seu advogado. O titular do software e o licenciante sao
+identificados na aplicacao e na documentacao do projeto.
+
+================================================================================
+1. CONCESSAO DE LICENCA
+================================================================================
+Sujeito ao cumprimento deste acordo, o Licenciante concede-lhe uma licenca
+limitada, nao exclusiva e intransferivel para instalar e utilizar uma copia do
+software "I.S.O PRO Gestao de Materiais" (o "Software") nos termos aqui fixados.
+
+================================================================================
+2. RESTRICOES
+================================================================================
+Salvo permissao expressa por escrito do Licenciante, nao podera (entre outras):
+  - copiar, modificar, adaptar ou criar obras derivadas do Software;
+  - efectuar engenharia reversa, descompilar ou desmontar o Software;
+  - remover ou alterar avisos de propriedade intelectual;
+  - sublicenciar, alugar, arrendar ou distribuir o Software a terceiros.
+
+================================================================================
+3. PROPRIEDADE INTELECTUAL
+================================================================================
+O Software e os respectivos materiais associados sao protegidos por leis de
+propriedade intelectual. Nada neste acordo lhe transfere titularidade sobre o
+Software.
+
+================================================================================
+4. EXCLUSAO DE GARANTIAS / LIMITACAO DE RESPONSABILIDADE
+================================================================================
+O Software e fornecido "tal como esta". Em maximo permitido pela lei aplicavel,
+o Licenciante exclui garantias implicitas. A responsabilidade total podera ser
+limitada conforme permitido pela lei — o texto definitivo deve ser definido pelo
+seu advogado.
+
+================================================================================
+5. RESOLUCAO DE CONFLITOS / LEI APLICAVEL
+================================================================================
+Defina com o seu advogado o foro competente e a lei aplicavel (ex.: Brasil).
+
+================================================================================
+6. CONTACTO
+================================================================================
+Para questoes sobre licenciamento comercial, utilize os meios de contacto
+acordados no contrato com o Licenciante.
+
+================================================================================
+Ao clicar em "Concordo" ou "Aceito" no instalador, declara que leu e aceita
+este acordo — DESDE QUE o texto final tenha sido validado juridicamente.
+================================================================================

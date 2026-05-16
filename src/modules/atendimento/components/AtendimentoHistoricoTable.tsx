@@ -78,7 +78,7 @@ export function AtendimentoHistoricoTable({ items, onVerRecibo, reciboCarregando
         },
         {
           key: 'recibo',
-          header: 'Recibo',
+          header: 'Visualizar',
           render: (item) => (
             <Button
               disabled={reciboCarregandoId === item.id}
@@ -86,7 +86,7 @@ export function AtendimentoHistoricoTable({ items, onVerRecibo, reciboCarregando
               type="button"
               variant="ghost"
             >
-              {reciboCarregandoId === item.id ? 'Abrindo...' : 'Ver recibo'}
+              {reciboCarregandoId === item.id ? 'Abrindo...' : 'Visualizar'}
             </Button>
           ),
         },

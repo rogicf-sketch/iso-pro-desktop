@@ -1,0 +1,17 @@
+# Supabase CLI — configuracao minima para funcoes deste repositorio.
+# Documentacao: https://supabase.com/docs/guides/functions/function-configuration
+
+[functions.purge_cloud_data]
+# O desktop autentica com login+senha em `usuarios_sistema`, sem JWT do Supabase Auth no browser.
+verify_jwt = false
+
+[functions.purge_cloud_cadastros]
+verify_jwt = false
+
+[functions.iso_pro_link_auth_user]
+# Segredo proprio (ISO_PRO_LINK_AUTH_SECRET); nao usar JWT anon no browser para esta operacao.
+verify_jwt = false
+
+[functions.iso_pro_admin_user]
+# Actor login+senha + RPC iso_pro_usuario_administra_utilizadores; segredo ISO_PRO_ADMIN_USER_SECRET.
+verify_jwt = false

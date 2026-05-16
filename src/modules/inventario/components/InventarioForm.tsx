@@ -83,6 +83,15 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
         value={form.descricao}
       />
 
+      <label className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px' }}>
+        <input
+          checked={form.contagemMobileHabilitada}
+          onChange={(event) => setForm((current) => ({ ...current, contagemMobileHabilitada: event.target.checked }))}
+          type="checkbox"
+        />
+        <span>Permitir contagem pelo app mobile (inventario criado no PC aparece no telemovel)</span>
+      </label>
+
       <div className="editor-block">
         <div className="editor-header">
           <div>

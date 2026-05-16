@@ -9,6 +9,7 @@ type Props = {
   items: RncRegistro[];
   onEdit: (item: RncRegistro) => void;
   onPrint: (item: RncRegistro) => void;
+  onVisualizar: (item: RncRegistro) => void;
   canEdit: boolean;
 };
 
@@ -19,7 +20,7 @@ function tone(status: RncRegistro['status']) {
   return createStatusMeta(status, 'danger');
 }
 
-export function RncTable({ items, onEdit, onPrint, canEdit }: Props) {
+export function RncTable({ items, onEdit, onPrint, onVisualizar, canEdit }: Props) {
   return (
     <DataTable
       getRowClassName={(item) => getTableRowClassName(item.status === 'aberto' ? 'critical' : item.status === 'em_tratativa' ? 'warning' : 'normal')}
@@ -42,6 +43,12 @@ export function RncTable({ items, onEdit, onPrint, canEdit }: Props) {
           header: 'Acoes',
           render: (item) => (
             <div className="table-actions">
+              <ActionButton
+                enabledLabel="Visualizar"
+                enabledTitle="Pre-visualizar relatorio RNC (impressao / PDF)"
+                onClick={() => onVisualizar(item)}
+                variant="ghost"
+              />
               <ActionButton enabledLabel="Imprimir" enabledTitle="Imprimir RNC" onClick={() => onPrint(item)} variant="ghost" />
               {canEdit ? (
                 <ActionButton

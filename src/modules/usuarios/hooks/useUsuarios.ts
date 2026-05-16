@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { exportAuthAuditEventsCsv, listAuthAuditEvents, type AuthAuditEvent } from '../../auth/services/authAudit.service';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { buscarUsuarioPorId, listarModulosDisponiveis, listarPerfisAcesso, listarUsuarios, salvarUsuario, toggleUsuarioStatus } from '../services/usuarios.service';
-import type { UsuarioFiltro, UsuarioFormData, UsuarioPerfil, UsuarioSistema } from '../types/usuario.types';
+import type { UsuarioFiltro, UsuarioFormData, UsuarioSistema } from '../types/usuario.types';
 
 const initialFilters: UsuarioFiltro = {
   busca: '',
@@ -18,19 +21,21 @@ const emptyForm: UsuarioFormData = {
   senha: '',
   ativo: true,
   perfilId: '',
+  colaboradorId: null,
+  authUserIdSupabase: null,
   permissoes: listarModulosDisponiveis().map((item) => ({ ...item, permitido: false })),
 };
 
+function usuariosListaQueryKey(filters: UsuarioFiltro, userLogin: string | undefined) {
+  return ['usuarios', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useUsuarios() {
-  const { canAccessAction } = useAuth();
-  const [items, setItems] = useState<UsuarioSistema[]>([]);
-  const [profiles, setProfiles] = useState<UsuarioPerfil[]>([]);
-  const [total, setTotal] = useState(0);
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
   const [filters, setFilters] = useState<UsuarioFiltro>(initialFilters);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [auditItems, setAuditItems] = useState<AuthAuditEvent[]>([]);
   const [auditActorFilter, setAuditActorFilter] = useState('');
   const [auditTypeFilter, setAuditTypeFilter] = useState<'todos' | AuthAuditEvent['type']>('todos');
   const [auditPeriodFilter, setAuditPeriodFilter] = useState<'todos' | '24h' | '7d' | '30d'>('todos');
@@ -38,34 +43,56 @@ export function useUsuarios() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<UsuarioSistema | null>(null);
   const [selectedForm, setSelectedForm] = useState<UsuarioFormData | null>(null);
+  /** Incrementa ao abrir modal ou ao recarregar o utilizador na nuvem — força remount do formulario com `key`. */
+  const [usuarioFormInstance, setUsuarioFormInstance] = useState(0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: usuariosListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const [usersResult, profileItems] = await Promise.all([listarUsuarios(filtersForLista), listarPerfisAcesso()]);
+      if (!usersResult.success || !usersResult.data) {
+        throw new Error(usersResult.error ?? 'Nao foi possivel carregar usuarios.');
+      }
+      return {
+        items: usersResult.data.items,
+        total: usersResult.data.total,
+        profiles: profileItems,
+        auditItems: listAuthAuditEvents(),
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const rawProfiles = listQuery.data?.profiles;
+  const profiles = useMemo(() => rawProfiles ?? [], [rawProfiles]);
+  const rawAuditItems = listQuery.data?.auditItems;
+  const auditItems = useMemo(() => rawAuditItems ?? [], [rawAuditItems]);
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar usuarios.'
+        : '';
+
+  const invalidateUsuariosLista = useCallback(async () => {
     setError('');
     setSuccess('');
+    await queryClient.invalidateQueries({ queryKey: ['usuarios'] });
+  }, [queryClient]);
 
-    const [usersResult, profileItems] = await Promise.all([listarUsuarios(filters), listarPerfisAcesso()]);
-    setProfiles(profileItems);
-    setAuditItems(listAuthAuditEvents());
-
-    if (!usersResult.success || !usersResult.data) {
-      setError(usersResult.error ?? 'Nao foi possivel carregar usuarios.');
-      setItems([]);
-      setTotal(0);
-    } else {
-      setItems(usersResult.data.items);
-      setTotal(usersResult.data.total);
+  const refreshSelectedUsuarioForm = useCallback(async () => {
+    if (!selected) return;
+    const r = await buscarUsuarioPorId(selected.id);
+    if (r.success && r.data) {
+      setSelectedForm(r.data);
+      setUsuarioFormInstance((n) => n + 1);
     }
-
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [selected]);
 
   const formInitialValue = useMemo<UsuarioFormData>(() => {
     if (!selected) {
@@ -120,6 +147,7 @@ export function useUsuarios() {
     }
     setSelected(item);
     setSelectedForm(result.data);
+    setUsuarioFormInstance((n) => n + 1);
     setIsModalOpen(true);
   }
 
@@ -129,11 +157,11 @@ export function useUsuarios() {
     }
     const result = await salvarUsuario(data, selected?.id);
     if (result.success) {
-      setSuccess('Usuario salvo com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
       setSelectedForm(null);
-      await load();
+      await invalidateUsuariosLista();
+      setSuccess('Usuario salvo com sucesso.');
     }
     return result;
   }
@@ -151,8 +179,8 @@ export function useUsuarios() {
       setError(result.error ?? 'Nao foi possivel atualizar usuario.');
       return;
     }
+    await invalidateUsuariosLista();
     setSuccess('Status do usuario atualizado com sucesso.');
-    await load();
   }
 
   return {
@@ -161,7 +189,7 @@ export function useUsuarios() {
     total,
     filters,
     loading,
-    error,
+    error: error || listError,
     success,
     auditItems: filteredAuditItems,
     auditActorFilter,
@@ -182,6 +210,7 @@ export function useUsuarios() {
       }
       setSelected(null);
       setSelectedForm(null);
+      setUsuarioFormInstance((n) => n + 1);
       setIsModalOpen(true);
     },
     openEditModal,
@@ -192,5 +221,7 @@ export function useUsuarios() {
     },
     submitUsuario,
     handleToggleStatus,
+    refreshSelectedUsuarioForm,
+    usuarioFormInstance,
   };
 }

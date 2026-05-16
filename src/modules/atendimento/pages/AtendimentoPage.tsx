@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { AutocompleteField } from '../../../components/ui/AutocompleteField';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
+import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { AtendimentoBuscaDocumento } from '../components/AtendimentoBuscaDocumento';
@@ -12,7 +14,7 @@ import { AtendimentoHistoricoTable } from '../components/AtendimentoHistoricoTab
 import { AtendimentoItensTable } from '../components/AtendimentoItensTable';
 import { totalizarLinhas, useAtendimento } from '../hooks/useAtendimento';
 import type { Atendimento } from '../types/atendimento.types';
-import { criarBlobUrlVisualizacaoRecibo } from '../utils/imprimirReciboAtendimento';
+import { montarHtmlRecibo } from '../utils/imprimirReciboAtendimento';
 import { montarDadosReciboParaAtendimento } from '../utils/montarDadosReciboParaAtendimento';
 
 export function AtendimentoPage() {
@@ -91,13 +93,10 @@ export function AtendimentoPage() {
   const canAdminister = canAccessAction('atendimento', 'administrar');
   const canExportAtendimentos = canAccessAction('atendimento', 'visualizar');
 
-  const iframeReciboRef = useRef<HTMLIFrameElement>(null);
   const leitorCodigoRef = useRef<HTMLInputElement>(null);
   const estornoQtdRefs = useRef<(HTMLInputElement | null)[]>([]);
   const estornoConfirmarRef = useRef<HTMLButtonElement | null>(null);
   const [leitorCodigoBuffer, setLeitorCodigoBuffer] = useState('');
-  const [reciboVisualUrl, setReciboVisualUrl] = useState<string | null>(null);
-  const [reciboVisualTitulo, setReciboVisualTitulo] = useState('');
   const [reciboHistoricoLoadingId, setReciboHistoricoLoadingId] = useState<string | null>(null);
 
   /** Sugestoes: atendente/recebedor do lote + colaboradores ativos; filtra ao digitar; aceita texto livre e colar. */
@@ -171,27 +170,17 @@ export function AtendimentoPage() {
     setReciboHistoricoLoadingId(item.id);
     try {
       const dados = await montarDadosReciboParaAtendimento(item);
-      const url = criarBlobUrlVisualizacaoRecibo(dados);
-      setReciboVisualUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return url;
-      });
-      setReciboVisualTitulo(`Recibo ${item.numero}`);
+      const html = montarHtmlRecibo(dados);
+      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      if (!res.ok) {
+        window.alert(
+          res.error ??
+            'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir / PDF no fluxo de confirmacao do atendimento.',
+        );
+      }
     } finally {
       setReciboHistoricoLoadingId(null);
     }
-  }
-
-  function fecharReciboVisualHistorico() {
-    setReciboVisualUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return null;
-    });
-    setReciboVisualTitulo('');
-  }
-
-  function imprimirReciboVisual() {
-    iframeReciboRef.current?.contentWindow?.print();
   }
 
   return (
@@ -204,9 +193,11 @@ export function AtendimentoPage() {
           </div>
         </div>
 
-        <p className="panel-copy">
-          Baixa parcial de documentos com historico de lotes e saldo calculado a partir do planejamento, recebimentos e ajustes.
-        </p>
+        <ModuleHelp>
+          <p className="panel-copy">
+            Baixa parcial de documentos com historico de lotes e saldo calculado a partir do planejamento, recebimentos e ajustes.
+          </p>
+        </ModuleHelp>
 
         <OperationalNotice>
           {cloudStatus === 'ready' && hasCloudConfig
@@ -252,9 +243,11 @@ export function AtendimentoPage() {
                 value={leitorCodigoBuffer}
               />
             </label>
-            <p className="panel-copy" style={{ marginTop: 8 }}>
-              Busca o material no cadastro (codigo ou codigo de barras) e marca a linha somente em documentos pendentes que contenham esse codigo. Se houver mais de um documento, escolha na lista.
-            </p>
+            <ModuleHelp>
+              <p className="panel-copy" style={{ marginTop: 8 }}>
+                Busca o material no cadastro (codigo ou codigo de barras) e marca a linha somente em documentos pendentes que contenham esse codigo. Se houver mais de um documento, escolha na lista.
+              </p>
+            </ModuleHelp>
           </div>
         ) : null}
 
@@ -302,10 +295,12 @@ export function AtendimentoPage() {
               </OperationalNotice>
             )}
 
-            <OperationalNotice>
-              Itens marcados recebem automaticamente a quantidade sugerida (ate o pendente do documento, limitada ao saldo). Ajuste
-              somente o que for parcial; desmarque linhas que nao entram nesta operacao.
-            </OperationalNotice>
+            <ModuleHelp>
+              <OperationalNotice>
+                Itens marcados recebem automaticamente a quantidade sugerida (ate o pendente do documento, limitada ao saldo). Ajuste
+                somente o que for parcial; desmarque linhas que nao entram nesta operacao.
+              </OperationalNotice>
+            </ModuleHelp>
 
             {itensSelecionados.length === 0 &&
             selectedDocumento.linhas.some((l) => idsMarcados.has(l.documentoItemId)) ? (
@@ -371,11 +366,13 @@ export function AtendimentoPage() {
           ) : null}
         </div>
 
-        <OperationalNotice>
-          O CSV inclui documento, descricao, revisao, datas, atendente, recebedor, origem (PC ou Mobile quando registrado assim), material, quantidade e IDs para cruzar com estorno. Colunas{' '}
-          <code>estorno_permitido</code> (sim/nao) e <code>qtd_pode_estornar</code> (numero) mostram se a linha ainda pode ser estornada e a quantidade maxima; <code>atendido</code> indica material ainda com quantidade no lote; <code>pode_estornar_linha</code> repete o mesmo criterio que estorno_permitido. Lotes com estorno total (sem itens no lote) aparecem uma linha resumo com <code>status_lote</code> estornado e descricao explicando. No Excel, use importar com separador{' '}
-          <strong>ponto e virgula (;)</strong> se as colunas nao separarem. A coluna <code>atendimento_item_id</code> corresponde a cada linha do lote na tela de estorno.
-        </OperationalNotice>
+        <ModuleHelp>
+          <OperationalNotice>
+            O CSV inclui documento, descricao, revisao, datas, atendente, recebedor, origem (PC ou Mobile quando registrado assim), material, quantidade e IDs para cruzar com estorno. Colunas{' '}
+            <code>estorno_permitido</code> (sim/nao) e <code>qtd_pode_estornar</code> (numero) mostram se a linha ainda pode ser estornada e a quantidade maxima; <code>atendido</code> indica material ainda com quantidade no lote; <code>pode_estornar_linha</code> repete o mesmo criterio que estorno_permitido. Lotes com estorno total (sem itens no lote) aparecem uma linha resumo com <code>status_lote</code> estornado e descricao explicando. No Excel, use importar com separador{' '}
+            <strong>ponto e virgula (;)</strong> se as colunas nao separarem. A coluna <code>atendimento_item_id</code> corresponde a cada linha do lote na tela de estorno.
+          </OperationalNotice>
+        </ModuleHelp>
 
         <AtendimentoHistoricoTable
           canAdminister={canAdminister}
@@ -387,35 +384,10 @@ export function AtendimentoPage() {
       </div>
 
       <Modal
-        onClose={fecharReciboVisualHistorico}
-        open={Boolean(reciboVisualUrl)}
-        title={reciboVisualTitulo || 'Recibo'}
-      >
-        {reciboVisualUrl ? (
-          <div className="editor-block">
-            <iframe
-              key={reciboVisualUrl}
-              ref={iframeReciboRef}
-              src={reciboVisualUrl}
-              style={{ border: '1px solid #ccc', minHeight: '65vh', width: '100%' }}
-              title="Visualizacao do recibo"
-            />
-            <div className="form-actions" style={{ marginTop: 16 }}>
-              <Button onClick={fecharReciboVisualHistorico} type="button" variant="ghost">
-                Fechar
-              </Button>
-              <Button onClick={imprimirReciboVisual} type="button">
-                Imprimir
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-
-      <Modal
         onClose={cancelarLeitorEscolhaDocumento}
         open={Boolean(leitorEscolhaDocumento)}
         title="Escolher documento"
+        wide
       >
         {leitorEscolhaDocumento ? (
           <div className="editor-block stack-grid">
@@ -444,6 +416,7 @@ export function AtendimentoPage() {
         onClose={cancelarConfirmacaoAtendimento}
         open={Boolean(confirmacaoAtendimento)}
         title="Confirmar atendimento"
+        wide
       >
         {confirmacaoAtendimento ? (
           <div className="editor-block">
@@ -464,7 +437,7 @@ export function AtendimentoPage() {
         ) : null}
       </Modal>
 
-      <Modal onClose={fecharModalEstorno} open={Boolean(estornoAlvo)} title="Estornar atendimento">
+      <Modal onClose={fecharModalEstorno} open={Boolean(estornoAlvo)} title="Estornar atendimento" wide>
         {estornoAlvo ? (
           <div className="editor-block stack-grid">
             {estornoDocLoading || !estornoDocInfo ? (
@@ -640,6 +613,7 @@ export function AtendimentoPage() {
         onClose={dispensarImpressaoRecibo}
         open={Boolean(reciboOpcional)}
         title="Recibo de retirada"
+        wide
       >
         {reciboOpcional ? (
           <div className="editor-block">
@@ -662,6 +636,7 @@ export function AtendimentoPage() {
         onClose={dispensarImpressaoReciboEstorno}
         open={Boolean(reciboEstornoOpcional)}
         title="Recibo de estorno"
+        wide
       >
         {reciboEstornoOpcional ? (
           <div className="editor-block">

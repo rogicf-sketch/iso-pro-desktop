@@ -1,8 +1,9 @@
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { listarColaboradoresAtivos } from '../../colaboradores/services/colaboradores.service';
-import { buscarDocumentoPorId } from '../../documentos/services/documentos.service';
+import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
 import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import {
@@ -23,6 +24,17 @@ import type {
   DadosReciboEstorno,
   EstornoAtendimentoLinha,
 } from '../types/atendimento.types';
+
+type AtendimentoCorePayload = {
+  documentos: AtendimentoDocumento[];
+  historico: Atendimento[];
+  colaboradores: Colaborador[];
+  fallbackReason: string;
+};
+
+function atendimentoCoreQueryKey(userLogin: string | undefined) {
+  return ['atendimento', 'core', userLogin ?? ''] as const;
+}
 
 /**
  * Valida documento, cabecalho (atendente + retirante conforme o tipo) e itens com quantidades.
@@ -118,8 +130,35 @@ function quantidadeSugeridaNestaOperacao(linha: AtendimentoDocumentoLinha): numb
   return Math.max(0, Math.min(pendente, saldo));
 }
 
+/**
+ * Sincronização em segundo plano (nuvem): atualiza pendência/saldo vindos do servidor sem apagar
+ * quantidades já digitadas nesta operação.
+ */
+function mergeDocumentosPendentesPreservandoOperacao(
+  prev: AtendimentoDocumento[],
+  next: AtendimentoDocumento[],
+): AtendimentoDocumento[] {
+  const prevById = new Map(prev.map((d) => [d.id, d]));
+  return next.map((doc) => {
+    const prevDoc = prevById.get(doc.id);
+    if (!prevDoc) return doc;
+    const prevLinha = new Map(prevDoc.linhas.map((l) => [l.documentoItemId, l]));
+    return {
+      ...doc,
+      linhas: doc.linhas.map((linha) => {
+        const pl = prevLinha.get(linha.documentoItemId);
+        if (!pl) return linha;
+        const cap = quantidadeSugeridaNestaOperacao(linha);
+        const q = Math.min(pl.quantidadeNestaOperacao, cap);
+        return { ...linha, quantidadeNestaOperacao: Math.max(0, q) };
+      }),
+    };
+  });
+}
+
 export function useAtendimento() {
-  const { canAccessAction } = useAuth();
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
 
   function baixarBlobCsv(blob: Blob, fileName: string) {
     const url = URL.createObjectURL(blob);
@@ -159,7 +198,7 @@ export function useAtendimento() {
   const [recebedorTelefone, setRecebedorTelefone] = useState('');
   const [autorizadorInterno, setAutorizadorInterno] = useState('');
   const [motivoRetirada, setMotivoRetirada] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [manualReplaceLoading, setManualReplaceLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
@@ -208,33 +247,126 @@ export function useAtendimento() {
   /** Por item do lote: incluido no estorno e quantidade a devolver (<= ao registrado no lote). */
   const [estornoLinhas, setEstornoLinhas] = useState<Record<string, { marcado: boolean; quantidade: number }>>({});
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setSnapshotConflict(false);
-    setError('');
-    const [docsResult, histResult, colaboradoresAtivos] = await Promise.all([
-      listarDocumentosPendentesComMeta(),
-      listarHistoricoAtendimentosComMeta(),
-      listarColaboradoresAtivos(),
-    ]);
-    setDocumentos(docsResult.data ?? []);
-    setDocumentosListaTick((n) => n + 1);
-    ultimoDocumentoComSugestaoAplicadaRef.current = '';
-    setHistorico(histResult.data ?? []);
-    setColaboradores(colaboradoresAtivos);
-    setFallbackReason(docsResult.meta?.fallbackReason ?? histResult.meta?.fallbackReason ?? '');
-    if ((!docsResult.success && docsResult.error) || (!histResult.success && histResult.error)) {
-      setError(docsResult.error ?? histResult.error ?? 'Nao foi possivel carregar os dados de atendimento.');
-    }
-    setLoading(false);
-  }, []);
+  /**
+   * `initial` → primeira aplicação após fetch (replace).
+   * `replace` → invalidação explícita / load() sem silent (substitui lista e reseta sugestões).
+   * `merge` → refetch em segundo plano (foco, intervalo, refetch silencioso): preserva quantidades digitadas.
+   */
+  const nextApplyRef = useRef<'initial' | 'replace' | 'merge'>('initial');
+  const lastAppliedDataUpdatedAtRef = useRef<number>(0);
+
+  const listQuery = useQuery({
+    queryKey: atendimentoCoreQueryKey(user?.login),
+    placeholderData: keepPreviousData,
+    /** Foco/visibilidade: efeito dedicado com debounce 350ms (evita refetch em rajada). */
+    refetchOnWindowFocus: false,
+    refetchInterval: () => {
+      if (!hasCloudConfig) return false;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+      return 30_000;
+    },
+    queryFn: async (): Promise<AtendimentoCorePayload> => {
+      const [docsResult, histResult, colaboradoresAtivos] = await Promise.all([
+        listarDocumentosPendentesComMeta(),
+        listarHistoricoAtendimentosComMeta(),
+        listarColaboradoresAtivos(),
+      ]);
+      if (!docsResult.success || !histResult.success) {
+        throw new Error(
+          docsResult.error ?? histResult.error ?? 'Nao foi possivel carregar os dados de atendimento.',
+        );
+      }
+      return {
+        documentos: docsResult.data ?? [],
+        historico: histResult.data ?? [],
+        colaboradores: colaboradoresAtivos,
+        fallbackReason: docsResult.meta?.fallbackReason ?? histResult.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  /** Volta ao separador / janela: alinha pendências (merge), com debounce como no fluxo anterior ao React Query. */
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let debounce: number | null = null;
+    const schedule = () => {
+      if (debounce) window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => {
+        debounce = null;
+        if (document.visibilityState !== 'visible') return;
+        nextApplyRef.current = 'merge';
+        void queryClient.refetchQueries({ queryKey: ['atendimento', 'core'] });
+      }, 350);
+    };
+    document.addEventListener('visibilitychange', schedule);
+    window.addEventListener('focus', schedule);
+    return () => {
+      document.removeEventListener('visibilitychange', schedule);
+      window.removeEventListener('focus', schedule);
+      if (debounce) window.clearTimeout(debounce);
+    };
+  }, [queryClient]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    if (!listQuery.data) return;
+    if (listQuery.dataUpdatedAt === lastAppliedDataUpdatedAtRef.current) return;
+    lastAppliedDataUpdatedAtRef.current = listQuery.dataUpdatedAt;
+
+    const payload = listQuery.data;
+    let mode: 'replace' | 'merge';
+    if (nextApplyRef.current === 'initial') {
+      mode = 'replace';
+      nextApplyRef.current = 'merge';
+    } else if (nextApplyRef.current === 'replace') {
+      mode = 'replace';
+      nextApplyRef.current = 'merge';
+    } else {
+      mode = 'merge';
+    }
+
+    setSnapshotConflict(false);
+    if (mode === 'merge') {
+      setDocumentos((prev) => mergeDocumentosPendentesPreservandoOperacao(prev, payload.documentos));
+    } else {
+      setDocumentos(payload.documentos);
+      setDocumentosListaTick((n) => n + 1);
+      ultimoDocumentoComSugestaoAplicadaRef.current = '';
+    }
+    setHistorico(payload.historico);
+    setColaboradores(payload.colaboradores);
+    setFallbackReason(payload.fallbackReason);
+  }, [listQuery.data, listQuery.dataUpdatedAt]);
+
+  const invalidateAtendimentoReplace = useCallback(async () => {
+    nextApplyRef.current = 'replace';
+    setError('');
+    setManualReplaceLoading(true);
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['atendimento', 'core'] });
+    } finally {
+      setManualReplaceLoading(false);
+    }
+  }, [queryClient]);
+
+  const load = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (options?.silent === true) {
+        nextApplyRef.current = 'merge';
+        await listQuery.refetch();
+        return;
+      }
+      await invalidateAtendimentoReplace();
+    },
+    [listQuery, invalidateAtendimentoReplace],
+  );
+
+  const loading = listQuery.isLoading || manualReplaceLoading;
+  const listFetchError =
+    listQuery.isError && !listQuery.data
+      ? listQuery.error instanceof Error
+        ? listQuery.error.message
+        : 'Nao foi possivel carregar os dados de atendimento.'
+      : '';
 
   const selectedDocumento = useMemo(
     () => documentos.find((documento) => documento.id === selectedDocumentoId) ?? null,
@@ -358,7 +490,7 @@ export function useAtendimento() {
         }),
       );
     },
-    [selectedDocumentoId],
+    [selectedDocumentoId, setDocumentos],
   );
 
   const aplicarLeituraMaterialNoDocumento = useCallback(
@@ -475,7 +607,7 @@ export function useAtendimento() {
         );
       });
     },
-    [selectedDocumentoId],
+    [selectedDocumentoId, setDocumentos],
   );
 
   function updateLinha(lineId: string, quantidadeNestaOperacao: number) {
@@ -758,7 +890,7 @@ export function useAtendimento() {
       Object.fromEntries(item.itens.map((it) => [it.id, { marcado: true, quantidade: it.quantidadeAtendida }])),
     );
     setEstornoDocLoading(true);
-    const docResult = await buscarDocumentoPorId(item.documentoId);
+    const docResult = await buscarDocumentoPorIdOuNumero(item.documentoId, item.documentoNumero);
     const doc = docResult.success && docResult.data ? docResult.data : null;
     setEstornoDocInfo({
       descricao: doc?.descricao ?? '(Documento nao encontrado ou indisponivel.)',
@@ -857,7 +989,7 @@ export function useAtendimento() {
     autorizadorInterno,
     motivoRetirada,
     loading,
-    error,
+    error: error || listFetchError,
     success,
     snapshotConflict,
     fallbackReason,

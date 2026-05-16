@@ -1,7 +1,8 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
+import { roundPesoKg } from '../../../lib/parseDecimal';
 import type { RecebimentoItem } from '../types/recebimento.types';
 
 type Props = {
@@ -10,6 +11,8 @@ type Props = {
   readOnly?: boolean;
   /** Em modo direto nao destacamos diferenca entre qtd recebida e conferida (sem fluxo de conferencia). */
   modoRecebimento?: 'direto' | 'aguardando_conferencia';
+  /** Quando false, omite o titulo no cabecalho (ex.: secao pai com `rir-card-title`). */
+  showHeading?: boolean;
 };
 
 function createEmptyItem(): RecebimentoItem {
@@ -25,12 +28,21 @@ function createEmptyItem(): RecebimentoItem {
     pesoUnitario: 0,
     pesoTotal: 0,
     certificado: '',
+    observacaoItem: '',
   };
 }
 
-export function RecebimentoItensEditor({ items, onChange, readOnly = false, modoRecebimento }: Props) {
+export function RecebimentoItensEditor({
+  items,
+  onChange,
+  readOnly = false,
+  modoRecebimento,
+  showHeading = true,
+}: Props) {
   const itemsRef = useRef(items);
-  itemsRef.current = items;
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
   const puxandoCadastroRef = useRef<Set<string>>(new Set());
 
   async function aoSairDoCodigoMaterial(itemId: string) {
@@ -58,7 +70,7 @@ export function RecebimentoItensEditor({ items, onChange, readOnly = false, modo
           }
           if (pu > 0) {
             next.pesoUnitario = pu;
-            next.pesoTotal = Number((qtd * pu).toFixed(3));
+            next.pesoTotal = roundPesoKg(qtd * pu);
           }
           return next;
         }),
@@ -76,14 +88,14 @@ export function RecebimentoItensEditor({ items, onChange, readOnly = false, modo
         if ('pesoTotal' in patch && !('quantidadeRecebida' in patch) && !('pesoUnitario' in patch)) {
           return {
             ...next,
-            pesoTotal: Number(next.pesoTotal) || 0,
-            pesoUnitario: Number(next.pesoUnitario) || 0,
+            pesoTotal: roundPesoKg(Number(next.pesoTotal) || 0),
+            pesoUnitario: roundPesoKg(Number(next.pesoUnitario) || 0),
           };
         }
         if ('quantidadeRecebida' in patch || 'pesoUnitario' in patch) {
           const q = Number(next.quantidadeRecebida) || 0;
           const pu = Number(next.pesoUnitario) || 0;
-          next.pesoTotal = Number((q * pu).toFixed(3));
+          next.pesoTotal = roundPesoKg(q * pu);
         }
         return next;
       }),
@@ -98,16 +110,20 @@ export function RecebimentoItensEditor({ items, onChange, readOnly = false, modo
     onChange(items.filter((item) => item.id !== id));
   }
 
+  const headerComConteudo = showHeading || !readOnly;
+
   return (
     <div className="editor-block">
-      <div className="editor-header">
-        <strong>Itens do recebimento</strong>
-        {readOnly ? null : (
-          <Button onClick={addItem} type="button" variant="ghost">
-            Adicionar item
-          </Button>
-        )}
-      </div>
+      {headerComConteudo ? (
+        <div className="editor-header">
+          {showHeading ? <strong>Itens do recebimento</strong> : <span aria-hidden />}
+          {readOnly ? null : (
+            <Button onClick={addItem} type="button" variant="ghost">
+              Adicionar item
+            </Button>
+          )}
+        </div>
+      ) : null}
 
       <div className="editor-list">
         {items.map((item) => {
@@ -180,8 +196,11 @@ export function RecebimentoItensEditor({ items, onChange, readOnly = false, modo
                 disabled={readOnly}
                 label="Peso unitario (kg)"
                 min="0"
-                onChange={(event) => updateItem(item.id, { pesoUnitario: Number(event.target.value || 0) })}
-                step="0.001"
+                onChange={(event) =>
+                  updateItem(item.id, { pesoUnitario: roundPesoKg(Number(event.target.value || 0)) })
+                }
+                step="0.01"
+                title="Em campos numericos do navegador o separador decimal e o ponto (ex.: 2.39 kg)."
                 type="number"
                 value={String(item.pesoUnitario ?? 0)}
               />
@@ -189,8 +208,11 @@ export function RecebimentoItensEditor({ items, onChange, readOnly = false, modo
                 disabled={readOnly}
                 label="Peso total (kg)"
                 min="0"
-                onChange={(event) => updateItem(item.id, { pesoTotal: Number(event.target.value || 0) })}
-                step="0.001"
+                onChange={(event) =>
+                  updateItem(item.id, { pesoTotal: roundPesoKg(Number(event.target.value || 0)) })
+                }
+                step="0.01"
+                title="Calculado como quantidade x peso unitario; arredondado a 2 casas. O ponto e decimal (ex.: 14.82), nao milhar."
                 type="number"
                 value={String(item.pesoTotal ?? 0)}
               />
@@ -201,6 +223,18 @@ export function RecebimentoItensEditor({ items, onChange, readOnly = false, modo
                 placeholder="Nº ou referencia (opcional)"
                 value={item.certificado ?? ''}
               />
+              <label className="field" style={{ gridColumn: '1 / -1' }}>
+                <span>Observacao do item</span>
+                <textarea
+                  className="input-control"
+                  disabled={readOnly}
+                  rows={2}
+                  title="Notas por linha (ex.: divergencia na conferencia). Aparece no app campo ao conferir."
+                  placeholder="Opcional — motivo de diferenca de quantidade, embalagem, etc."
+                  value={item.observacaoItem ?? ''}
+                  onChange={(event) => updateItem(item.id, { observacaoItem: event.target.value })}
+                />
+              </label>
             </div>
 
             {readOnly ? null : (

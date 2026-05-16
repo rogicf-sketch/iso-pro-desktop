@@ -1,6 +1,7 @@
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -94,15 +95,17 @@ export function ColaboradoresPage() {
         ) : null}
       </div>
 
-      <p className="panel-copy">
-        Base operacional de retirantes internos e externos para garantir rastreabilidade total nos atendimentos. Importe planilhas CSV
-        (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Use <strong>Baixar modelo CSV</strong> para o cabecalho
-        correto. Colunas: <code>nome</code>, <code>tipo</code> (interno/externo), <code>matricula</code>, <code>funcao</code>,{' '}
-        <code>empresa</code>, <code>documento</code>, <code>telefone</code>, <code>observacao</code>, <code>ativo</code> (sim/nao). Nome
-        ja cadastrado e atualizado; nome repetido no mesmo arquivo e ignorado apos a primeira linha.{' '}
-        <strong>Excel — todos</strong> exporta o cadastro completo; <strong>Excel — filtro</strong> apenas os registos que batem com os
-        filtros da lista (busca, tipo, status).
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Base operacional de retirantes internos e externos para garantir rastreabilidade total nos atendimentos. Importe planilhas CSV
+          (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Use <strong>Baixar modelo CSV</strong> para o cabecalho
+          correto. Colunas: <code>nome</code>, <code>tipo</code> (interno/externo), <code>matricula</code>, <code>funcao</code>,{' '}
+          <code>empresa</code>, <code>documento</code>, <code>telefone</code>, <code>observacao</code>, <code>ativo</code> (sim/nao). Nome
+          ja cadastrado e atualizado; nome repetido no mesmo arquivo e ignorado apos a primeira linha.{' '}
+          <strong>Excel — todos</strong> exporta o cadastro completo; <strong>Excel — filtro</strong> apenas os registos que batem com os
+          filtros da lista (busca, tipo, status).
+        </p>
+      </ModuleHelp>
 
       <OperationalNotice>
         {cloudStatus === 'ready' && hasCloudConfig
@@ -137,7 +140,7 @@ export function ColaboradoresPage() {
         <OperationalNotice>Seu perfil pode visualizar colaboradores, mas nao pode alterar cadastro.</OperationalNotice>
       ) : null}
 
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar colaborador' : 'Novo colaborador'}>
+      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar colaborador' : 'Novo colaborador'} wide>
         <ColaboradorForm
           key={selected?.id ?? 'new-colaborador'}
           initialValue={formInitialValue}
@@ -156,6 +159,7 @@ export function ColaboradoresPage() {
         }}
         open={Boolean(importStaging) && canEdit}
         title="Confirmar importacao"
+        wide
       >
         {importStaging ? (
           <div className="editor-block">
@@ -175,7 +179,7 @@ export function ColaboradoresPage() {
         ) : null}
       </Modal>
 
-      <Modal onClose={closeImportColaboradoresResultado} open={Boolean(importResultado)} title="Importacao concluida">
+      <Modal onClose={closeImportColaboradoresResultado} open={Boolean(importResultado)} title="Importacao concluida" wide>
         {importResultado ? (
           <div className="editor-block">
             <p>

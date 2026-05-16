@@ -1,6 +1,10 @@
-import { useCallback, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { Modal } from '../../../components/ui/Modal';
 import { Input } from '../../../components/ui/Input';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -13,6 +17,99 @@ import {
   montarHtmlEtiquetasItensRecebimento,
   quantidadeExibidaEtiquetaItem,
 } from '../utils/imprimirEtiquetasRecebimento';
+import { IconFullscreenEnter, IconFullscreenExit } from '../../../components/ui/FullscreenIcons';
+
+type EtiquetaPreviewChromeProps = {
+  copiasPorItem: number;
+  iframeMinHeight: number;
+  itemCount: number;
+  onOpenLightbox?: () => void;
+  previewHtml: string;
+};
+
+function EtiquetaRecebimentoPreviewChrome({
+  copiasPorItem,
+  iframeMinHeight,
+  itemCount,
+  onOpenLightbox,
+  previewHtml,
+}: EtiquetaPreviewChromeProps) {
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [browserFs, setBrowserFs] = useState(false);
+
+  useEffect(() => {
+    function sync() {
+      setBrowserFs(document.fullscreenElement === shellRef.current);
+    }
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+
+  async function toggleBrowserFullscreen() {
+    const el = shellRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      /* API indisponível ou recusada */
+    }
+  }
+
+  const isLightbox = !onOpenLightbox;
+  const iframeStyle: CSSProperties = {
+    backgroundColor: '#e8edf3',
+    border: '1px solid var(--border-subtle, #cbd5e1)',
+    borderRadius: 8,
+    display: 'block',
+    width: '100%',
+  };
+  if (browserFs) {
+    iframeStyle.height = '100%';
+  } else if (isLightbox) {
+    iframeStyle.minHeight = 0;
+    iframeStyle.height = '100%';
+  } else {
+    iframeStyle.minHeight = iframeMinHeight;
+  }
+
+  return (
+    <div className="etiqueta-preview-shell" ref={shellRef}>
+      <div className="etiqueta-preview-toolbar">
+        <p className="etiqueta-preview-toolbar__meta">
+          Pre-visualizacao ({itemCount} item(ns), {copiasPorItem} copia(s) cada)
+        </p>
+        <div className="etiqueta-preview-toolbar__actions">
+          <button
+            aria-label={browserFs ? 'Sair da tela inteira' : 'Tela inteira (pre-visualizacao)'}
+            className="icon-button"
+            onClick={() => void toggleBrowserFullscreen()}
+            title={browserFs ? 'Sair da tela inteira' : 'Tela inteira'}
+            type="button"
+          >
+            <span className="etiqueta-preview-fs-icon">{browserFs ? <IconFullscreenExit /> : <IconFullscreenEnter />}</span>
+          </button>
+          {onOpenLightbox ? (
+            <Button onClick={onOpenLightbox} type="button" variant="ghost">
+              Tela grande
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <div className={onOpenLightbox ? 'etiqueta-preview-scroll' : 'etiqueta-preview-scroll etiqueta-preview-scroll--lightbox'}>
+        <iframe
+          sandbox="allow-same-origin allow-scripts allow-modals"
+          srcDoc={previewHtml}
+          style={iframeStyle}
+          title="Pre-visualizacao etiquetas recebimento"
+        />
+      </div>
+    </div>
+  );
+}
 
 export function EtiquetasRecebimentoPanel() {
   const { canAccessAction } = useAuth();
@@ -31,38 +128,114 @@ export function EtiquetasRecebimentoPanel() {
   const [codigosNaEtiqueta, setCodigosNaEtiqueta] = useState<EtiquetaCodigosOpcao>('ambos');
   const [logoNaEtiqueta, setLogoNaEtiqueta] = useState(true);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [previewLightboxOpen, setPreviewLightboxOpen] = useState(false);
   const [msg, setMsg] = useState('');
+
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listaBuscaSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!previewHtml) setPreviewLightboxOpen(false);
+  }, [previewHtml]);
 
   const preset = useMemo(() => getEtiquetaPreset(modelo, formato), [modelo, formato]);
 
-  const buscarListaRecebimentos = useCallback(async () => {
-    if (!podeReceb) {
-      setMsg('Sem permissao para consultar recebimentos.');
-      return;
+  const runListBuscaRecebimentos = useCallback(
+    async (busca: string, resetSelecao: boolean) => {
+      if (!podeReceb) {
+        setMsg('Sem permissao para consultar recebimentos.');
+        return;
+      }
+      const seq = ++listaBuscaSeqRef.current;
+      setMsg('');
+      setCarregandoLista(true);
+      if (resetSelecao) {
+        setRecebimentoAtual(null);
+        setSelectedItemIds(new Set());
+        setPreviewHtml(null);
+      }
+      const result = await listarRecebimentos({
+        busca,
+        status: 'todos',
+        modo: 'todos',
+        page: 1,
+        pageSize: 80,
+      });
+      if (seq !== listaBuscaSeqRef.current) return;
+      setCarregandoLista(false);
+      if (!result.success || !result.data) {
+        setMsg(result.error ?? 'Nao foi possivel buscar recebimentos.');
+        setListaRecebimentos([]);
+        return;
+      }
+      setListaRecebimentos(result.data.items);
+      if (!result.data.items.length) {
+        setMsg('Nenhum recebimento encontrado para esta busca (NF, romaneio ou fornecedor).');
+      }
+    },
+    [podeReceb],
+  );
+
+  useEffect(() => {
+    if (!podeReceb) return;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
     }
-    setMsg('');
-    setCarregandoLista(true);
+    debounceTimerRef.current = setTimeout(() => {
+      debounceTimerRef.current = null;
+      const q = buscaReceb.trim();
+      if (q.length < 1) {
+        listaBuscaSeqRef.current += 1;
+        setListaRecebimentos([]);
+        setMsg('');
+        setCarregandoLista(false);
+        return;
+      }
+      void runListBuscaRecebimentos(q, false);
+    }, LISTA_BUSCA_DEBOUNCE_MS);
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+  }, [buscaReceb, podeReceb, runListBuscaRecebimentos]);
+
+  const buscarListaRecebimentos = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    void runListBuscaRecebimentos(buscaReceb.trim(), true);
+  }, [buscaReceb, runListBuscaRecebimentos]);
+
+  /** Mantem o texto e a lista de resultados; so fecha o recebimento e a pre-visualizacao para escolher outra NF na mesma lista. */
+  const fecharRecebimentoSelecionado = useCallback(() => {
     setRecebimentoAtual(null);
     setSelectedItemIds(new Set());
     setPreviewHtml(null);
-    const result = await listarRecebimentos({
-      busca: buscaReceb,
-      status: 'todos',
-      modo: 'todos',
-      page: 1,
-      pageSize: 80,
-    });
+    setMsg('');
+  }, []);
+
+  /** Campo vazio, sem lista, sem recebimento — estado inicial da busca. */
+  const limparBuscaEResultados = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    listaBuscaSeqRef.current += 1;
+    setBuscaReceb('');
+    setListaRecebimentos([]);
+    setRecebimentoAtual(null);
+    setSelectedItemIds(new Set());
+    setPreviewHtml(null);
+    setMsg('');
     setCarregandoLista(false);
-    if (!result.success || !result.data) {
-      setMsg(result.error ?? 'Nao foi possivel buscar recebimentos.');
-      setListaRecebimentos([]);
-      return;
-    }
-    setListaRecebimentos(result.data.items);
-    if (!result.data.items.length) {
-      setMsg('Nenhum recebimento encontrado para esta busca (NF, romaneio ou fornecedor).');
-    }
-  }, [buscaReceb, podeReceb]);
+  }, []);
+
+  const podeLimparBusca =
+    Boolean(buscaReceb.trim()) || listaRecebimentos.length > 0 || recebimentoAtual !== null || Boolean(previewHtml);
 
   const carregarItensRecebimento = useCallback(
     async (id: string) => {
@@ -171,14 +344,20 @@ export function EtiquetasRecebimentoPanel() {
   }
 
   return (
-    <div className="section-block" style={{ marginBottom: 24 }}>
+    <div className="section-block rir-form-professional" style={{ marginBottom: 24 }}>
       <h3 className="panel-kicker" style={{ marginBottom: 8 }}>
         Impressao a partir de recebimentos
       </h3>
-      <p className="panel-copy" style={{ marginBottom: 12 }}>
-        Busca inteligente por NF, romaneio ou fornecedor (trechos, segmentos e numeros flexiveis, como na consulta mobile). Abra um recebimento
-        para listar os itens, marque os que deseja etiquetar, escolha modelo e formato e gere a pre-visualizacao.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy" style={{ marginBottom: 12 }}>
+          Busca inteligente por NF, romaneio ou fornecedor (trechos, segmentos e numeros flexiveis, como na consulta mobile). Os resultados
+          aparecem automaticamente apos uma breve pausa ao digitar (~{LISTA_BUSCA_DEBOUNCE_MS} ms); tambem pode usar <strong>Enter</strong> ou{' '}
+          <strong>Buscar recebimentos</strong> (inclui busca com campo vazio — primeiros registos). Use <strong>Limpar busca</strong> para
+          esconder a lista e voltar ao estado inicial; com um recebimento aberto, <strong>Outra NF</strong> fecha so esse recebimento e mantem
+          a lista para escolher outra linha. Abra um recebimento para listar os itens, marque os que deseja etiquetar, escolha modelo e formato
+          e gere a pre-visualizacao.
+        </p>
+      </ModuleHelp>
 
       <div className="filters-grid" style={{ marginBottom: 12 }}>
         <Input
@@ -187,12 +366,20 @@ export function EtiquetasRecebimentoPanel() {
           onKeyDown={(e) => {
             if (e.key === 'Enter') void buscarListaRecebimentos();
           }}
-          placeholder="NF, romaneio ou fornecedor (busca inteligente)"
+          placeholder="Digite NF, romaneio ou fornecedor — lista apos pausa ou Enter"
           value={buscaReceb}
         />
-        <div className="form-actions" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div className="form-actions" style={{ alignItems: 'flex-end', flexWrap: 'wrap', gap: 8 }}>
           <Button disabled={!podeReceb || carregandoLista} onClick={() => void buscarListaRecebimentos()} type="button">
             {carregandoLista ? 'Buscando...' : 'Buscar recebimentos'}
+          </Button>
+          <Button
+            disabled={!podeReceb || !podeLimparBusca}
+            onClick={limparBuscaEResultados}
+            type="button"
+            variant="ghost"
+          >
+            Limpar busca
           </Button>
         </div>
       </div>
@@ -246,6 +433,15 @@ export function EtiquetasRecebimentoPanel() {
             {' As etiquetas usam a quantidade recebida registrada neste recebimento.'}
           </OperationalNotice>
 
+          <div className="form-actions" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+            <Button onClick={fecharRecebimentoSelecionado} type="button" variant="ghost">
+              Outra NF (voltar à lista de recebimentos)
+            </Button>
+            <Button disabled={!podeReceb} onClick={limparBuscaEResultados} type="button" variant="ghost">
+              Limpar busca e nova pesquisa
+            </Button>
+          </div>
+
           <div className="form-actions" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
             <Button onClick={selecionarTodosItens} type="button" variant="ghost">
               Selecionar todos os itens
@@ -293,78 +489,94 @@ export function EtiquetasRecebimentoPanel() {
             </table>
           </div>
 
-          <div className="form-columns" style={{ marginBottom: 12 }}>
-            <Select label="Modelo" onChange={(e) => setModelo(e.target.value as EtiquetaModelo)} value={modelo}>
-              <option value="simples">Simples</option>
-              <option value="colorido">Neutro refinado</option>
-              <option value="industrial">Industrial</option>
-              <option value="cartao">Cartao</option>
-              <option value="segregacao">Segregacao — etiqueta mostra «Segregado»</option>
-              <option value="liberacao">Liberacao — etiqueta mostra «Liberado»</option>
-            </Select>
-            <Select label="Formato" onChange={(e) => setFormato(e.target.value as EtiquetaFormato)} value={formato}>
-              <option value="a4_2col">A4 2 colunas</option>
-              <option value="a4_1col">A4 1 coluna</option>
-              <option value="termica_58">Termica 58mm</option>
-              <option value="termica_80">Termica 80mm</option>
-            </Select>
-            <Input
-              label="Copias por item"
-              min={1}
-              onChange={(e) => setCopiasPorItem(Math.max(1, Number(e.target.value) || 1))}
-              type="number"
-              value={String(copiasPorItem)}
-            />
-            <Select
-              label="Codigos na etiqueta"
-              onChange={(e) => setCodigosNaEtiqueta(e.target.value as EtiquetaCodigosOpcao)}
-              value={codigosNaEtiqueta}
-            >
-              <option value="nenhum">Nenhum</option>
-              <option value="codigo_barras">Somente codigo de barras</option>
-              <option value="qrcode">Somente QR Code</option>
-              <option value="ambos">Codigo de barras e QR Code</option>
-            </Select>
-          </div>
+          <section className="rir-card">
+            <h4 className="rir-card-title">Modelo e impressao</h4>
+            <div className="form-columns" style={{ marginBottom: 12 }}>
+              <Select label="Modelo" onChange={(e) => setModelo(e.target.value as EtiquetaModelo)} value={modelo}>
+                <option value="simples">Simples</option>
+                <option value="colorido">Neutro refinado</option>
+                <option value="industrial">Industrial</option>
+                <option value="cartao">Cartao</option>
+                <option value="segregacao">Segregacao — etiqueta mostra «Segregado»</option>
+                <option value="liberacao">Liberacao — etiqueta mostra «Liberado»</option>
+              </Select>
+              <Select label="Formato" onChange={(e) => setFormato(e.target.value as EtiquetaFormato)} value={formato}>
+                <option value="a4_2col">A4 2 colunas</option>
+                <option value="a4_1col">A4 1 coluna</option>
+                <option value="termica_58">Termica 58mm</option>
+                <option value="termica_80">Termica 80mm</option>
+              </Select>
+              <Input
+                label="Copias por item"
+                min={1}
+                onChange={(e) => setCopiasPorItem(Math.max(1, Number(e.target.value) || 1))}
+                type="number"
+                value={String(copiasPorItem)}
+              />
+              <Select
+                label="Codigos na etiqueta"
+                onChange={(e) => setCodigosNaEtiqueta(e.target.value as EtiquetaCodigosOpcao)}
+                value={codigosNaEtiqueta}
+              >
+                <option value="nenhum">Nenhum</option>
+                <option value="codigo_barras">Somente codigo de barras</option>
+                <option value="qrcode">Somente QR Code</option>
+                <option value="ambos">Codigo de barras e QR Code</option>
+              </Select>
+            </div>
 
-          <label className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <input
-              checked={logoNaEtiqueta}
-              onChange={(e) => setLogoNaEtiqueta(e.target.checked)}
-              type="checkbox"
-            />
-            <span>Mostrar logo da empresa em cada etiqueta (defina o logo em Configuracoes)</span>
-          </label>
+            <label className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <input
+                checked={logoNaEtiqueta}
+                onChange={(e) => setLogoNaEtiqueta(e.target.checked)}
+                type="checkbox"
+              />
+              <span>Mostrar logo da empresa em cada etiqueta (defina o logo em Configuracoes)</span>
+            </label>
 
-          <div className="form-actions" style={{ flexWrap: 'wrap', marginBottom: 12 }}>
-            <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void gerarPreview()} type="button">
-              Gerar pre-visualizacao
-            </Button>
-            <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void imprimirDoc()} type="button">
-              Imprimir
-            </Button>
-          </div>
+            <div className="form-actions" style={{ flexWrap: 'wrap', marginBottom: 0 }}>
+              <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void gerarPreview()} type="button">
+                Gerar pre-visualizacao
+              </Button>
+              <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void imprimirDoc()} type="button">
+                Imprimir
+              </Button>
+            </div>
+          </section>
 
           {previewHtml ? (
-            <div className="editor-block">
-              <p className="panel-copy" style={{ marginBottom: 8 }}>
-                Pre-visualizacao ({itensSelecionados.length} item(ns), {copiasPorItem} copia(s) cada)
-              </p>
-              <iframe
-                sandbox="allow-same-origin allow-scripts allow-modals"
-                srcDoc={previewHtml}
-                style={{
-                  backgroundColor: '#e8edf3',
-                  border: '1px solid var(--border-subtle, #cbd5e1)',
-                  borderRadius: 8,
-                  minHeight: 360,
-                  width: '100%',
-                }}
-                title="Pre-visualizacao etiquetas recebimento"
+            <div className="editor-block" style={{ marginTop: 4 }}>
+              <EtiquetaRecebimentoPreviewChrome
+                copiasPorItem={copiasPorItem}
+                iframeMinHeight={440}
+                itemCount={itensSelecionados.length}
+                onOpenLightbox={() => setPreviewLightboxOpen(true)}
+                previewHtml={previewHtml}
               />
             </div>
           ) : null}
         </>
+      ) : null}
+
+      {previewHtml ? (
+        <Modal
+          onClose={() => {
+            if (document.fullscreenElement) {
+              void document.exitFullscreen().catch(() => undefined);
+            }
+            setPreviewLightboxOpen(false);
+          }}
+          open={previewLightboxOpen}
+          size="fullscreen"
+          title="Pre-visualizacao de etiquetas"
+        >
+          <EtiquetaRecebimentoPreviewChrome
+            copiasPorItem={copiasPorItem}
+            iframeMinHeight={560}
+            itemCount={itensSelecionados.length}
+            previewHtml={previewHtml}
+          />
+        </Modal>
       ) : null}
 
       {msg ? <OperationalNotice tone="warning">{msg}</OperationalNotice> : null}

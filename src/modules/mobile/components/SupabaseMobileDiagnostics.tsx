@@ -36,7 +36,7 @@ export function SupabaseMobileDiagnostics({ canAdministerConfiguracoes }: Props)
         URL:{' '}
         {diag.hasUrl ? (
           <>
-            sim — <code>{diag.urlHost ?? '?'}</code> (origem: <strong>{diag.urlFrom}</strong>)
+            sim (origem: <strong>{diag.urlFrom}</strong>) — host oculto por seguranca
           </>
         ) : (
           <strong>nao configurada</strong>
@@ -45,7 +45,7 @@ export function SupabaseMobileDiagnostics({ canAdministerConfiguracoes }: Props)
         Chave anon/publicavel:{' '}
         {diag.hasKey ? (
           <>
-            sim — <strong>{diag.keyLength}</strong> caracteres (origem: <strong>{diag.keyFrom}</strong>)
+            sim (origem: <strong>{diag.keyFrom}</strong>) — valor nao e mostrado aqui
           </>
         ) : (
           <strong>nao configurada</strong>

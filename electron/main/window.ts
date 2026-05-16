@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,9 +6,15 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Ícone da janela em dev / `electron .` (gerado por `npm run build:icon`). No .exe empacotado o ícone já vem do instalador. */
+/**
+ * Ícone da janela / barra de tarefas:
+ * - Dev: `build/icon.ico` (gerado por `npm run build:icon`).
+ * - Empacotado: `resources/icon.ico` (copiado pelo electron-builder — ver `extraResources`); sem isto o Electron usa o ícone por defeito.
+ */
 function resolveOptionalWindowIcon(): string | undefined {
-  const candidate = path.join(__dirname, '..', 'build', 'icon.ico');
+  const devPath = path.join(__dirname, '..', 'build', 'icon.ico');
+  const packagedPath = path.join(process.resourcesPath, 'icon.ico');
+  const candidate = app.isPackaged ? packagedPath : devPath;
   if (fs.existsSync(candidate)) {
     return candidate;
   }
@@ -19,7 +25,7 @@ function resolveOptionalWindowIcon(): string | undefined {
  * - Dev (electron/.dev-main.mjs): preload em electron/preload/index.mjs
  * - Prod (dist-electron/main.mjs, empacotado ou `electron .`): preload.mjs ao lado do main
  */
-function resolvePreloadPath(): string {
+export function resolvePreloadPath(): string {
   const normalized = __dirname.replace(/\\/g, '/');
   if (normalized.includes('dist-electron')) {
     return path.join(__dirname, 'preload.mjs');
@@ -30,6 +36,7 @@ function resolvePreloadPath(): string {
 export function createMainWindow() {
   const windowIcon = resolveOptionalWindowIcon();
   const window = new BrowserWindow({
+    title: 'I.S.O PRO — Gestão de materiais',
     ...(windowIcon ? { icon: windowIcon } : {}),
     width: 1440,
     height: 900,

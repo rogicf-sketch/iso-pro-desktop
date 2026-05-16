@@ -66,3 +66,14 @@ describe('montarModeloCsvImportacaoMateriais', () => {
     expect(p.linhaCount).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('previewImportacaoMateriaisCsv / disciplinas cadastradas', () => {
+  it('rejeita disciplina que nao esta na lista de Disciplinas', () => {
+    const csv = 'codigo;descricao;disciplina;unidade\nBV-1;Bomba;Mecânica;PC\n';
+    const p = previewImportacaoMateriaisCsv(csv);
+    expect(p.ok).toBe(false);
+    if (p.ok) return;
+    expect(p.error).toMatch(/Disciplina\(s\) nao cadastrada/i);
+    expect(p.error).toMatch(/Mecânica/);
+  });
+});

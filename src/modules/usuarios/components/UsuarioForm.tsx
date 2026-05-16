@@ -1,9 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { listarColaboradores } from '../../colaboradores/services/colaboradores.service';
+import type { Colaborador } from '../../colaboradores/types/colaborador.types';
+import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import { Select } from '../../../components/ui/Select';
+import type { AppModule, PermissionAction } from '../../auth/types/auth.types';
+import { executarIsoProLinkAuthUser } from '../services/isoProLinkAuthUser.service';
 import type { UsuarioFormData, UsuarioPerfil } from '../types/usuario.types';
+
+const MODULO_LABELS: Record<AppModule, string> = {
+  dashboard: 'Painel',
+  fornecedores: 'Fornecedores',
+  colaboradores: 'Colaboradores',
+  materiais: 'Materiais',
+  documentos: 'Documentos',
+  recebimentos: 'Recebimentos',
+  conferencia: 'Conferencia',
+  etiquetas: 'Etiquetas',
+  equipamentos: 'Equipamentos',
+  configuracoes: 'Configuracoes',
+  atendimento: 'Atendimento',
+  inventario: 'Inventario',
+  rir: 'RIR',
+  rnc: 'RNC',
+  relatorios: 'Relatorios',
+  mobile: 'Mobile',
+  usuarios: 'Usuarios',
+};
+
+function tituloModulo(modulo: AppModule): string {
+  return MODULO_LABELS[modulo] ?? modulo;
+}
+
+function tituloAcao(acao: PermissionAction): string {
+  if (acao === 'visualizar') return 'Visualizar';
+  if (acao === 'editar') return 'Editar';
+  return 'Administrar';
+}
 
 type Props = {
   initialValue: UsuarioFormData;
@@ -11,14 +48,59 @@ type Props = {
   canAdminister: boolean;
   onCancel: () => void;
   onSubmit: (data: UsuarioFormData) => Promise<{ success: boolean; error?: string | undefined }>;
+  /** Edicao de utilizador existente na nuvem: UI para ligar UUID do Supabase Auth. */
+  enableSupabaseAuthLink?: boolean;
+  remoteUsuarioId?: string | null;
+  onAuthLinkUpdated?: () => Promise<void>;
 };
 
-export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, onSubmit }: Props) {
+export function UsuarioForm({
+  initialValue,
+  profiles,
+  canAdminister,
+  onCancel,
+  onSubmit,
+  enableSupabaseAuthLink = false,
+  remoteUsuarioId = null,
+  onAuthLinkUpdated,
+}: Props) {
   const [form, setForm] = useState<UsuarioFormData>(initialValue);
+  const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [authLinkDraft, setAuthLinkDraft] = useState('');
+  const [authLinkBusy, setAuthLinkBusy] = useState(false);
+  const [authLinkError, setAuthLinkError] = useState('');
   const isInactive = !form.ativo;
   const hasAnyPermission = form.permissoes.some((item) => item.permitido);
+
+  const showAuthLinkPanel = Boolean(enableSupabaseAuthLink && remoteUsuarioId);
+
+  useEffect(() => {
+    void listarColaboradores({
+      busca: '',
+      tipo: 'todos',
+      status: 'todos',
+      page: 1,
+      pageSize: 10000,
+    }).then((res) => {
+      if (res.success && res.data) setColaboradores(res.data.items);
+    });
+  }, []);
+
+  const colaboradoresParaSelect = useMemo(() => {
+    const list = colaboradores.filter((c) => c.ativo || c.id === form.colaboradorId);
+    return [...list].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  }, [colaboradores, form.colaboradorId]);
+
+  const opcoesColaboradorSearch = useMemo(
+    () =>
+      colaboradoresParaSelect.map((c) => ({
+        value: c.id,
+        label: `${c.nome} — mat. ${c.matricula?.trim() || '—'} — ${c.funcao?.trim() || '—'}`,
+      })),
+    [colaboradoresParaSelect],
+  );
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -42,6 +124,19 @@ export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, o
     }));
   }
 
+  function handleColaboradorChange(colaboradorId: string) {
+    if (!colaboradorId) {
+      setForm((current) => ({ ...current, colaboradorId: null }));
+      return;
+    }
+    const col = colaboradores.find((c) => c.id === colaboradorId);
+    setForm((current) => ({
+      ...current,
+      colaboradorId,
+      nome: col ? col.nome.trim() : current.nome,
+    }));
+  }
+
   function toggleModulo(modulo: UsuarioFormData['permissoes'][number]['modulo']) {
     setForm((current) => ({
       ...current,
@@ -62,6 +157,26 @@ export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, o
         return { ...item, permitido: !item.permitido };
       }),
     }));
+  }
+
+  async function handleAuthLink(setUuid: string | null) {
+    if (!remoteUsuarioId) return;
+    setAuthLinkError('');
+    setAuthLinkBusy(true);
+    const cfg = readConfiguracoes();
+    const res = await executarIsoProLinkAuthUser({
+      usuarioId: remoteUsuarioId,
+      authUserId: setUuid,
+      secret: cfg.isoProLinkAuthSecret,
+      usuarioLogin: form.login,
+    });
+    setAuthLinkBusy(false);
+    if (!res.success) {
+      setAuthLinkError(res.error ?? 'Falha ao atualizar ligacao.');
+      return;
+    }
+    setAuthLinkDraft('');
+    await onAuthLinkUpdated?.();
   }
 
   function applyPermissionPreset(mode: 'all' | 'readOnly' | 'none') {
@@ -99,6 +214,19 @@ export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, o
           Nenhuma permissao liberada no momento. Se salvar assim, o usuario podera ficar sem acesso operacional ao sistema.
         </OperationalNotice>
       ) : null}
+      <OperationalNotice>
+        Vinculo opcional: pesquise o colaborador pelo nome, matricula, funcao ou iniciais (ex.: «js» para Joao Silva). Limpe o campo para
+        «Nenhum» — contas tecnicas, consultoria ou quando nao houver colaborador correspondente.
+      </OperationalNotice>
+      <div className="form-columns">
+        <SearchableSelect
+          label="Colaborador (opcional)"
+          onChange={handleColaboradorChange}
+          options={opcoesColaboradorSearch}
+          placeholder="Digite para filtrar — limpar o campo = sem vinculo"
+          value={form.colaboradorId ?? ''}
+        />
+      </div>
       <div className="form-columns">
         <Input
           label="Nome"
@@ -118,6 +246,55 @@ export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, o
           value={form.senha}
         />
       </div>
+
+      {showAuthLinkPanel ? (
+        <div className="section-block">
+          <h3 className="usuario-perm-heading">Supabase Auth (JWT / tenant)</h3>
+          <OperationalNotice tone="warning">
+            Liga este utilizador da base (<code>usuarios_sistema</code>) ao UUID criado em Authentication. O segredo da funcao fica em Configuracoes
+            &gt; Supabase; guarde-o apenas em postos de administracao confiaveis.
+          </OperationalNotice>
+          <p className="panel-copy">
+            <strong>Tenant activo:</strong> <code>{getActiveTenantId()}</code>
+          </p>
+          <p className="panel-copy">
+            <strong>Auth user id atual:</strong>{' '}
+            {form.authUserIdSupabase ? <code>{form.authUserIdSupabase}</code> : <span>(sem ligacao)</span>}
+          </p>
+          {canAdminister ? (
+            <>
+              <div className="form-columns">
+                <Input
+                  label="UUID Supabase Auth (colar)"
+                  onChange={(event) => setAuthLinkDraft(event.target.value)}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  value={authLinkDraft}
+                />
+              </div>
+              {authLinkError ? <div className="error-box">{authLinkError}</div> : null}
+              <div className="inline-actions">
+                <Button
+                  disabled={authLinkBusy || !authLinkDraft.trim()}
+                  onClick={() => void handleAuthLink(authLinkDraft.trim())}
+                  type="button"
+                >
+                  {authLinkBusy ? 'A ligar...' : 'Ligar'}
+                </Button>
+                <Button
+                  disabled={authLinkBusy || !form.authUserIdSupabase}
+                  onClick={() => void handleAuthLink(null)}
+                  type="button"
+                  variant="ghost"
+                >
+                  Remover ligacao
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="panel-copy">Apenas perfis com permissao de administrar utilizadores podem alterar esta ligacao.</p>
+          )}
+        </div>
+      ) : null}
 
       <div className="form-columns">
         <Select
@@ -143,13 +320,18 @@ export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, o
         </Select>
       </div>
 
-      <div className="section-block">
-        <div>
-          <strong>Modulos liberados</strong>
-          <p className="panel-copy">Defina por modulo se o usuario pode visualizar, editar ou administrar.</p>
+      <section className="section-block usuario-perm-section" aria-labelledby="usuario-perm-heading">
+        <div className="usuario-perm-intro">
+          <h3 className="usuario-perm-heading" id="usuario-perm-heading">
+            Modulos liberados
+          </h3>
+          <p className="panel-copy">
+            Defina por modulo se o usuario pode <strong>visualizar</strong>, <strong>editar</strong> ou{' '}
+            <strong>administrar</strong>. Toque em cada permissao para ligar ou desligar.
+          </p>
         </div>
         {canAdminister ? (
-          <div className="inline-actions">
+          <div className="usuario-perm-presets" role="group" aria-label="Atalhos de permissoes">
             <Button onClick={() => applyPermissionPreset('all')} variant="ghost">
               Liberar tudo
             </Button>
@@ -161,41 +343,57 @@ export function UsuarioForm({ initialValue, profiles, canAdminister, onCancel, o
             </Button>
           </div>
         ) : null}
-        <div className="cards-grid">
-          {modulosAgrupados.map(({ modulo, permissoes }) => (
-            <article
-              className={`metric-card${permissoes.some((item) => item.permitido) ? ' active-permission-card' : ''}`}
-              key={modulo}
-            >
-              <span className="metric-label">{modulo}</span>
-              <strong>{permissoes.find((item) => item.acao === 'visualizar')?.permitido ? 'Liberado' : 'Bloqueado'}</strong>
-              <div className="inline-actions">
-                <Button onClick={() => toggleModulo(modulo)} variant="ghost">
+        <div className="usuario-perm-grid">
+          {modulosAgrupados.map(({ modulo, permissoes }) => {
+            const moduloAtivo = permissoes.some((item) => item.permitido);
+            const visivel = permissoes.find((item) => item.acao === 'visualizar')?.permitido;
+            return (
+              <article
+                className={`usuario-perm-card${moduloAtivo ? ' usuario-perm-card--ativo' : ''}`}
+                key={modulo}
+              >
+                <div className="usuario-perm-card__head">
+                  <span className="usuario-perm-card__modulo">{tituloModulo(modulo)}</span>
+                  <span className={`usuario-perm-status${visivel ? ' usuario-perm-status--on' : ' usuario-perm-status--off'}`}>
+                    {visivel ? 'Liberado' : 'Bloqueado'}
+                  </span>
+                </div>
+                <Button
+                  className="usuario-perm-toggle-modulo"
+                  disabled={!canAdminister}
+                  onClick={() => toggleModulo(modulo)}
+                  type="button"
+                  variant="ghost"
+                >
                   Alternar modulo
                 </Button>
-              </div>
-              <div className="table-actions">
-                {permissoes.map((permissao) => (
-                  <button
-                    className={`status-badge ${permissao.permitido ? 'status-ok' : 'status-neutral'}`}
-                    disabled={!canAdminister}
-                    key={`${permissao.modulo}-${permissao.acao}`}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      togglePermissao(permissao.modulo, permissao.acao);
-                    }}
-                    type="button"
-                  >
-                    {permissao.acao}
-                  </button>
-                ))}
-              </div>
-            </article>
-          ))}
+                <div className="usuario-perm-chips" role="group" aria-label={`Permissoes: ${tituloModulo(modulo)}`}>
+                  {permissoes.map((permissao) => (
+                    <button
+                      className={`usuario-perm-chip${permissao.permitido ? ' usuario-perm-chip--on' : ' usuario-perm-chip--off'}`}
+                      disabled={!canAdminister}
+                      key={`${permissao.modulo}-${permissao.acao}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        togglePermissao(permissao.modulo, permissao.acao);
+                      }}
+                      type="button"
+                    >
+                      {tituloAcao(permissao.acao)}
+                    </button>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
         </div>
-        {!canAdminister ? <p className="panel-copy">Somente perfis com permissao de administrar podem alterar as acoes finas deste modulo.</p> : null}
-      </div>
+        {!canAdminister ? (
+          <p className="panel-copy usuario-perm-footnote">
+            Somente perfis com permissao de administrar podem alterar as acoes finas deste modulo.
+          </p>
+        ) : null}
+      </section>
 
       {error ? <div className="error-box">{error}</div> : null}
 

@@ -1,6 +1,7 @@
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -11,6 +12,7 @@ import { useInventarios } from '../hooks/useInventarios';
 
 export function InventarioPage() {
   const { canAccessAction } = useAuth();
+  const canExportCsv = canAccessAction('inventario', 'visualizar');
   const cloudStatus = getSupabaseOperationalStatus();
   const {
     items,
@@ -31,6 +33,7 @@ export function InventarioPage() {
     load,
     submitInventario,
     handleFechar,
+    exportarInventarioCsv,
   } = useInventarios();
   const canEdit = canAccessAction('inventario', 'editar');
   const canAdminister = canAccessAction('inventario', 'administrar');
@@ -54,9 +57,12 @@ export function InventarioPage() {
         ) : null}
       </div>
 
-      <p className="panel-copy">
-        Base operacional para inventarios rotativos e gerais, com contagem, saldo do sistema e fechamento do ciclo.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Base operacional para inventarios rotativos e gerais, com contagem, saldo do sistema e fechamento do ciclo. Marque «Permitir contagem pelo app
+          mobile» para que inventarios abertos aparecam no I.S.O PRO Mobile.
+        </p>
+      </ModuleHelp>
 
       <OperationalNotice>
         {cloudStatus === 'ready' && hasCloudConfig
@@ -79,9 +85,11 @@ export function InventarioPage() {
           <InventariosTable
             canAdminister={canAdminister}
             canEdit={canEdit}
+            canExportCsv={canExportCsv}
             items={items}
             onClose={handleFechar}
             onEdit={openEditModal}
+            onExportCsv={(row) => void exportarInventarioCsv(row)}
           />
           <Pagination
             onPageChange={(page) => setFilters({ ...filters, page })}
@@ -96,7 +104,7 @@ export function InventarioPage() {
         <OperationalNotice>Seu perfil pode visualizar inventarios, mas nao pode editar ou fechar ciclos.</OperationalNotice>
       ) : null}
 
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar inventario' : 'Novo inventario'}>
+      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar inventario' : 'Novo inventario'} wide>
         <InventarioForm
           key={selected?.id ?? 'new-inv'}
           initialValue={formInitialValue}

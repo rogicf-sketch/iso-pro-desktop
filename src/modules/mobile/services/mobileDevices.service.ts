@@ -1,7 +1,13 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
+import { isBusinessLocalWriteBlocked } from '../../../lib/writePolicy';
+import { parseMobileDevicesLocal } from '../schemas/mobileDevicesLocal.zod';
 import type { MobileDevice, MobileDeviceFilter, MobileDeviceStatus } from '../types/mobileDevice.types';
 
-const STORAGE_KEY = 'iso-pro-desktop-mobile-devices';
+function mobileDevicesStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-mobile-devices');
+}
 
 const seedDevices: MobileDevice[] = [
   {
@@ -76,23 +82,32 @@ type RemoteDeviceRow = {
   created_at?: string | null;
 };
 
-function readDevices() {
-  const raw = localStorage.getItem(STORAGE_KEY);
+function readDevices(): MobileDevice[] {
+  const raw = localStorage.getItem(mobileDevicesStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedDevices));
+    localStorage.setItem(mobileDevicesStorageKey(), JSON.stringify(seedDevices));
     return [...seedDevices];
   }
 
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as MobileDevice[];
+    parsed = JSON.parse(raw);
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedDevices));
+    localStorage.setItem(mobileDevicesStorageKey(), JSON.stringify(seedDevices));
     return [...seedDevices];
   }
+
+  const rows = parseMobileDevicesLocal(parsed);
+  if (rows === null) {
+    localStorage.setItem(mobileDevicesStorageKey(), JSON.stringify(seedDevices));
+    return [...seedDevices];
+  }
+
+  return rows;
 }
 
 function writeDevices(items: MobileDevice[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(mobileDevicesStorageKey(), JSON.stringify(items));
 }
 
 function sortDevices(items: MobileDevice[]) {
@@ -189,6 +204,7 @@ async function listRemoteDevices(): Promise<MobileDevice[]> {
   const { data, error } = await supabase
     .from('dispositivos_mobile')
     .select('id,device_id,nome_aparelho,usuario_login,usuario_nome,plataforma,modelo,versao_app,autorizado,bloqueado,ultimo_acesso_em,created_at')
+    .eq('tenant_id', getActiveTenantId())
     .order('ultimo_acesso_em', { ascending: false, nullsFirst: false });
 
   if (error) {
@@ -210,7 +226,8 @@ async function updateRemoteDeviceById(id: string, payload: { autorizado?: boolea
       ...payload,
       ultimo_acesso_em: new Date().toISOString(),
     })
-    .eq('id', id);
+    .eq('id', id)
+    .eq('tenant_id', getActiveTenantId());
 
   if (error) {
     throw new Error(error.message);
@@ -223,7 +240,11 @@ async function deleteRemoteDeviceById(id: string) {
     throw new Error('Supabase nao configurado.');
   }
 
-  const { error } = await supabase.from('dispositivos_mobile').delete().eq('id', id);
+  const { error } = await supabase
+    .from('dispositivos_mobile')
+    .delete()
+    .eq('id', id)
+    .eq('tenant_id', getActiveTenantId());
 
   if (error) {
     throw new Error(error.message);
@@ -290,6 +311,10 @@ async function updateDeviceStatus(id: string, status: MobileDeviceStatus) {
     // fallback local logo abaixo
   }
 
+  if (isBusinessLocalWriteBlocked()) {
+    return;
+  }
+
   const items = readDevices();
   const target = items.find((item) => item.id === id);
   if (target) {
@@ -319,6 +344,10 @@ export async function revokeMobileDevice(id: string) {
     // fallback local logo abaixo
   }
 
+  if (isBusinessLocalWriteBlocked()) {
+    return;
+  }
+
   const items = readDevices().filter((item) => item.id !== id);
   writeDevices(items);
 }
@@ -333,7 +362,10 @@ export async function testSupabaseDispositivosMobile(): Promise<{ ok: boolean; m
     };
   }
 
-  const { error, count } = await supabase.from('dispositivos_mobile').select('id', { count: 'exact', head: true });
+  const { error, count } = await supabase
+    .from('dispositivos_mobile')
+    .select('id', { count: 'exact', head: true })
+    .eq('tenant_id', getActiveTenantId());
 
   if (error) {
     return { ok: false, message: error.message };

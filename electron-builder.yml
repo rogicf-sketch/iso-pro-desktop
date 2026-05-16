@@ -1,5 +1,8 @@
 # https://www.electron.build/configuration/configuration
 #
+# EULA no instalador NSIS: texto mostrado antes da instalação (obrigatório aceitar).
+# Substitua legal/EULA.txt pelo documento final aprovado pelo advogado antes de distribuir.
+#
 # Assinatura Windows (SmartScreen / Authenticode), opcional:
 #   Definir antes de `npm run dist:win:signed` ou no CI:
 #   - CSC_LINK ou WIN_CSC_LINK — caminho para .pfx (ou URL, ver documentação)
@@ -9,9 +12,12 @@
 #   Com certificado, podes usar dist:win:signed (signAndEditExecutable: true). Em PCs sem symlinks
 #   / Developer Mode, builds não assinados usam dist:win (signAndEditExecutable: false).
 #
+# NSIS (makensis) costuma falhar com caminhos do projeto fora de ASCII (ex.: "GESTÃO").
+# Para gerar só o .exe portátil (ícone igual, sem wizard): `npm run dist:win:portable`
+# Para Setup completo: pasta do projeto só ASCII ou `subst I: "<pasta>"` e build em I:\
 appId: com.isopro.desktop
 productName: I.S.O PRO
-copyright: Copyright © I.S.O PRO
+copyright: Copyright © 2026 I.S.O PRO Gestão de Materiais
 
 directories:
   output: release
@@ -23,19 +29,33 @@ files:
 
 asar: true
 
+# Ícone em runtime para BrowserWindow (fora do asar — ver `electron/main/window.ts`).
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+
 win:
   # Evita download/extração do winCodeSign quando não há assinatura (útil em Windows sem symlinks / Developer Mode).
   signAndEditExecutable: false
+  # Nome do .exe só ASCII — evita problemas de ícone / atalho com "I.S.O PRO.exe" e alinha com o AppUserModelID.
+  executableName: iso-pro-desktop
   target:
     - nsis
     - portable
+  # Ícone do .exe / atalho: gerado por `npm run build:icon` (png2icons, modo executável Windows).
   icon: build/icon.ico
 
 nsis:
+  license: legal/EULA.txt
+  include: scripts/nsis/installer.nsh
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  # Ícone da janela do instalador; cabeçalho do assistente = BMP 150×57 (installerHeader), não ico quadrado.
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeader: build/installerHeader.bmp
 
 portable:
   artifactName: '${productName}-${version}-portable.exe'

@@ -6,7 +6,14 @@ import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { ConfiguracaoSistema } from '../../configuracoes/types/configuracao.types';
 import type { RncFormData, RirFormData } from '../types/qualidade.types';
 import { defaultRncEvidencias, defaultRncPlanoLinhas, defaultRncTiposOcorrencia } from '../types/qualidade.types';
-import { excluirRir, normalizeRirRegistro, salvarRnc, salvarRir } from './qualidade.service';
+import {
+  excluirRir,
+  normalizeRirRegistro,
+  rirNaoCanceladosPorRecebimentoId,
+  salvarRnc,
+  salvarRir,
+  sugerirCodigoRirParaRecebimento,
+} from './qualidade.service';
 
 const RIR_STORAGE_KEY = 'iso-pro-desktop-rir';
 const RNC_STORAGE_KEY = 'iso-pro-desktop-rnc';
@@ -17,6 +24,7 @@ const configBase: ConfiguracaoSistema = {
   contrato: '',
   local: '',
   tema: 'padrao',
+  mostrarAjudaModulos: true,
   sequenciaAtendimento: 0,
   rirModoNumeracao: 'auto',
   rirProcedimentosCadastro: [],
@@ -25,6 +33,8 @@ const configBase: ConfiguracaoSistema = {
   materiaisNuvem: false,
   supabaseUrl: '',
   supabaseAnonKey: '',
+  isoProLinkAuthSecret: '',
+  isoProAdminUserSecret: '',
   desktopVinculoAtivo: false,
   desktopInstalacaoAutorizadaId: '',
   desktopInstalacaoAutorizadaNome: '',
@@ -33,6 +43,8 @@ const configBase: ConfiguracaoSistema = {
   desktopLicencaEmitidaPara: '',
   desktopLicencaExpiraEm: '',
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+  documentoRodapeNome: '',
+  documentoRodapeCnpj: '',
 };
 
 const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
@@ -393,6 +405,92 @@ describe('qualidade.service / salvarRir criacao (Supabase)', () => {
     expect(result.data?.codigo).toMatch(/^RIR-2026-/);
     const local = JSON.parse(store[RIR_STORAGE_KEY] ?? '[]') as { descricao: string }[];
     expect(local.some((r) => r.descricao === 'RIR novo auto')).toBe(true);
+  });
+});
+
+describe('qualidade.service / sugerirCodigoRirParaRecebimento', () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store = {};
+    vi.stubGlobal(
+      'localStorage',
+      {
+        getItem: (key: string) => (key in store ? store[key] : null),
+        setItem: (key: string, value: string) => {
+          store[key] = value;
+        },
+        removeItem: (key: string) => {
+          delete store[key];
+        },
+        clear: () => {
+          store = {};
+        },
+        key: () => null,
+        length: 0,
+      } as Storage,
+    );
+    vi.mocked(hasSupabaseConfig).mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.mocked(hasSupabaseConfig).mockReturnValue(true);
+  });
+
+  it('prioriza tratado sobre aberto no mesmo recebimento', async () => {
+    const recId = 'rec-xyz';
+    const aberto = normalizeRirRegistro({
+      id: '1',
+      ...rirForm({ codigo: 'RIR-ABERTO', recebimentoId: recId }),
+      status: 'aberto',
+      dataRegistro: '2026-01-02T10:00:00.000Z',
+    });
+    const tratado = normalizeRirRegistro({
+      id: '2',
+      ...rirForm({ codigo: 'RIR-TRATADO', recebimentoId: recId }),
+      status: 'tratado',
+      dataRegistro: '2026-01-01T10:00:00.000Z',
+    });
+    store[RIR_STORAGE_KEY] = JSON.stringify([aberto, tratado]);
+    const r = await sugerirCodigoRirParaRecebimento(recId);
+    expect(r.success).toBe(true);
+    expect(r.data).toBe('RIR-TRATADO');
+  });
+
+  it('devolve vazio quando so ha cancelado para o recebimento', async () => {
+    const recId = 'rec-only-cancel';
+    const cancel = normalizeRirRegistro({
+      id: 'c1',
+      ...rirForm({ codigo: 'RIR-X', recebimentoId: recId }),
+      status: 'cancelado',
+      dataRegistro: '2026-01-01T10:00:00.000Z',
+    });
+    store[RIR_STORAGE_KEY] = JSON.stringify([cancel]);
+    const r = await sugerirCodigoRirParaRecebimento(recId);
+    expect(r.success).toBe(true);
+    expect(r.data).toBe('');
+  });
+});
+
+describe('rirNaoCanceladosPorRecebimentoId', () => {
+  it('ignora cancelados e agrupa por recebimentoId', () => {
+    const recId = 'rec-agrupar';
+    const rows = [
+      normalizeRirRegistro({
+        id: 'a',
+        ...rirForm({ codigo: 'RIR-ATIVO', recebimentoId: recId }),
+        status: 'aberto',
+      }),
+      normalizeRirRegistro({
+        id: 'b',
+        ...rirForm({ codigo: 'RIR-CANC', recebimentoId: recId }),
+        status: 'cancelado',
+      }),
+    ];
+    const map = rirNaoCanceladosPorRecebimentoId(rows);
+    expect(map.get(recId)?.length).toBe(1);
+    expect(map.get(recId)?.[0].codigo).toBe('RIR-ATIVO');
   });
 });
 

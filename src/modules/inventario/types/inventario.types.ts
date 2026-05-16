@@ -14,6 +14,8 @@ export type Inventario = {
   responsavel: string;
   dataInventario: string;
   status: 'aberto' | 'fechado' | 'cancelado';
+  /** Quando true, o inventário aberto pode aparecer no app mobile para contagem (criado no PC). */
+  contagemMobileHabilitada: boolean;
   observacoes: string;
   itens: InventarioItem[];
 };

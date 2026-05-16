@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  AUTH_SESSION_STORAGE_KEY,
-  AUTH_USERS_STORAGE_KEY,
+  getAuthSessionStorageKey,
+  getAuthUsersStorageKey,
   canAccessAction as checkActionAccess,
   canAccessModule as checkModuleAccess,
   ensureDevLocalAdminSession,
@@ -10,12 +10,17 @@ import {
   logout as doLogout,
   validateCurrentSession,
 } from '../modules/auth/services/auth.service';
+import { aplicarTemaEfetivoNaSessao } from '../modules/configuracoes/services/configuracoes.service';
 import type { AuthUser } from '../modules/auth/types/auth.types';
 import { AuthContext, type AuthContextValue } from './authContext';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => ensureDevLocalAdminSession() ?? getCurrentUser());
   const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    aplicarTemaEfetivoNaSessao();
+  }, [user]);
 
   useEffect(() => {
     const SESSION_REFRESH_INTERVAL_MS = 60000;
@@ -53,13 +58,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     function handleStorage(event: StorageEvent) {
-      if (event.key === AUTH_SESSION_STORAGE_KEY) {
+      if (event.key === getAuthSessionStorageKey()) {
         setUser(getCurrentUser());
         setIsLoading(false);
         return;
       }
 
-      if (event.key === AUTH_USERS_STORAGE_KEY) {
+      if (event.key === getAuthUsersStorageKey()) {
         void refreshSession();
       }
     }

@@ -1,6 +1,7 @@
 import { Button } from '../../../components/ui/Button';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Input } from '../../../components/ui/Input';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -57,9 +58,11 @@ export function DesktopLicensesPage() {
         </div>
       </div>
 
-      <p className="panel-copy">
-        Painel central para acompanhar licencas emitidas, status remoto, maquina vinculada e acoes administrativas de revogacao ou reativacao.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Painel central para acompanhar licencas emitidas, status remoto, maquina vinculada e acoes administrativas de revogacao ou reativacao.
+        </p>
+      </ModuleHelp>
 
       <OperationalNotice>{`Fonte atual: ${syncSource === 'supabase' ? 'Supabase' : 'fallback local'}.${syncWarning ? ` Aviso: ${syncWarning}` : ''}`}</OperationalNotice>
       {canAdminister ? (

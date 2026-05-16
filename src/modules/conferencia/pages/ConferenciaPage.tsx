@@ -1,4 +1,5 @@
 import { Pagination } from '../../../components/tables/Pagination';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
@@ -43,7 +44,9 @@ export function ConferenciaPage() {
           </div>
         </div>
 
-        <p className="panel-copy">Fluxo de validacao dos recebimentos que entram primeiro como aguardando conferencia antes de liberar estoque.</p>
+        <ModuleHelp>
+          <p className="panel-copy">Fluxo de validacao dos recebimentos que entram primeiro como aguardando conferencia antes de liberar estoque.</p>
+        </ModuleHelp>
 
         <OperationalNotice>
           {cloudStatus === 'ready' && hasCloudConfig

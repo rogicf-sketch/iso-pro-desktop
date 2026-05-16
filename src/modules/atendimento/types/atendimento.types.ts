@@ -8,6 +8,8 @@ export type AtendimentoItem = {
   descricaoMaterial: string;
   unidade: string;
   quantidadeAtendida: number;
+  /** Numero do desenho / documento de planejamento desta linha (historico mobile ou exibicao no recibo). */
+  documentoNumero?: string;
 };
 
 export type Atendimento = {
@@ -16,9 +18,15 @@ export type Atendimento = {
   documentoId: string;
   documentoNumero: string;
   atendente: string;
+  /** Preenchidos quando o atendente coincide com colaborador cadastrado (recibo / histórico). */
+  atendenteMatricula?: string;
+  atendenteFuncao?: string;
   recebedorTipo: AtendimentoRecebedorTipo;
   recebedorColaboradorId: string | null;
   recebedor: string;
+  /** Preenchidos a partir do cadastro de colaboradores (interno ou retirante externo). */
+  recebedorMatricula?: string;
+  recebedorFuncao?: string;
   recebedorEmpresa: string;
   recebedorDocumento: string;
   recebedorTelefone: string;

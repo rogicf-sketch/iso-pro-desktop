@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
   atualizarStatusEtiqueta,
@@ -38,12 +41,14 @@ const emptyForm: EtiquetaFormData = {
   observacoes: '',
 };
 
+function etiquetasListaQueryKey(filters: EtiquetaFiltro, userLogin: string | undefined) {
+  return ['etiquetas', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useEtiquetas() {
+  const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const [filters, setFilters] = useState<EtiquetaFiltro>(initialFilters);
-  const [items, setItems] = useState<EtiquetaListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -56,28 +61,35 @@ export function useEtiquetas() {
     setSelectedIds(new Set());
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: etiquetasListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarEtiquetas(filtersForLista);
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar etiquetas.');
+      }
+      return { items: result.data.items, total: result.data.total };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar etiquetas.'
+        : '';
+
+  const invalidateEtiquetasLista = useCallback(async () => {
     setError('');
     setSuccess('');
-    const result = await listarEtiquetas(filters);
-    if (!result.success || !result.data) {
-      setItems([]);
-      setTotal(0);
-      setError(result.error ?? 'Nao foi possivel carregar etiquetas.');
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-    }
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['etiquetas'] });
+  }, [queryClient]);
 
   const formInitialValue = useMemo<EtiquetaFormData>(
     () =>
@@ -113,10 +125,10 @@ export function useEtiquetas() {
     if (validationError) return { success: false, error: validationError };
     const result = await salvarEtiqueta(data, selected?.id);
     if (result.success) {
-      setSuccess('Etiqueta salva com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateEtiquetasLista();
+      setSuccess('Etiqueta salva com sucesso.');
     }
     return result;
   }
@@ -145,10 +157,10 @@ export function useEtiquetas() {
 
   async function selecionarTodosFiltrados() {
     const ids = await listarIdsEtiquetasFiltradas({
-      busca: filters.busca,
-      modelo: filters.modelo,
-      formato: filters.formato,
-      status: filters.status,
+      busca: filtersForLista.busca,
+      modelo: filtersForLista.modelo,
+      formato: filtersForLista.formato,
+      status: filtersForLista.status,
     });
     setSelectedIds(new Set(ids));
   }
@@ -181,8 +193,8 @@ export function useEtiquetas() {
       setError(result.error ?? 'Nao foi possivel atualizar o status da etiqueta.');
       return;
     }
+    await invalidateEtiquetasLista();
     setSuccess('Status da etiqueta atualizado com sucesso.');
-    await load();
   }
 
   async function handleStatusEmLote(status: Etiqueta['status']) {
@@ -211,7 +223,7 @@ export function useEtiquetas() {
       const result = await atualizarStatusEtiqueta(e.id, status);
       if (!result.success) {
         setError(result.error ?? 'Falha ao atualizar etiqueta em lote.');
-        await load();
+        await invalidateEtiquetasLista();
         return;
       }
     }
@@ -221,14 +233,14 @@ export function useEtiquetas() {
         : `${elegiveis.length} etiqueta(s) cancelada(s).`,
     );
     setSelectedIds(new Set());
-    await load();
+    await invalidateEtiquetasLista();
   }
 
   return {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     filters,
     formInitialValue,

@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -21,6 +23,7 @@ function encurtarCodigoParaLista(codigo: string) {
 
 export function MateriaisPage() {
   const { canAccessAction } = useAuth();
+  const navigate = useNavigate();
   const cloudStatus = getSupabaseOperationalStatus();
   const {
     items,
@@ -75,6 +78,11 @@ export function MateriaisPage() {
     deleteUsoAnaliseOk,
     deleteExclusaoError,
     load,
+    syncLocalModalOpen,
+    syncLocalModalMessage,
+    syncLocalBusy,
+    closeSyncLocalModal,
+    onSyncLocalFromCloud,
   } = useMateriais();
   const canEdit = canAccessAction('materiais', 'editar');
   const canAdminister = canAccessAction('materiais', 'administrar');
@@ -110,8 +118,8 @@ export function MateriaisPage() {
     <div className="panel">
       <div className="panel-header panel-header--toolbar">
         <div>
-          <p className="panel-kicker">Modulo</p>
-          <h2>Materiais</h2>
+          <p className="panel-kicker">Módulo</p>
+          <h2>Cadastro de Materiais</h2>
         </div>
         {canEdit ? (
           <div className="panel-toolbar">
@@ -158,30 +166,77 @@ export function MateriaisPage() {
         ) : null}
       </div>
 
-      <p className="panel-copy">
-        Cadastro de materiais preparado para operar localmente ou em nuvem, mantendo filtros, listagem paginada e edicao no mesmo padrao robusto. Use os botoes{' '}
-        <strong>Disciplinas</strong> e <strong>Unidades</strong> para gerir as listas dos campos homonimos no formulario (equivalente ao I.S.O PRO antigo).
-        Use <strong>Baixar modelo CSV</strong> para o cabecalho e linhas de exemplo. Importe planilhas CSV (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Exporte a lista, edite e reimporte: codigo existente e atualizado, novo e incluido; linhas com o mesmo codigo no mesmo arquivo sao ignoradas apos a primeira. Na inclusao ou importacao, se a coluna <code>codigo_barras</code> estiver vazia, o sistema gera um EAN-13 interno automaticamente (prefixo 7899999 + sequencia). Cadastros antigos sem codigo recebem um ao abrir a lista (persistido no armazenamento local ou no Supabase, se a coluna existir).
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Cadastro de materiais preparado para operar localmente ou em nuvem, mantendo filtros, listagem paginada e edicao no mesmo padrao robusto. Use os botoes{' '}
+          <strong>Disciplinas</strong> e <strong>Unidades</strong> para gerir as listas dos campos homonimos no formulario (equivalente ao I.S.O PRO antigo).
+          Use <strong>Baixar modelo CSV</strong> para o cabecalho e linhas de exemplo. Importe planilhas CSV (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Exporte a lista, edite e reimporte: codigo existente e atualizado, novo e incluido; linhas com o mesmo codigo no mesmo arquivo sao ignoradas apos a primeira. Na inclusao ou importacao, se a coluna <code>codigo_barras</code> estiver vazia, o sistema gera um EAN-13 interno automaticamente (prefixo 7899999 + sequencia). Cadastros antigos sem codigo recebem um ao abrir a lista (persistido no armazenamento local ou no Supabase, se a coluna existir).
+        </p>
+      </ModuleHelp>
 
       <OperationalNotice>
-        {cloudMaterialsEnabled
-          ? 'Fonte atual: Supabase. Materiais em nuvem ativos.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : hasCloudConfig
-            ? 'Fonte atual: fallback local. A integracao com Supabase existe, mas materiais em nuvem estao desativados.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
+        {cloudMaterialsEnabled ? (
+          'Fonte dos dados: Supabase (cadastro na nuvem ativo).'
+        ) : cloudStatus === 'partial' ? (
+          'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+        ) : hasCloudConfig ? (
+          <>
+            Fonte atual: <strong>cadastro local neste navegador</strong>. A integracao com Supabase esta activa para
+            planejamento e recebimentos, mas <strong>materiais em nuvem</strong> estao <strong>desactivados</strong> — por
+            isso a lista vem do armazenamento local (em primeiro acesso costuma mostrar 3 itens de exemplo). Para usar o
+            cadastro completo na nuvem, abra <strong>Configuracoes</strong>, active <strong>Materiais em nuvem</strong> e
+            guarde.
+          </>
+        ) : (
+          'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        )}
       </OperationalNotice>
+
+      {hasCloudConfig && !cloudMaterialsEnabled && canAccessAction('configuracoes', 'visualizar') ? (
+        <OperationalNotice tone="warning">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+            <span style={{ flex: '1 1 280px' }}>
+              Para o cadastro <strong>não depender só deste navegador</strong> (limpar dados do site apaga a lista local),
+              active <strong>Materiais em nuvem</strong> em Configurações e guarde. Quem administrar o sistema precisa de
+              permissão para alterar essa opção.
+            </span>
+            <Button type="button" variant="primary" onClick={() => navigate('/configuracoes')}>
+              Abrir Configurações
+            </Button>
+          </div>
+        </OperationalNotice>
+      ) : null}
+
+      {cloudMaterialsEnabled && canEdit ? (
+        <div className="editor-block" style={{ marginBottom: 12 }}>
+          <ModuleHelp>
+            <p className="panel-copy" style={{ marginBottom: 8 }}>
+              Opcional: guardar neste navegador uma copia do cadastro que esta na nuvem (inclui saldos do movimento no
+              snapshot). Serve para alinhar o armazenamento local <code>iso-pro-desktop-materiais</code> quando algum fluxo
+              ainda ler dados gravados neste PC.
+            </p>
+          </ModuleHelp>
+          <Button
+            disabled={syncLocalBusy || loading}
+            onClick={() => void onSyncLocalFromCloud(false)}
+            type="button"
+            variant="ghost"
+          >
+            {syncLocalBusy ? 'A gravar copia local...' : 'Gravar copia local a partir da nuvem'}
+          </Button>
+        </div>
+      ) : null}
 
       <MaterialFilters disciplinas={disciplinas} filters={filters} onChange={setFilters} />
 
       {canAdminister ? (
         <div className="editor-block" style={{ marginBottom: 16 }}>
-          <p className="panel-copy" style={{ marginBottom: 8 }}>
-            <strong>Administracao:</strong> selecione linhas para exclusao definitiva da base (nao apenas inativar). A acao e
-            irreversivel e exige confirmar a sua senha.
-          </p>
+          <ModuleHelp>
+            <p className="panel-copy" style={{ marginBottom: 8 }}>
+              <strong>Administracao:</strong> selecione linhas para exclusao definitiva da base (nao apenas inativar). A acao e
+              irreversivel e exige confirmar a sua senha.
+            </p>
+          </ModuleHelp>
           <div className="form-actions" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ marginRight: 8, fontSize: '0.9rem' }}>
               {selectedMaterialIds.length} selecionado(s)
@@ -244,7 +299,7 @@ export function MateriaisPage() {
         <OperationalNotice>Seu perfil pode visualizar materiais, mas nao pode alterar cadastro.</OperationalNotice>
       ) : null}
 
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar material' : 'Novo material'}>
+      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar material' : 'Novo material'} wide>
         <MaterialForm
           key={selected?.id ?? 'new'}
           disciplinas={disciplinas}
@@ -262,12 +317,51 @@ export function MateriaisPage() {
         tipo={dominioModal ?? 'disciplinas'}
       />
 
+      <Modal onClose={closeSyncLocalModal} open={syncLocalModalOpen} title="Copia local nao gravada" wide>
+        <div className="editor-block">
+          <p className="panel-copy" style={{ marginBottom: 10 }}>
+            Motivo:
+          </p>
+          <p style={{ whiteSpace: 'pre-line' }}>{syncLocalModalMessage}</p>
+          <ModuleHelp>
+            <p className="panel-copy" style={{ marginTop: 14 }}>
+              Se ja fez backup (por exemplo exportou CSV) e aceita que linhas extra neste navegador deixem de existir, um
+              administrador de Materiais pode confirmar a substituicao abaixo.
+            </p>
+          </ModuleHelp>
+          <div className="form-actions" style={{ marginTop: 16 }}>
+            <Button disabled={syncLocalBusy} onClick={closeSyncLocalModal} type="button" variant="ghost">
+              Fechar
+            </Button>
+            {canAdminister ? (
+              <Button
+                disabled={syncLocalBusy}
+                onClick={() => void onSyncLocalFromCloud(true)}
+                type="button"
+                variant="danger"
+              >
+                {syncLocalBusy ? 'A gravar...' : 'Substituir copia local e apagar linhas a mais neste PC'}
+              </Button>
+            ) : null}
+          </div>
+          {!canAdminister ? (
+            <ModuleHelp>
+              <p className="panel-copy" style={{ marginTop: 12 }}>
+                O seu perfil nao inclui administracao de Materiais. Se for preciso forcar esta gravacao, peca a um
+                administrador.
+              </p>
+            </ModuleHelp>
+          ) : null}
+        </div>
+      </Modal>
+
       <Modal
         onClose={() => {
           if (!importingMateriais) cancelImportMateriaisStaging();
         }}
         open={Boolean(importStaging) && canEdit}
         title="Confirmar importacao"
+        wide
       >
         {importStaging ? (
           <div className="editor-block">
@@ -294,6 +388,7 @@ export function MateriaisPage() {
         onClose={closeDeleteDefinitivoModal}
         open={deleteDefinitivoOpen && canAdminister}
         title="Confirmar exclusao definitiva"
+        wide
       >
         <div className="editor-block">
           <p>
@@ -443,7 +538,7 @@ export function MateriaisPage() {
         </div>
       </Modal>
 
-      <Modal onClose={closeImportMateriaisResultado} open={Boolean(importResultado)} title="Importacao concluida">
+      <Modal onClose={closeImportMateriaisResultado} open={Boolean(importResultado)} title="Importacao concluida" wide>
         {importResultado ? (
           <div className="editor-block">
             <p>

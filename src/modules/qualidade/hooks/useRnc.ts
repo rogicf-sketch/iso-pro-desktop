@@ -1,5 +1,8 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
@@ -58,46 +61,59 @@ const emptyForm: RncFormData = {
   senhaPreferencial: '',
 };
 
+function rncListaQueryKey(filters: RncFiltro, userLogin: string | undefined) {
+  return ['rnc', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useRnc() {
-  const { canAccessAction } = useAuth();
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const senhaConfigurada = Boolean(readConfiguracoes().rncPrefSenha);
   const [filters, setFilters] = useState<RncFiltro>(initialFilters);
-  const [items, setItems] = useState<RncRegistro[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fallbackReason, setFallbackReason] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<RncRegistro | null>(null);
+  /** Incrementa ao abrir a modal — forca remount do formulario com `key` quando o registo muda. */
+  const [rncFormInstance, setRncFormInstance] = useState(0);
   const [recebimentoChoices, setRecebimentoChoices] = useState<Array<{ id: string; label: string; notaFiscal: string }>>([]);
   const [recebimentosChoicesLoading, setRecebimentosChoicesLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: rncListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarRnc(filtersForLista);
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar RNC.');
+      }
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar RNC.'
+        : '';
+
+  const invalidateRncLista = useCallback(async () => {
     setError('');
     setSuccess('');
-    const result = await listarRnc(filters);
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel carregar RNC.');
-      setItems([]);
-      setTotal(0);
-      setFallbackReason('');
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-      setFallbackReason(result.meta?.fallbackReason ?? '');
-    }
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['rnc'] });
+  }, [queryClient]);
 
   useEffect(() => {
     let cancelled = false;
@@ -152,10 +168,10 @@ export function useRnc() {
     }
     const result = await salvarRnc(data, selected?.id);
     if (result.success) {
-      setSuccess(result.meta?.source === 'local' ? 'RNC salva localmente.' : 'RNC salva com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateRncLista();
+      setSuccess(result.meta?.source === 'local' ? 'RNC salva localmente.' : 'RNC salva com sucesso.');
     }
     return result;
   }
@@ -164,7 +180,7 @@ export function useRnc() {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     fallbackReason,
     hasCloudConfig,
@@ -175,7 +191,8 @@ export function useRnc() {
     formInitialValue,
     isModalOpen,
     selected,
-    load,
+    rncFormInstance,
+    load: invalidateRncLista,
     setFilters,
     openCreateModal: () => {
       if (!canAccessAction('rnc', 'editar')) {
@@ -183,6 +200,7 @@ export function useRnc() {
         return;
       }
       setSelected(null);
+      setRncFormInstance((n) => n + 1);
       setIsModalOpen(true);
     },
     openEditModal: (item: RncRegistro) => {
@@ -195,6 +213,7 @@ export function useRnc() {
         return;
       }
       setSelected(item);
+      setRncFormInstance((n) => n + 1);
       setIsModalOpen(true);
     },
     closeModal: () => {

@@ -8,9 +8,11 @@
  */
 
 import { parseCsvToRecords } from '../../../lib/csv';
+import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
 import { parseDecimalFlexible } from '../../../lib/parseDecimal';
 import { validateMaterial } from '../schemas/material.schema';
 import type { MaterialFormData } from '../types/material.types';
+import { readMateriaisDominiosListas } from './materiaisDominios.storage';
 
 export type MaterialImportStagingLinha = {
   /** Numero da linha no arquivo (1 = cabecalho; primeira linha de dados = 2) */
@@ -122,6 +124,56 @@ export function validarImportacaoMaterialEmCamadas(form: MaterialFormData): stri
 }
 
 /**
+ * Verifica se o valor coincide com algum item da lista cadastrada (trim + comparacao sem acento/caso).
+ */
+export function valorPermitidoNaListaDominio(valor: string, lista: string[]): boolean {
+  const v = valor.trim();
+  if (!v) return true;
+  return lista.some((item) => v.localeCompare(item.trim(), 'pt-BR', { sensitivity: 'base' }) === 0);
+}
+
+/**
+ * Valida disciplina/unidade do CSV contra as listas gravadas em Disciplinas / Unidades (localStorage).
+ * Deve ser executada apos `construirDocumentoStagingImportacaoMateriais`; se retornar string, bloquear preview/importacao inteira.
+ */
+export function validarDominiosCadastroImportacaoMateriais(
+  documento: MaterialImportStagingDocument,
+): string | null {
+  const { disciplinas: listaDisc, unidades: listaUnd } = readMateriaisDominiosListas();
+  const disciplinasInvalidas = new Set<string>();
+  const unidadesInvalidas = new Set<string>();
+
+  for (const linha of documento.linhas) {
+    const d = linha.formJson.disciplina.trim();
+    if (d && !valorPermitidoNaListaDominio(d, listaDisc)) {
+      disciplinasInvalidas.add(d);
+    }
+    const u = linha.formJson.unidade.trim();
+    if (u && !valorPermitidoNaListaDominio(u, listaUnd)) {
+      unidadesInvalidas.add(u);
+    }
+  }
+
+  const partes: string[] = [];
+  if (disciplinasInvalidas.size > 0) {
+    const quoted = [...disciplinasInvalidas]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      .map((s) => `"${s}"`);
+    partes.push(
+      `Disciplina(s) nao cadastrada(s): ${quoted.join(', ')}. Cadastre em Disciplinas antes de importar.`,
+    );
+  }
+  if (unidadesInvalidas.size > 0) {
+    const quoted = [...unidadesInvalidas]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      .map((s) => `"${s}"`);
+    partes.push(`Unidade(s) nao cadastrada(s): ${quoted.join(', ')}. Cadastre em Unidades antes de importar.`);
+  }
+
+  return partes.length > 0 ? partes.join(' ') : null;
+}
+
+/**
  * Constroi o documento JSON de staging a partir do texto CSV (entrada tipo Excel).
  * Nao grava no banco — apenas estrutura e validacao ate a camada de negocio.
  */
@@ -129,6 +181,10 @@ export function construirDocumentoStagingImportacaoMateriais(text: string): {
   documento: MaterialImportStagingDocument | null;
   erroEstrutural: string | null;
 } {
+  const cabErr = mensagemSeCabecalhoImportCsvIncompativel('materiais', text);
+  if (cabErr) {
+    return { documento: null, erroEstrutural: cabErr };
+  }
   const parsed = parseCsvToRecords(text);
   if (!parsed || parsed.rows.length === 0) {
     return {

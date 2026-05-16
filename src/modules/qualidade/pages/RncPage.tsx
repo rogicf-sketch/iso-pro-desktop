@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { hydrateRncRegistro } from '../utils/rncFotoIdb';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { RncFilters } from '../components/RncFilters';
@@ -11,7 +14,7 @@ import { RncForm } from '../components/RncForm';
 import { RncTable } from '../components/RncTable';
 import { useRnc } from '../hooks/useRnc';
 import type { RncRegistro } from '../types/qualidade.types';
-import { imprimirRncHtml, montarHtmlRnc } from '../utils/imprimirRncHtml';
+import { imprimirRncHtmlAsync, montarHtmlRnc } from '../utils/imprimirRncHtml';
 
 export function RncPage() {
   const location = useLocation();
@@ -19,17 +22,27 @@ export function RncPage() {
   const { canAccessAction } = useAuth();
   const cloudStatus = getSupabaseOperationalStatus();
   const [dicaRirTexto, setDicaRirTexto] = useState<string | null>(null);
-  const [previewReg, setPreviewReg] = useState<RncRegistro | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     const st = location.state as { fromRirHint?: string } | null;
     if (st?.fromRirHint) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- consumir location.state e refletir na UI
       setDicaRirTexto(st.fromRirHint);
       navigate(location.pathname, { replace: true, state: {} });
     }
   }, [location.pathname, location.state, navigate]);
+
+  const visualizarRncRelatorio = useCallback(async (reg: RncRegistro) => {
+    const h = await hydrateRncRegistro(reg);
+    const html = montarHtmlRnc(h);
+    const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+    if (!res.ok) {
+      window.alert(
+        res.error ??
+          'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir na lista para o dialogo do sistema.',
+      );
+    }
+  }, []);
+
   const {
     items,
     total,
@@ -43,6 +56,7 @@ export function RncPage() {
     formInitialValue,
     isModalOpen,
     selected,
+    rncFormInstance,
     setFilters,
     openCreateModal,
     openEditModal,
@@ -72,10 +86,12 @@ export function RncPage() {
           </div>
         ) : null}
       </div>
-      <p className="panel-copy">
-        Relatorio de nao conformidade no recebimento de materiais: vinculo a NF do modulo Recebimentos, registro profissional (segregacao, evidencias, causa
-        raiz, plano de acao) e impressao para arquivo e fornecedor.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Relatorio de nao conformidade no recebimento de materiais: vinculo a NF do modulo Recebimentos, registro profissional (segregacao, evidencias, causa
+          raiz, plano de acao) e impressao para arquivo e fornecedor.
+        </p>
+      </ModuleHelp>
       {dicaRirTexto ? <OperationalNotice>{dicaRirTexto}</OperationalNotice> : null}
       <OperationalNotice>
         {cloudStatus === 'ready' && hasCloudConfig
@@ -96,10 +112,16 @@ export function RncPage() {
             canEdit={canEdit}
             items={items}
             onEdit={openEditModal}
+            onVisualizar={(item) => {
+              void visualizarRncRelatorio(item);
+            }}
             onPrint={(item) => {
-              if (!imprimirRncHtml(item)) {
-                window.alert('Nao foi possivel abrir a impressao. Verifique se o navegador bloqueou pop-ups.');
-              }
+              void (async () => {
+                const ok = await imprimirRncHtmlAsync(item);
+                if (!ok) {
+                  window.alert('Nao foi possivel abrir a impressao. Verifique se o navegador bloqueou pop-ups.');
+                }
+              })();
             }}
           />
           <Pagination
@@ -111,17 +133,16 @@ export function RncPage() {
         </>
       )}
       {!canEdit ? <OperationalNotice>Seu perfil pode consultar RNC, mas nao pode alterar registros.</OperationalNotice> : null}
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar RNC' : 'Nova RNC'} wide>
+      <Modal browserFullscreen onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar RNC' : 'Nova RNC'} wide>
         <RncForm
-          key={selected?.id ?? 'rnc-novo'}
+          key={`${selected?.id ?? 'rnc-novo'}-${rncFormInstance}`}
           editId={selected?.id}
           initialValue={formInitialValue}
           recebimentoChoices={recebimentoChoices}
           recebimentosChoicesLoading={recebimentosChoicesLoading}
           onCancel={closeModal}
           onPreview={(reg) => {
-            setPreviewReg(reg);
-            setPreviewOpen(true);
+            void visualizarRncRelatorio(reg);
           }}
           onReloadAfterConflict={async () => {
             await load();
@@ -130,36 +151,6 @@ export function RncPage() {
           onSubmit={submitRnc}
           senhaHelp={senhaConfigurada ? 'Configuracao de senha preferencial ativa para salvar RNC.' : ''}
         />
-      </Modal>
-
-      <Modal onClose={() => setPreviewOpen(false)} open={previewOpen} title="Visualizar RNC (impressao)" wide>
-        {previewReg ? (
-          <>
-            <OperationalNotice>
-              Pre-visualizacao com os dados atuais do formulario (ainda nao gravados se nao clicou em Salvar). Use Imprimir / PDF para enviar ao browser.
-            </OperationalNotice>
-            <iframe
-              className="rnc-preview-iframe"
-              srcDoc={montarHtmlRnc(previewReg)}
-              title="Relatorio RNC"
-            />
-            <div className="form-actions" style={{ marginTop: 16 }}>
-              <Button onClick={() => setPreviewOpen(false)} type="button" variant="ghost">
-                Fechar
-              </Button>
-              <Button
-                onClick={() => {
-                  if (previewReg && imprimirRncHtml(previewReg)) {
-                    setPreviewOpen(false);
-                  }
-                }}
-                type="button"
-              >
-                Imprimir / PDF
-              </Button>
-            </div>
-          </>
-        ) : null}
       </Modal>
     </div>
   );

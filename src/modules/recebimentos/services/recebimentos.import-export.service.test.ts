@@ -9,6 +9,41 @@ import {
 } from './recebimentos.service';
 
 const STORAGE_KEY = 'iso-pro-desktop-recebimentos';
+const FORNECEDORES_KEY = 'iso-pro-desktop-fornecedores';
+const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
+
+function seedMateriaisAtivosPorCodigo(storage: Record<string, string>, codigos: string[]) {
+  storage[MATERIAIS_KEY] = JSON.stringify(
+    codigos.map((codigo, i) => ({
+      id: `mat-seed-${i}`,
+      codigo,
+      codigoBarras: '',
+      descricao: 'Teste',
+      diametro: '',
+      disciplina: 'Geral',
+      unidade: 'UN',
+      peso: 0,
+      estoqueMinimo: 0,
+      saldoAtual: 0,
+      ativo: true,
+      observacao: '',
+    })),
+  );
+}
+
+function seedFornecedoresAtivosPorNome(storage: Record<string, string>, nomes: string[]) {
+  storage[FORNECEDORES_KEY] = JSON.stringify(
+    nomes.map((nome, i) => ({
+      id: `for-seed-${i}`,
+      nome,
+      cnpj: '',
+      telefone: '',
+      email: '',
+      endereco: '',
+      ativo: true,
+    })),
+  );
+}
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => false),
@@ -21,6 +56,7 @@ describe('recebimentos.service / exportacao e importacao JSON (local)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     store = {};
+    seedMateriaisAtivosPorCodigo(store, ['K1', 'P1', 'Q', 'Z1']);
     vi.stubGlobal(
       'localStorage',
       {
@@ -238,6 +274,7 @@ describe('recebimentos.service / exportacao e importacao JSON (local)', () => {
 
   it('importa novo recebimento a partir de formato flexivel (fornecedorNome / nota)', async () => {
     store[STORAGE_KEY] = JSON.stringify([]);
+    seedFornecedoresAtivosPorNome(store, ['Import Co']);
 
     const json = JSON.stringify([
       {
@@ -271,6 +308,7 @@ describe('recebimentos.service / exportacao e importacao JSON (local)', () => {
   });
 
   it('atualiza recebimento em aguardando conferencia com mesma chave de negocio', async () => {
+    seedFornecedoresAtivosPorNome(store, ['Mesma Chave']);
     store[STORAGE_KEY] = JSON.stringify([
       {
         id: 'exist',
@@ -337,6 +375,7 @@ describe('recebimentos.service / exportacao e importacao JSON (local)', () => {
   });
 
   it('nao sobrescreve recebimento conferido', async () => {
+    seedFornecedoresAtivosPorNome(store, ['F']);
     store[STORAGE_KEY] = JSON.stringify([
       {
         id: 'conf',
@@ -396,5 +435,141 @@ describe('recebimentos.service / exportacao e importacao JSON (local)', () => {
 
     const saved = JSON.parse(store[STORAGE_KEY] ?? '[]') as Recebimento[];
     expect(saved[0]?.observacoes).toBe('orig');
+  });
+
+  it('importacao nao conclui se fornecedor nao estiver cadastrado', async () => {
+    store[STORAGE_KEY] = JSON.stringify([]);
+    seedFornecedoresAtivosPorNome(store, ['Apenas Outro Fornecedor']);
+
+    const json = JSON.stringify([
+      {
+        fornecedor: 'Fornecedor Fantasma',
+        dataRecebimento: '2026-07-01',
+        notaFiscal: 'NF-X',
+        romaneio: 'ROM-X',
+        conferente: 'C',
+        modoRecebimento: 'direto',
+        observacoes: '',
+        itens: [
+          {
+            codigoMaterial: 'Z1',
+            descricaoMaterial: 'Item',
+            unidade: 'UN',
+            disciplina: 'd',
+            localizacao: 'L-1',
+            quantidadeRecebida: 1,
+            quantidadeConferida: 1,
+          },
+        ],
+      },
+    ]);
+
+    const result = await importarRecebimentosDoArquivoJson(json);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Importacao nao concluida/i);
+    expect(result.error).toMatch(/Fornecedor Fantasma/);
+
+    const saved = JSON.parse(store[STORAGE_KEY] ?? '[]') as unknown[];
+    expect(saved).toHaveLength(0);
+  });
+
+  it('importacao nao conclui se codigo de material nao estiver cadastrado', async () => {
+    store[STORAGE_KEY] = JSON.stringify([]);
+    seedFornecedoresAtivosPorNome(store, ['Forn Mat Ok']);
+    seedMateriaisAtivosPorCodigo(store, ['SO-UM']);
+
+    const json = JSON.stringify([
+      {
+        fornecedor: 'Forn Mat Ok',
+        dataRecebimento: '2026-08-01',
+        notaFiscal: 'NF-MAT',
+        romaneio: 'ROM-MAT',
+        conferente: 'C',
+        modoRecebimento: 'direto',
+        observacoes: '',
+        itens: [
+          {
+            codigoMaterial: 'CODIGO-INEXISTENTE',
+            descricaoMaterial: 'Item',
+            unidade: 'UN',
+            disciplina: 'd',
+            localizacao: 'L-1',
+            quantidadeRecebida: 1,
+            quantidadeConferida: 1,
+          },
+        ],
+      },
+    ]);
+
+    const result = await importarRecebimentosDoArquivoJson(json);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Importacao nao concluida/i);
+    expect(result.error).toMatch(/CODIGO-INEXISTENTE/);
+    expect(JSON.parse(store[STORAGE_KEY] ?? '[]')).toHaveLength(0);
+  });
+
+  it('importacao bloqueia codigo inexistente quando o item so traz codigo_material (snake_case)', async () => {
+    store[STORAGE_KEY] = JSON.stringify([]);
+    seedFornecedoresAtivosPorNome(store, ['Forn Snake']);
+    seedMateriaisAtivosPorCodigo(store, ['K1']);
+
+    const json = JSON.stringify([
+      {
+        fornecedor: 'Forn Snake',
+        dataRecebimento: '2026-10-01',
+        notaFiscal: 'NF-SNAKE',
+        romaneio: 'R1',
+        conferente: 'C',
+        modoRecebimento: 'direto',
+        observacoes: '',
+        itens: [
+          {
+            codigo_material: 'TB-SP1-VPS001-PSE004',
+            descricaoMaterial: 'Item',
+            unidade: 'UN',
+            disciplina: '',
+            localizacao: 'L1',
+            quantidadeRecebida: 1,
+            quantidadeConferida: 0,
+          },
+        ],
+      },
+    ]);
+
+    const result = await importarRecebimentosDoArquivoJson(json);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/TB-SP1-VPS001-PSE004|nao cadastrado|Importacao nao concluida/i);
+    expect(JSON.parse(store[STORAGE_KEY] ?? '[]')).toHaveLength(0);
+  });
+
+  it('importacao nao conclui se o registro nao tiver nome de fornecedor', async () => {
+    store[STORAGE_KEY] = JSON.stringify([]);
+
+    const json = JSON.stringify([
+      {
+        dataRecebimento: '2026-09-01',
+        notaFiscal: 'NF-SEM-FORN',
+        romaneio: 'R1',
+        conferente: 'C',
+        modoRecebimento: 'direto',
+        observacoes: '',
+        itens: [
+          {
+            codigoMaterial: 'K1',
+            descricaoMaterial: 'Ok',
+            unidade: 'UN',
+            disciplina: '',
+            localizacao: 'L1',
+            quantidadeRecebida: 1,
+            quantidadeConferida: 0,
+          },
+        ],
+      },
+    ]);
+
+    const result = await importarRecebimentosDoArquivoJson(json);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/fornecedor/i);
+    expect(JSON.parse(store[STORAGE_KEY] ?? '[]')).toHaveLength(0);
   });
 });

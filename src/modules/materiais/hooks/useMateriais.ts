@@ -1,4 +1,7 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -20,6 +23,7 @@ import {
   obterIdsMateriaisFiltrados,
   previewImportacaoMateriaisCsv,
   salvarMaterial,
+  sincronizarMateriaisNuvemParaArmazenamentoLocal,
   toggleMaterialStatus,
   type MateriaisImportacaoResumo,
 } from '../services/materiais.service';
@@ -29,6 +33,10 @@ import {
   loadPersistedMateriaisImportStaging,
   persistMateriaisImportStaging,
 } from '../utils/materiaisImportStagingStorage';
+
+function materiaisListaQueryKey(filters: MaterialFiltro, userLogin: string | undefined) {
+  return ['materiais', 'lista', userLogin ?? '', filters] as const;
+}
 
 const initialFilters: MaterialFiltro = {
   busca: '',
@@ -52,15 +60,11 @@ const emptyForm: MaterialFormData = {
 };
 
 export function useMateriais() {
+  const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const cloudMaterialsEnabled = shouldUseCloudMaterials();
   const [filters, setFilters] = useState<MaterialFiltro>(initialFilters);
-  const [items, setItems] = useState<MaterialListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [disciplinas, setDisciplinas] = useState<string[]>([]);
-  const [unidades, setUnidades] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -92,6 +96,9 @@ export function useMateriais() {
   const [deleteUsoAnaliseOk, setDeleteUsoAnaliseOk] = useState<boolean | null>(null);
   /** Erros da confirmacao (visiveis dentro do modal). */
   const [deleteExclusaoError, setDeleteExclusaoError] = useState('');
+  const [syncLocalModalOpen, setSyncLocalModalOpen] = useState(false);
+  const [syncLocalModalMessage, setSyncLocalModalMessage] = useState('');
+  const [syncLocalBusy, setSyncLocalBusy] = useState(false);
 
   const selectedMaterialIdSet = useMemo(() => new Set(selectedMaterialIds), [selectedMaterialIds]);
   const selectedMaterialIdsKey = selectedMaterialIds.slice().sort().join('\u0001');
@@ -114,38 +121,48 @@ export function useMateriais() {
     }
   }
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: materiaisListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const [result, disciplinasResult, unidadesResult] = await Promise.all([
+        listarMateriais(filtersForLista),
+        listarDisciplinas(),
+        listarUnidadesCadastro(),
+      ]);
+
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar materiais.');
+      }
+
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        disciplinas: disciplinasResult,
+        unidades: unidadesResult,
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const disciplinas = listQuery.data?.disciplinas ?? [];
+  const unidades = listQuery.data?.unidades ?? [];
+  const loading = listQuery.isLoading;
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar materiais.'
+        : '';
+
+  const invalidateMateriaisLista = useCallback(async () => {
     setError('');
     setSuccess('');
-
-    const [result, disciplinasResult, unidadesResult] = await Promise.all([
-      listarMateriais(filters),
-      listarDisciplinas(),
-      listarUnidadesCadastro(),
-    ]);
-
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel carregar materiais.');
-      setItems([]);
-      setTotal(0);
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-    }
-
-    setDisciplinas(disciplinasResult);
-    setUnidades(unidadesResult);
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['materiais'] });
+  }, [queryClient]);
 
   useEffect(() => {
     persistMateriaisImportStaging(importStaging);
@@ -219,7 +236,7 @@ export function useMateriais() {
     if (result.success) {
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateMateriaisLista();
       setSuccess('Material salvo com sucesso.');
     }
 
@@ -232,7 +249,7 @@ export function useMateriais() {
       return;
     }
     await toggleMaterialStatus(item.id, !item.ativo);
-    await load();
+    await invalidateMateriaisLista();
   }
 
   function toggleSelectMaterialId(id: string) {
@@ -256,7 +273,7 @@ export function useMateriais() {
     }
     setError('');
     setSelectAllFilteredBusy(true);
-    const result = await obterIdsMateriaisFiltrados(filters);
+    const result = await obterIdsMateriaisFiltrados(filtersForLista);
     setSelectAllFilteredBusy(false);
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel selecionar todos os materiais do filtro.');
@@ -345,7 +362,7 @@ export function useMateriais() {
     setDeleteDefinitivoOpen(false);
     setDeleteDefinitivoSenha('');
     setSelectedMaterialIds([]);
-    await load();
+    await invalidateMateriaisLista();
     setSuccess(`Exclusao definitiva: ${result.data.removidos} material(is) removido(s).`);
   }
 
@@ -379,7 +396,7 @@ export function useMateriais() {
       return;
     }
     setError('');
-    const result = await montarExportacaoMateriaisCsv({ filtroLista: filters });
+    const result = await montarExportacaoMateriaisCsv({ filtroLista: filtersForLista });
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar a planilha.');
       return;
@@ -450,6 +467,47 @@ export function useMateriais() {
     setImportResultado(null);
   }
 
+  function closeSyncLocalModal() {
+    if (syncLocalBusy) return;
+    setSyncLocalModalOpen(false);
+    setSyncLocalModalMessage('');
+  }
+
+  async function onSyncLocalFromCloud(force: boolean) {
+    if (force) {
+      if (!canAccessAction('materiais', 'administrar')) {
+        setError('Sem permissao de administracao em Materiais para substituir a copia local.');
+        return;
+      }
+    } else if (!canAccessAction('materiais', 'editar')) {
+      setError('Sem permissao para editar Materiais: nao e possivel gravar a copia local.');
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setSyncLocalBusy(true);
+    const result = await sincronizarMateriaisNuvemParaArmazenamentoLocal({
+      forcar: force,
+      actorLogin: user?.login,
+    });
+    setSyncLocalBusy(false);
+    if (result.success && result.data) {
+      setSyncLocalModalOpen(false);
+      setSyncLocalModalMessage('');
+      await invalidateMateriaisLista();
+      setSuccess(`Copia local actualizada: ${result.data.total} material(is) gravados neste navegador.`);
+      return;
+    }
+    if (!force && result.meta?.syncMateriaisLocalBloqueado) {
+      setSyncLocalModalMessage(result.error ?? 'Gravacao recusada pelo sistema.');
+      setSyncLocalModalOpen(true);
+      return;
+    }
+    setSyncLocalModalOpen(false);
+    setSyncLocalModalMessage('');
+    setError(result.error ?? 'Nao foi possivel gravar a copia local a partir da nuvem.');
+  }
+
   async function confirmImportMateriaisStaging() {
     if (!importStaging) return;
     if (!canAccessAction('materiais', 'editar')) {
@@ -479,7 +537,7 @@ export function useMateriais() {
       setError('Resumo da importacao indisponivel.');
       return;
     }
-    await load();
+    await invalidateMateriaisLista();
     setImportResultado(r);
   }
 
@@ -487,7 +545,7 @@ export function useMateriais() {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     hasCloudConfig,
     cloudMaterialsEnabled,
@@ -525,8 +583,8 @@ export function useMateriais() {
     },
     submitMaterial,
     handleToggleStatus,
-    load,
-    refresh: load,
+    load: invalidateMateriaisLista,
+    refresh: invalidateMateriaisLista,
     importInputRef,
     openImportMateriaisPicker,
     downloadModeloCsvImportacaoMateriais,
@@ -559,5 +617,10 @@ export function useMateriais() {
     deleteUsoLoading,
     deleteUsoAnaliseOk,
     deleteExclusaoError,
+    syncLocalModalOpen,
+    syncLocalModalMessage,
+    syncLocalBusy,
+    closeSyncLocalModal,
+    onSyncLocalFromCloud,
   };
 }

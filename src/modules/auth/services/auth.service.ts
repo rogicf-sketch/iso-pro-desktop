@@ -1,10 +1,44 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
 import { getSupabase, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
+import { parseAuthSessionUser, parseAuthUsersStorageList } from '../schemas/authLocal.zod';
 import type { AppModule, AuthUser, LoginPayload, Permission, PermissionAction } from '../types/auth.types';
 import { appendAuthAuditEvent } from './authAudit.service';
 
-export const AUTH_SESSION_STORAGE_KEY = 'iso-pro-desktop-session';
-export const AUTH_USERS_STORAGE_KEY = 'iso-pro-desktop-usuarios-sistema';
+export const AUTH_SESSION_STORAGE_KEY_BASE = 'iso-pro-desktop-session';
+export const AUTH_USERS_STORAGE_KEY_BASE = 'iso-pro-desktop-usuarios-sistema';
+
+export function getAuthSessionStorageKey(): string {
+  return getScopedIsoProStorageKey(AUTH_SESSION_STORAGE_KEY_BASE);
+}
+
+export function getAuthUsersStorageKey(): string {
+  return getScopedIsoProStorageKey(AUTH_USERS_STORAGE_KEY_BASE);
+}
+
+/** Senha do ultimo login bem-sucedido (só memória; usada como actor na Edge `iso_pro_admin_user`). */
+let volatileSessionPassword: string | null = null;
+
+export function setVolatileSessionPasswordAfterSuccessfulLogin(senha: string): void {
+  volatileSessionPassword = senha.trim() || null;
+}
+
+export function getVolatileSessionPassword(): string | null {
+  return volatileSessionPassword;
+}
+
+export function clearVolatileSessionPassword(): void {
+  volatileSessionPassword = null;
+}
+
+/** Quem está em sessão alterou a própria senha na nuvem — manter actor alinhado ao RPC. */
+export function refreshVolatileSessionPasswordAfterSelfPasswordChange(newSenha: string): void {
+  const u = getCurrentUser();
+  if (!u) return;
+  const t = newSenha.trim();
+  if (t) volatileSessionPassword = t;
+}
 
 /** Evita falha silenciosa no Windows quando .env tem CRLF (`"true\r"`). */
 function isTruthyEnv(value: unknown): boolean {
@@ -23,6 +57,7 @@ const ALL_MODULES: AppModule[] = [
   'recebimentos',
   'conferencia',
   'etiquetas',
+  'equipamentos',
   'configuracoes',
   'atendimento',
   'inventario',
@@ -56,7 +91,7 @@ const mockUsers: Record<string, AuthUser & { senha: string }> = {
     senha: '1234',
     nome: 'Planejamento',
     perfil: { id: 'planejamento', nome: 'Planejamento' },
-    permissoes: buildPermissions(['dashboard', 'fornecedores', 'colaboradores', 'documentos', 'materiais', 'etiquetas', 'relatorios']),
+    permissoes: buildPermissions(['dashboard', 'fornecedores', 'colaboradores', 'documentos', 'materiais', 'etiquetas', 'equipamentos', 'relatorios']),
   },
   operacao: {
     id: 'local-operacao',
@@ -64,7 +99,7 @@ const mockUsers: Record<string, AuthUser & { senha: string }> = {
     senha: '1234',
     nome: 'Operacao',
     perfil: { id: 'operacao', nome: 'Operacao' },
-    permissoes: buildPermissions(['dashboard', 'recebimentos', 'conferencia', 'etiquetas', 'atendimento', 'inventario', 'rir', 'rnc', 'mobile']),
+    permissoes: buildPermissions(['dashboard', 'recebimentos', 'conferencia', 'etiquetas', 'equipamentos', 'atendimento', 'inventario', 'rir', 'rnc', 'mobile']),
   },
   consulta: {
     id: 'local-consulta',
@@ -84,8 +119,24 @@ const mockPermissionsByProfileId = new Map(
   ]),
 );
 
+/**
+ * Utilizadores guardados antes de existir um novo modulo em `ALL_MODULES` ficam sem linhas para esse modulo.
+ * Sobrepõe as permissões gravadas ao baseline do perfil (seed) para novos modulos herdarem o acesso esperado.
+ */
+function mergePermissoesComDefaultsPerfil(stored: Permission[], perfilId: string): Permission[] {
+  const baseline = buildPermissions(mockPermissionsByProfileId.get(perfilId) ?? []);
+  const storedMap = new Map(stored.map((p) => [`${p.modulo}:${p.acao}`, p.permitido]));
+  return baseline.map((p) => {
+    const key = `${p.modulo}:${p.acao}`;
+    if (storedMap.has(key)) {
+      return { ...p, permitido: storedMap.get(key)! };
+    }
+    return p;
+  });
+}
+
 /** Usuarios embutidos (admin/planejamento etc.) so em dev ou com VITE_ENABLE_LOCAL_MOCK_AUTH=true — evita build de producao com credenciais conhecidas. */
-function isLocalMockAuthSeedEnabled() {
+export function isLocalMockAuthSeedEnabled() {
   return import.meta.env.DEV || import.meta.env.VITE_ENABLE_LOCAL_MOCK_AUTH === 'true';
 }
 
@@ -99,7 +150,7 @@ function localMockUserByLogin(login: string): (AuthUser & { senha: string }) | u
   return mockUsers[key];
 }
 
-/** Utilizador mock embutido mesmo quando existe lista em `AUTH_USERS_STORAGE_KEY` sem estes IDs. */
+/** Utilizador mock embutido mesmo quando existe lista em `AUTH_USERS_STORAGE_KEY_BASE` sem estes IDs. */
 function resolveEmbeddedLocalMockUser(user: AuthUser): (AuthUser & { senha: string }) | undefined {
   const fromList = readLocalUsers().find((item) => item.id === user.id || item.login === user.login);
   if (fromList) return fromList;
@@ -159,41 +210,41 @@ function normalizePermissionAction(value: string): PermissionAction {
 }
 
 function readLocalUsers(): Array<AuthUser & { senha: string }> {
-  const raw = localStorage.getItem(AUTH_USERS_STORAGE_KEY);
+  const raw = localStorage.getItem(getAuthUsersStorageKey());
   if (!raw) return localMockUsersFallbackList();
 
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as Array<{
-      id: string;
-      login: string;
-      nome: string;
-      senha: string;
-      ativo: boolean;
-      perfilId: string;
-      perfilNome: string;
-      permissoes?: Permission[];
-    }>;
-
-    return parsed
-      .filter((item) => item.ativo)
-      .map((item) => ({
-        id: item.id,
-        login: item.login,
-        nome: item.nome,
-        senha: item.senha,
-        perfil: { id: item.perfilId, nome: item.perfilNome },
-        permissoes:
-          item.permissoes && item.permissoes.length
-            ? item.permissoes.map((permission) => ({
-                modulo: permission.modulo,
-                acao: normalizePermissionAction(permission.acao),
-                permitido: permission.permitido,
-              }))
-            : buildPermissions(mockPermissionsByProfileId.get(item.perfilId) ?? []),
-      }));
+    parsed = JSON.parse(raw);
   } catch {
     return localMockUsersFallbackList();
   }
+
+  const list = parseAuthUsersStorageList(parsed);
+  if (list === null) {
+    return localMockUsersFallbackList();
+  }
+
+  return list
+    .filter((item) => item.ativo)
+    .map((item) => ({
+      id: item.id,
+      login: item.login,
+      nome: item.nome,
+      senha: item.senha,
+      perfil: { id: item.perfilId, nome: item.perfilNome },
+      permissoes:
+        item.permissoes && item.permissoes.length
+          ? mergePermissoesComDefaultsPerfil(
+              item.permissoes.map((permission) => ({
+                modulo: permission.modulo as AppModule,
+                acao: normalizePermissionAction(permission.acao),
+                permitido: permission.permitido,
+              })),
+              item.perfilId,
+            )
+          : buildPermissions(mockPermissionsByProfileId.get(item.perfilId) ?? []),
+    }));
 }
 
 function mapRemoteUser(row: RemoteUserRow): AuthUser {
@@ -236,6 +287,7 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
     .from('usuarios_sistema')
     .select('id,login,nome,senha,ativo,perfis_acesso(id,codigo,nome,perfil_permissoes(modulo,acao,permitido)),usuario_permissoes(modulo,acao,permitido)')
     .eq('login', login)
+    .eq('tenant_id', getActiveTenantId())
     .eq('ativo', true)
     .maybeSingle();
 
@@ -249,7 +301,8 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
   }
 
   const sessionUser = mapRemoteUser(user);
-  localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+  setVolatileSessionPasswordAfterSuccessfulLogin(senha);
+  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
   return sessionUser;
 }
 
@@ -261,6 +314,20 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
       detail: 'Tentativa de login sem informar credenciais completas.',
     });
     throw new Error('Informe login e senha.');
+  }
+
+  /** Com VITE_ENABLE_LOCAL_MOCK_AUTH=true no build, demo entra antes do Supabase (útil com .env que já tem URL/key). */
+  const demoUser = localMockUserByLogin(payload.login);
+  if (demoUser && demoUser.senha === payload.senha.trim()) {
+    const sessionUser = sanitizeUser(demoUser);
+    setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
+    localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    appendAuthAuditEvent({
+      type: 'login_success',
+      actorLogin: sessionUser.login,
+      detail: 'Login com perfil de demonstracao (VITE_ENABLE_LOCAL_MOCK_AUTH).',
+    });
+    return sessionUser;
   }
 
   if (hasSupabaseConfig()) {
@@ -282,7 +349,8 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
       if (fallbackUser) {
         if (fallbackUser.senha === payload.senha.trim()) {
           const sessionUser = sanitizeUser(fallbackUser);
-          localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+          setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
+          localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
           appendAuthAuditEvent({
             type: 'login_success',
             actorLogin: sessionUser.login,
@@ -313,7 +381,8 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
   }
 
   const sessionUser = sanitizeUser(user);
-  localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+  setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
+  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
   appendAuthAuditEvent({
     type: 'login_success',
     actorLogin: sessionUser.login,
@@ -331,21 +400,40 @@ export function logout() {
       detail: 'Logout realizado pelo usuario.',
     });
   }
-  localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+  localStorage.removeItem(getAuthSessionStorageKey());
+  clearVolatileSessionPassword();
   invalidateIsoProSnapshotCache();
   resetSupabaseClient();
 }
 
 export function getCurrentUser(): AuthUser | null {
-  const raw = localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+  const raw = localStorage.getItem(getAuthSessionStorageKey());
   if (!raw) return null;
 
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as AuthUser;
+    parsed = JSON.parse(raw);
   } catch {
-    localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    localStorage.removeItem(getAuthSessionStorageKey());
+    clearVolatileSessionPassword();
     return null;
   }
+
+  const user = parseAuthSessionUser(parsed);
+  if (user === null) {
+    localStorage.removeItem(getAuthSessionStorageKey());
+    clearVolatileSessionPassword();
+    return null;
+  }
+
+  const merged = mergePermissoesComDefaultsPerfil(user.permissoes, user.perfil.id);
+  if (JSON.stringify(merged) !== JSON.stringify(user.permissoes)) {
+    const next: AuthUser = { ...user, permissoes: merged };
+    localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(next));
+    return next;
+  }
+
+  return user;
 }
 
 async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
@@ -358,6 +446,7 @@ async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
     .from('usuarios_sistema')
     .select('id,login,nome,senha,ativo,perfis_acesso(id,codigo,nome,perfil_permissoes(modulo,acao,permitido)),usuario_permissoes(modulo,acao,permitido)')
     .eq('id', user.id)
+    .eq('tenant_id', getActiveTenantId())
     .eq('ativo', true)
     .maybeSingle();
 
@@ -372,12 +461,13 @@ async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
       actorLogin: user.login,
       detail: 'Sessao invalidada porque o usuario deixou de estar ativo na base principal.',
     });
-    localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    localStorage.removeItem(getAuthSessionStorageKey());
+    clearVolatileSessionPassword();
     return null;
   }
 
   const sessionUser = mapRemoteUser(refreshed);
-  localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
   return sessionUser;
 }
 
@@ -389,12 +479,13 @@ function refreshLocalSession(user: AuthUser): AuthUser | null {
       actorLogin: user.login,
       detail: 'Sessao invalidada porque o usuario nao foi encontrado na base local.',
     });
-    localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    localStorage.removeItem(getAuthSessionStorageKey());
+    clearVolatileSessionPassword();
     return null;
   }
 
   const sessionUser = sanitizeUser(localUser);
-  localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
   return sessionUser;
 }
 
@@ -415,7 +506,8 @@ export function ensureDevLocalAdminSession(): AuthUser | null {
   if (!import.meta.env.DEV || import.meta.env.MODE === 'test') return null;
   if (isTruthyEnv(import.meta.env.VITE_DISABLE_DEV_AUTO_LOGIN)) return null;
   const sessionUser = sanitizeUser(mockUsers.admin);
-  localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+  setVolatileSessionPasswordAfterSuccessfulLogin(mockUsers.admin.senha);
+  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
   return sessionUser;
 }
 
@@ -430,11 +522,12 @@ export async function validateCurrentSession(user: AuthUser | null): Promise<Aut
         actorLogin: user.login,
         detail: 'Sessao local embutida nao encontrada nos mocks nem na lista local.',
       });
-      localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+      localStorage.removeItem(getAuthSessionStorageKey());
+      clearVolatileSessionPassword();
       return null;
     }
     const sessionUser = sanitizeUser(resolved);
-    localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(sessionUser));
+    localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
     return sessionUser;
   }
 
@@ -445,7 +538,8 @@ export async function validateCurrentSession(user: AuthUser | null): Promise<Aut
       if (error instanceof AuthServiceError && error.code === 'remote_unavailable') {
         return user;
       }
-      localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+      localStorage.removeItem(getAuthSessionStorageKey());
+      clearVolatileSessionPassword();
       return null;
     }
   }
@@ -487,6 +581,7 @@ export async function verifyCurrentUserPassword(senha: string): Promise<boolean>
           .from('usuarios_sistema')
           .select('senha')
           .eq('id', user.id)
+          .eq('tenant_id', getActiveTenantId())
           .eq('ativo', true)
           .maybeSingle();
         if (!error && data != null) {

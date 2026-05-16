@@ -9,8 +9,12 @@ type Props = {
   items: RirRegistro[];
   onEdit: (item: RirRegistro) => void;
   onPrint: (item: RirRegistro) => void;
+  onVisualizar: (item: RirRegistro) => void;
   onDelete?: (item: RirRegistro) => void;
+  /** Destravar RIR `tratado` com senha (permissao administrar). */
+  onDestravar?: (item: RirRegistro) => void;
   canEdit: boolean;
+  canAdministrarRir?: boolean;
 };
 
 function laudoLabel(l: RirRegistro['laudo']) {
@@ -26,7 +30,16 @@ function tone(status: RirRegistro['status']) {
   return createStatusMeta(status, 'danger');
 }
 
-export function RirTable({ items, onEdit, onPrint, onDelete, canEdit }: Props) {
+export function RirTable({
+  items,
+  onEdit,
+  onPrint,
+  onVisualizar,
+  onDelete,
+  onDestravar,
+  canEdit,
+  canAdministrarRir,
+}: Props) {
   return (
     <DataTable
       getRowClassName={(item) =>
@@ -52,7 +65,21 @@ export function RirTable({ items, onEdit, onPrint, onDelete, canEdit }: Props) {
           header: 'Acoes',
           render: (item) => (
             <div className="table-actions">
+              <ActionButton
+                enabledLabel="Visualizar"
+                enabledTitle="Pre-visualizar relatorio RIR (impressao / PDF)"
+                onClick={() => onVisualizar(item)}
+                variant="ghost"
+              />
               <ActionButton enabledLabel="Imprimir" enabledTitle="Imprimir RIR" onClick={() => onPrint(item)} variant="ghost" />
+              {canAdministrarRir && onDestravar && item.status === 'tratado' ? (
+                <ActionButton
+                  enabledLabel="Destravar"
+                  enabledTitle="Destravar RIR finalizado (senha) para voltar a Em analise e permitir edicao"
+                  onClick={() => onDestravar(item)}
+                  variant="ghost"
+                />
+              ) : null}
               {canEdit && onDelete ? (
                 <ActionButton
                   disabled={item.status === 'tratado' || item.status === 'cancelado'}

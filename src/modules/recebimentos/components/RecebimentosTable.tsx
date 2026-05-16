@@ -6,6 +6,7 @@ import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { RecebimentoListItem } from '../types/recebimento.types';
+import { textoModoRecebimentoListagem } from '../utils/modoRecebimentoExibicao';
 
 type Props = {
   items: RecebimentoListItem[];
@@ -105,7 +106,11 @@ export function RecebimentosTable({
         { key: 'fornecedor', header: 'Fornecedor', render: (item) => item.fornecedor },
         { key: 'nota', header: 'NF / Romaneio', render: (item) => `${item.notaFiscal || '-'} / ${item.romaneio || '-'}` },
         { key: 'data', header: 'Data', render: (item) => item.dataRecebimento },
-        { key: 'modo', header: 'Modo', render: (item) => item.modoRecebimento },
+        {
+          key: 'modo',
+          header: 'Modo',
+          render: (item) => textoModoRecebimentoListagem(item.modoRecebimento, item.status, item.dataConferencia),
+        },
         { key: 'itens', header: 'Itens', render: (item) => item.totalItens },
         {
           key: 'status',

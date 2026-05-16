@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { Navigate, createBrowserRouter } from 'react-router-dom';
+import { Navigate, createHashRouter } from 'react-router-dom';
 import { OperationalNotice } from '@/components/ui/OperationalNotice';
 import { AuthLayout } from '@/layouts/AuthLayout';
 import { MainLayout } from '@/layouts/MainLayout';
@@ -16,6 +16,7 @@ import {
   DesktopLicensesPage,
   DocumentosPage,
   EtiquetasPage,
+  EquipamentosPage,
   FornecedoresPage,
   InventarioPage,
   LoginPage,
@@ -34,7 +35,7 @@ function withSuspense(element: React.ReactNode) {
   return <Suspense fallback={<OperationalNotice>Carregando modulo...</OperationalNotice>}>{element}</Suspense>;
 }
 
-export const router = createBrowserRouter([
+export const router = createHashRouter([
   {
     element: <AuthLayout />,
     children: [
@@ -59,6 +60,7 @@ export const router = createBrowserRouter([
           { path: '/configuracoes', element: withSuspense(<ModuleAccessRoute modulo="configuracoes"><ConfiguracoesPage /></ModuleAccessRoute>) },
           { path: '/atendimento', element: withSuspense(<ModuleAccessRoute modulo="atendimento"><AtendimentoPage /></ModuleAccessRoute>) },
           { path: '/inventario', element: withSuspense(<ModuleAccessRoute modulo="inventario"><InventarioPage /></ModuleAccessRoute>) },
+          { path: '/equipamentos', element: withSuspense(<ModuleAccessRoute modulo="equipamentos"><EquipamentosPage /></ModuleAccessRoute>) },
           { path: '/rir', element: withSuspense(<ModuleAccessRoute modulo="rir"><RirPage /></ModuleAccessRoute>) },
           { path: '/rnc', element: withSuspense(<ModuleAccessRoute modulo="rnc"><RncPage /></ModuleAccessRoute>) },
           { path: '/relatorios', element: withSuspense(<ModuleAccessRoute modulo="relatorios"><RelatoriosPage /></ModuleAccessRoute>) },

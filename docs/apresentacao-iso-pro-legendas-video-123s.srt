@@ -1,0 +1,142 @@
+1
+00:00:00,000 --> 00:00:06,000
+Bem-vindo ao I.S.O PRO — Gestão de Materiais.
+Nesta sequência percorremos o sistema na ordem do menu —
+do acesso ao app no campo.
+
+2
+00:00:06,000 --> 00:00:11,000
+Controle de acesso por perfil —
+Administrador, Planejamento, Operação e Consulta,
+cada um só no que lhe compete.
+
+3
+00:00:11,000 --> 00:00:15,000
+Entrega visibilidade: armazenamento local,
+nuvem e indicadores num painel só.
+
+4
+00:00:15,000 --> 00:00:20,000
+Entrega cadastro de fornecedores reutilizável
+em NF, recebimento e auditoria — com CSV.
+
+5
+00:00:20,000 --> 00:00:24,000
+Entrega rasto de pessoas: quem opera
+e quem retira material, sempre identificado.
+
+6
+00:00:24,000 --> 00:00:30,000
+Entrega um catálogo mestre — código, disciplina,
+código de barras — que alimenta todo o resto.
+
+7
+00:00:30,000 --> 00:00:33,000
+Entrega planeamento por documento:
+necessidade em linhas até virar consumo na obra.
+
+8
+00:00:33,000 --> 00:00:37,000
+Entrada formal: NF, romaneio e itens
+ligados ao estoque que a operação usa.
+
+9
+00:00:37,000 --> 00:00:40,000
+Entrega trava de qualidade: stock só conta
+depois da conferência — menos divergência.
+
+10
+00:00:40,000 --> 00:00:44,000
+Entrega etiqueta coerente com o sistema —
+o que está no armazém lê-se igual no campo.
+
+11
+00:00:44,000 --> 00:00:49,000
+Entrega baixa por documento: leitor USB,
+lotes e histórico de cada retirada.
+
+12
+00:00:49,000 --> 00:00:52,000
+Entrega comprovante: recibo para arquivo,
+impressão e auditoria.
+
+13
+00:00:52,000 --> 00:00:56,000
+Entrega inventário rotativo ou geral,
+com contagem no celular integrada ao desktop.
+
+14
+00:00:56,000 --> 00:01:00,000
+Entrega registo de equipamentos
+ligado à operação e ao património, quando precisa.
+
+15
+00:01:00,000 --> 00:01:04,000
+Entrega RIR: inspeção de recebimento
+amarrada à NF e às listas do processo.
+
+16
+00:01:04,000 --> 00:01:08,000
+Entrega relatório de inspeção
+pronto para arquivo e impressão.
+
+17
+00:01:08,000 --> 00:01:12,000
+Entrega RNC: não conformidade ligada à NF,
+com evidências guardadas.
+
+18
+00:01:12,000 --> 00:01:17,000
+Entrega relatório de NC para fornecedor,
+arquivo interno e trilha de auditoria.
+
+19
+00:01:17,000 --> 00:01:20,000
+Entrega indicadores e exportações gerenciais
+num painel resumido.
+
+20
+00:01:20,000 --> 00:01:25,000
+Entrega evidência fotográfica ligada a NF
+e romaneio — junto ao recebimento.
+
+21
+00:01:25,000 --> 00:01:29,000
+Entrega documento em HTML com fotos —
+obra, arquivo e partilha.
+
+22
+00:01:29,000 --> 00:01:33,000
+Entrega governação de dispositivos:
+autorizar, bloquear ou revogar o acesso ao dado.
+
+23
+00:01:33,000 --> 00:01:38,000
+Entrega o mesmo dado no terreno —
+documentos, conferência, atendimento e inventário,
+sem re-digitacão.
+
+24
+00:01:38,000 --> 00:01:43,000
+Entrega contas e permissões: perfis ativos
+ou inativos e responsabilização por ação.
+
+25
+00:01:43,000 --> 00:01:46,000
+Entrega controlo de licenças:
+validade e máquina identificada.
+
+26
+00:01:46,000 --> 00:01:51,000
+Entrega central de parâmetros: tema,
+numeração, projeto e integrações num só sítio.
+
+27
+00:01:51,000 --> 00:01:56,000
+Entrega escolha de interface: Neon e azul;
+Verde e Claro — o que a equipa preferir.
+
+28
+00:01:56,000 --> 00:02:03,000
+Resumo: escritório e obra no mesmo sistema —
+material rastreado, comprovado e pronto para auditar.

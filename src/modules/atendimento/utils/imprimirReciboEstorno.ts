@@ -1,10 +1,22 @@
-import { abrirImpressaoHtmlRelatorio, cssInstitucionalRelatorio, escapeHtmlRelatorio, htmlBlocoLogoInstitucional } from '../../../lib/htmlRelatorioInstitucional';
+import {
+  abrirImpressaoHtmlRelatorio,
+  cssBarraPreVisualizacaoImpressaoHtml,
+  cssInstitucionalRelatorio,
+  escapeHtmlRelatorio,
+  htmlBarraPreVisualizacaoImpressao,
+  htmlBlocoLogoInstitucional,
+  segmentoInstituicaoRodapeEletronico,
+  scriptBarraPreVisualizacaoImpressao,
+} from '../../../lib/htmlRelatorioInstitucional';
+import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { DadosReciboEstorno } from '../types/atendimento.types';
 
 export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   const at = dados.atendimento;
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso(dados.logoUrl);
+  const cfgR = readConfiguracoes();
+  const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfgR.documentoRodapeNome, cfgR.documentoRodapeCnpj);
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const dataAtendFmt = (() => {
     try {
@@ -21,6 +33,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
       (it, idx) =>
         `<tr>
           <td>${idx + 1}</td>
+          <td>${escapeHtmlRelatorio((it.documentoNumero?.trim() || at.documentoNumero || '—').trim())}</td>
           <td>${escapeHtmlRelatorio(it.codigoMaterial)}</td>
           <td>${escapeHtmlRelatorio(it.descricaoMaterial)}</td>
           <td>${escapeHtmlRelatorio(it.unidade)}</td>
@@ -40,6 +53,16 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
     @media print {
       .assinaturas { margin-top: 28px; }
     }
+    .estorno-doc-foot {
+      margin-top: 18px;
+      padding-top: 10px;
+      border-top: 1px solid #cbd5e1;
+      font-size: 8pt;
+      color: #64748b;
+      line-height: 1.45;
+      text-align: center;
+      page-break-inside: avoid;
+    }
   `;
 
   return `<!DOCTYPE html>
@@ -49,10 +72,12 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   <title>Estorno ${escapeHtmlRelatorio(at.numero)}</title>
   <style>
     ${cssInstitucionalRelatorio()}
+    ${cssBarraPreVisualizacaoImpressaoHtml()}
     ${extraEstorno}
   </style>
 </head>
 <body>
+  ${htmlBarraPreVisualizacaoImpressao()}
   <div class="inst-topbar">
     <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
     <span>Estorno ${escapeHtmlRelatorio(at.numero)}</span>
@@ -104,6 +129,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
       <thead>
         <tr>
           <th>#</th>
+          <th>Documento</th>
           <th>Codigo</th>
           <th>Descricao</th>
           <th>UN</th>
@@ -126,6 +152,8 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
       <p class="nome-ass">${escapeHtmlRelatorio(dados.nomeQuemDevolve)}</p>
     </div>
   </section>
+  <p class="estorno-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: estorno ${escapeHtmlRelatorio(at.numero)}.</p>
+  ${scriptBarraPreVisualizacaoImpressao()}
 </body>
 </html>`;
 }

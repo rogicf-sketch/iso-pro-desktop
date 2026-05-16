@@ -1,3 +1,6 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { parseAuthAuditEventsList } from '../schemas/authAuditLocal.zod';
+
 type AuthAuditEventType =
   | 'login_success'
   | 'login_failure'
@@ -17,7 +20,17 @@ type AuthAuditEventType =
   | 'recebimento_excluido_definitivamente'
   | 'recebimento_destravado_correcao'
   | 'recebimentos_excluidos_definitivamente'
-  | 'materiais_excluidos_definitivamente';
+  | 'materiais_excluidos_definitivamente'
+  | 'materiais_copia_local_desde_nuvem'
+  | 'rir_destravado_correcao'
+  | 'planejamento_limpeza_codigos_persistida'
+  | 'planejamento_limpeza_codigos_bloqueada'
+  | 'fabrica_backup_pacote_descarregado'
+  | 'fabrica_limpeza_local_executada'
+  | 'purga_nuvem_operacional_executada'
+  | 'purga_nuvem_com_utilizadores_executada'
+  | 'limpeza_cadastros_local_executada'
+  | 'limpeza_cadastros_nuvem_executada';
 
 export type AuthAuditEvent = {
   id: string;
@@ -28,19 +41,37 @@ export type AuthAuditEvent = {
   createdAt: string;
 };
 
-const AUTH_AUDIT_STORAGE_KEY = 'iso-pro-desktop-auth-audit';
+const AUTH_AUDIT_STORAGE_KEY_BASE = 'iso-pro-desktop-auth-audit';
+
+function authAuditStorageKey(): string {
+  return getScopedIsoProStorageKey(AUTH_AUDIT_STORAGE_KEY_BASE);
+}
+
+export function getAuthAuditStorageKey(): string {
+  return authAuditStorageKey();
+}
+
 const MAX_AUDIT_ITEMS = 300;
 
 function readAuditEvents(): AuthAuditEvent[] {
-  const raw = localStorage.getItem(AUTH_AUDIT_STORAGE_KEY);
+  const raw = localStorage.getItem(authAuditStorageKey());
   if (!raw) return [];
 
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as AuthAuditEvent[];
+    parsed = JSON.parse(raw);
   } catch {
-    localStorage.removeItem(AUTH_AUDIT_STORAGE_KEY);
+    localStorage.removeItem(authAuditStorageKey());
     return [];
   }
+
+  const events = parseAuthAuditEventsList(parsed);
+  if (events === null) {
+    localStorage.removeItem(authAuditStorageKey());
+    return [];
+  }
+
+  return events;
 }
 
 export function appendAuthAuditEvent(event: Omit<AuthAuditEvent, 'id' | 'createdAt'>) {
@@ -52,7 +83,7 @@ export function appendAuthAuditEvent(event: Omit<AuthAuditEvent, 'id' | 'created
   };
 
   const nextItems = [nextItem, ...items].slice(0, MAX_AUDIT_ITEMS);
-  localStorage.setItem(AUTH_AUDIT_STORAGE_KEY, JSON.stringify(nextItems));
+  localStorage.setItem(authAuditStorageKey(), JSON.stringify(nextItems));
 }
 
 export function listAuthAuditEvents(limit = 20) {

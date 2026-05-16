@@ -27,4 +27,13 @@ describe('recebimentoCorrespondeBuscaInteligente', () => {
   it('segmento da NF (ex.: trecho apos hifen)', () => {
     expect(recebimentoCorrespondeBuscaInteligente(rec({ notaFiscal: 'AQ-3-BT-232' }), '232')).toBe(true);
   });
+
+  it('nao confunde duas NFs so porque ambas comecam com NF-', () => {
+    expect(recebimentoCorrespondeBuscaInteligente(rec({ notaFiscal: 'NF-692144' }), 'NF-742197')).toBe(false);
+    expect(recebimentoCorrespondeBuscaInteligente(rec({ notaFiscal: 'NF-692144' }), 'nf-742197')).toBe(false);
+  });
+
+  it('ainda encontra a NF exata digitada', () => {
+    expect(recebimentoCorrespondeBuscaInteligente(rec({ notaFiscal: 'NF-742197' }), 'NF-742197')).toBe(true);
+  });
 });

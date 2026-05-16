@@ -21,6 +21,10 @@ electron/.dev-main.mjs.map
 .env
 .env.local
 !.env.example
+scripts/deploy-web.env
+
+# Export manual do snapshot (npm run snapshot:export)
+backups
 
 # Editor directories and files
 .vscode/*

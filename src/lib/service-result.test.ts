@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IsoProSnapshotConflictError } from './isoProSnapshot';
+import * as writePolicy from './writePolicy';
 import {
   executeWrite,
   getErrorMessage,
   isSnapshotConflictResult,
+  isWriteBlockedResult,
   withLocalFallback,
 } from './service-result';
 
@@ -15,6 +17,17 @@ describe('service-result', () => {
 
     it('usa fallback para valor nao-Error', () => {
       expect(getErrorMessage(null, 'fallback')).toBe('fallback');
+    });
+  });
+
+  describe('isWriteBlockedResult', () => {
+    it('retorna true quando falha e writeBlocked', () => {
+      expect(isWriteBlockedResult({ success: false, meta: { writeBlocked: true } })).toBe(true);
+    });
+
+    it('retorna false quando sucesso ou sem flag', () => {
+      expect(isWriteBlockedResult({ success: true, meta: { writeBlocked: true } })).toBe(false);
+      expect(isWriteBlockedResult({ success: false, meta: {} })).toBe(false);
     });
   });
 
@@ -94,6 +107,22 @@ describe('service-result', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('rede');
       expect(result.meta?.snapshotConflict).toBe(false);
+    });
+
+    it('bloqueia gravacao local quando politica de producao exige Supabase', async () => {
+      const spy = vi.spyOn(writePolicy, 'isBusinessLocalWriteBlocked').mockReturnValue(true);
+      const writeLocal = vi.fn();
+      const result = await executeWrite({
+        shouldWriteRemote: false,
+        writeRemote: vi.fn(),
+        writeLocal,
+        successData: { id: '1' },
+        fallbackMessage: 'erro',
+      });
+      spy.mockRestore();
+      expect(writeLocal).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.meta?.writeBlocked).toBe(true);
     });
   });
 

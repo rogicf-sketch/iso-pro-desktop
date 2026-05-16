@@ -1,0 +1,76 @@
+I.S.O PRO — Site no domínio (Oracle Cloud) + Supabase (como hoje)
+================================================================
+
+O backend continua no Supabase. A VM na Oracle só serve o build estático
+(HTML/JS/CSS) do comando `npm run build:web` na pasta `dist/`.
+
+A) NA SUA MÁQUINA (Windows)
+---------------------------
+1. Na pasta iso-pro-desktop, copie `.env` para valores de PRODUÇÃO
+   (VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY — anon é pública no cliente).
+2. npm ci
+3. npm run build:web
+4. Envie a pasta `dist/` inteira para a VM (SCP, WinSCP, FileZilla SFTP, etc.)
+
+B) VM ORACLE (Ubuntu de exemplo)
+---------------------------------
+1. Compute → instância → IP público. Security List / NSG: TCP 22, 80, 443 abertos.
+2. sudo mkdir -p /var/www/iso-pro
+3. Copie o conteúdo de dist/ para /var/www/iso-pro (index.html + pasta assets).
+4. sudo apt update && sudo apt install -y nginx
+5. Copie nginx-isopro.conf para /etc/nginx/sites-available/isopro e ative o site
+   (ver comentários no topo do ficheiro .conf).
+6. sudo apt install -y certbot python3-certbot-nginx
+7. sudo certbot --nginx -d isoprogestaodemateriais.com.br -d www.isoprogestaodemateriais.com.br
+
+C) REGISTRO.BR (DNS)
+--------------------
+No painel do domínio, aponte para o IP público da VM:
+- Tipo A, nome @ ou vazio → IP da Oracle
+- Tipo A, nome www → mesmo IP (ou CNAME www → isoprogestaodemateriais.com.br)
+
+Aguarde a propagação DNS (minutos a algumas horas) antes do Certbot.
+
+D) NOTA SOBRE O .EXE
+--------------------
+O executável Electron continua a ser gerado com npm run dist:win (ou pack).
+Não substitui o site; o site é opcional para acesso pelo browser.
+
+E) ORDEM RECOMENDADA (evita falhas no Certbot)
+----------------------------------------------
+1. Criar a VM na Oracle (shape pequeno chega para site estático).
+2. Anotar o IPv4 público da instância.
+3. No registro.br → DNS da zona → apontar @ e www para esse IP (registos A).
+4. No PC: nslookup isoprogestaodemateriais.com.br
+   → tem de devolver o IP da VM antes de seguir.
+5. Security List / NSG da subnet da VM: entrada TCP 22 (SSH), 80, 443 a partir de 0.0.0.0/0.
+6. Enviar dist/ para /var/www/iso-pro na VM (WinSCP/FileZilla: SFTP, utilizador ubuntu ou opc).
+7. Enviar nginx-isopro.conf para /tmp/nginx-isopro.conf na VM.
+8. Na VM: chmod +x setup-vm.sh && ./setup-vm.sh
+   (ou seguir passos B manualmente).
+9. Certbot (HTTPS) só depois do passo 4 estar OK.
+
+F) ORACLE — onde clicar (resumo)
+---------------------------------
+Menu (☰) → Compute → Instances → Create instance.
+- Image: Canonical Ubuntu 22.04 ou 24.04.
+- Colocar a VM na subnet pública (com gateway e IP público).
+- Download da chave .ssh para entrar: ssh -i chave.pem ubuntu@IP
+
+G) REGISTRO.BR — DNS (nomes usuais no painel)
+---------------------------------------------
+Zona DNS / Editar zona / Adicionar registo:
+- Tipo A, Nome em branco ou @ → IPv4 da Oracle.
+- Tipo A, Nome www → mesmo IPv4.
+(Guardar / publicar alterações conforme o painel.)
+
+H) Se o Certbot falhar "connection refused" na porta 80
+--------------------------------------------------------
+- Confirme regra de entrada 80 na Security List da VNIC.
+- sudo systemctl status nginx
+- curl -I http://127.0.0.1/ na própria VM (deve responder 200 ou 304).
+
+I) Atualizar o site depois de mudanças no código
+-------------------------------------------------
+No PC: npm run build:web de novo → substituir ficheiros em /var/www/iso-pro na VM
+(não precisa de voltar a correr o Certbot).

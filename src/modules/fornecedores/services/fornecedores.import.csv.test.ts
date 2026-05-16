@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { montarModeloCsvImportacaoDocumentos } from '../../documentos/services/documentos.service';
 import {
   fornecedorRowToFormData,
   montarModeloCsvImportacaoFornecedores,
@@ -21,6 +22,15 @@ describe('previewImportacaoFornecedoresCsv', () => {
     expect(p.ok).toBe(true);
     if (!p.ok) return;
     expect(p.linhaCount).toBe(2);
+  });
+
+  it('recusa cabecalho de documentos', () => {
+    const { csv } = montarModeloCsvImportacaoDocumentos();
+    const p = previewImportacaoFornecedoresCsv(csv);
+    expect(p.ok).toBe(false);
+    if (p.ok) return;
+    expect(p.error).toMatch(/Documentos/);
+    expect(p.error).toMatch(/Fornecedores/);
   });
 });
 

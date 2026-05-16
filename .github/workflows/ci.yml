@@ -1,5 +1,5 @@
-# CI sem certificado: typecheck, testes, lint, build (Vite + Electron), ícone Windows, auditoria (lista B).
-# Local (mesma sequência): npm run ci
+# CI sem certificado: typecheck, testes, lint, build (Vite + Electron), ícone Windows, smoke E2E web (Playwright), auditoria (lista B).
+# Local (qualidade): npm run ci — smoke web: npm run build:web && npm run test:e2e
 
 name: CI
 
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -46,8 +46,14 @@ jobs:
       - name: Build (Vite + Electron main/preload)
         run: npm run build:app
 
-      - name: Build Windows icon (sharp + png-to-ico)
+      - name: Build Windows icon (sharp + png2icons)
         run: npm run build:icon
+
+      - name: Install Playwright (Chromium)
+        run: npx --yes @playwright/test@1.57.0 install --with-deps chromium
+
+      - name: E2E smoke (Vite preview)
+        run: npx --yes @playwright/test@1.57.0 test
 
       - name: Audit dependencies (falha em high+)
         run: npm audit --audit-level=high

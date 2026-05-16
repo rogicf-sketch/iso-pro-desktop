@@ -5,6 +5,11 @@ export type DocumentoItem = {
   unidade: string;
   quantidadeProjeto: number;
   quantidadeAtendida: number;
+  /**
+   * Onde buscar o material no estoque (texto livre). Pode listar varias posicoes (ex.: uma linha por endereco ou separar com `;`).
+   * So existe no planejamento por desenho; nao altera recebimentos nem cadastro de materiais.
+   */
+  localizacao?: string;
 };
 
 export type Documento = {

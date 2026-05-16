@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
 import { compressImageFileToJpeg } from '../../../lib/imageCompress';
+import { mediaBlobDelete } from '../../../lib/mediaBlobStore';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
+import { sugerirCodigoRirParaRecebimento } from '../../qualidade/services/qualidade.service';
 import { listarRecebimentos } from '../../recebimentos/services/recebimentos.service';
 import type { RecebimentoListItem } from '../../recebimentos/types/recebimento.types';
 import {
@@ -14,7 +18,12 @@ import {
   carregarRelatorioFotografico,
   createEmptyRelatorioFotograficoPayload,
   ensureNumeroRelatorioFotografico,
+  estimativaBytesPayloadRelatorioFotografico,
+  estimativaBytesTodoLocalStorageAposGravar,
+  hydrateRelatorioFotograficoPayload,
+  mapRecebimentoParaRelatoriosFotograficosSalvos,
   registrarRelatorioFotograficoGerado,
+  relatorioFotoBlobKey,
   salvarRelatorioFotografico,
   salvarRelatorioFotograficoLocalApenas,
 } from '../services/relatorioFotografico.service';
@@ -28,6 +37,12 @@ function labelRecebimento(r: RecebimentoListItem): string {
 }
 
 /** Cliente, Projeto e Local vêm sempre das Configurações — mesma base do logo. */
+function formatBytesPt(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function mergeObraFromConfig(p: RelatorioFotograficoPayload): RelatorioFotograficoPayload {
   const c = readConfiguracoes();
   return {
@@ -40,6 +55,7 @@ function mergeObraFromConfig(p: RelatorioFotograficoPayload): RelatorioFotografi
 
 export function RelatorioFotograficoPage() {
   const { reportId } = useParams<{ reportId: string }>();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { canAccessAction } = useAuth();
   const canEdit = canAccessAction('relatorios', 'editar');
@@ -54,6 +70,17 @@ export function RelatorioFotograficoPage() {
   const [recebimentos, setRecebimentos] = useState<RecebimentoListItem[]>([]);
   const [compressing, setCompressing] = useState(false);
   const [cfgView, setCfgView] = useState(() => readConfiguracoes());
+  /** Preferir NFs sem RF já gravado (ligado por defeito em relatório novo). */
+  const [somenteSemRf, setSomenteSemRf] = useState(true);
+  const [nfDropdownOpen, setNfDropdownOpen] = useState(false);
+  const [rfCatalogVersion, setRfCatalogVersion] = useState(0);
+  const somenteSemRfInitRef = useRef<string | null>(null);
+
+  const bytesRelatorio = useMemo(() => estimativaBytesPayloadRelatorioFotografico(payload), [payload]);
+  const bytesLsAposGravar = useMemo(() => {
+    const rid = reportId?.trim() ?? '';
+    return estimativaBytesTodoLocalStorageAposGravar(rid, payload);
+  }, [payload, reportId]);
 
   const load = useCallback(async () => {
     if (!reportId?.trim()) return;
@@ -66,6 +93,7 @@ export function RelatorioFotograficoPage() {
       return;
     }
     setPayload(mergeObraFromConfig(result.data));
+    setRfCatalogVersion((v) => v + 1);
     const src = result.meta?.source === 'supabase' ? 'Nuvem (Supabase)' : 'Local';
     const fr = result.meta?.fallbackReason;
     setSyncMeta(fr ? `${src} — ${fr}` : src);
@@ -82,6 +110,87 @@ export function RelatorioFotograficoPage() {
       return { data: res.data };
     }).then(setRecebimentos);
   }, []);
+
+  useEffect(() => {
+    if (loading) {
+      somenteSemRfInitRef.current = null;
+      return;
+    }
+    const rid = reportId?.trim();
+    if (!rid) return;
+    if (somenteSemRfInitRef.current === rid) return;
+    somenteSemRfInitRef.current = rid;
+    const nuncaSalvo = (Date.parse(payload.salvoEm) || 0) <= 0;
+    setSomenteSemRf(nuncaSalvo);
+  }, [loading, reportId, payload.salvoEm]);
+
+  const rfPorRecebimento = useMemo(() => {
+    void rfCatalogVersion;
+    return mapRecebimentoParaRelatoriosFotograficosSalvos();
+  }, [rfCatalogVersion]);
+
+  const outrosRfNoRecebimento = useCallback(
+    (recebimentoId: string) => {
+      const rid = recebimentoId.trim();
+      const curId = reportId?.trim() ?? '';
+      if (!rid) return [];
+      return (rfPorRecebimento.get(rid) ?? []).filter((x) => x.reportId !== curId);
+    },
+    [rfPorRecebimento, reportId],
+  );
+
+  const recebimentosMatchNf = useMemo(() => {
+    const q = payload.notaFiscal.trim().toLowerCase();
+    let list = recebimentos.filter((r) => {
+      if (!q) return true;
+      const blob = `${r.notaFiscal ?? ''} ${r.fornecedor ?? ''} ${r.romaneio ?? ''} ${r.dataRecebimento ?? ''}`.toLowerCase();
+      return blob.includes(q);
+    });
+    if (somenteSemRf) {
+      list = list.filter((r) => outrosRfNoRecebimento(r.id).length === 0);
+    }
+    return list.slice(0, 40);
+  }, [recebimentos, payload.notaFiscal, somenteSemRf, outrosRfNoRecebimento]);
+
+  const avisoRfDuplicado = useMemo(() => {
+    const rid = payload.recebimentoId?.trim();
+    if (!rid) return [];
+    return outrosRfNoRecebimento(rid);
+  }, [payload.recebimentoId, outrosRfNoRecebimento]);
+
+  function aplicarRecebimentoDaLista(r: RecebimentoListItem) {
+    setMsg(null);
+    setPayload((prev) => ({
+      ...mergeObraFromConfig(prev),
+      recebimentoId: r.id,
+      recebimentoLabel: labelRecebimento(r),
+      notaFiscal: r.notaFiscal?.trim() ?? '',
+      fornecedor: r.fornecedor?.trim() ?? '',
+      romaneio: r.romaneio?.trim() ?? '',
+    }));
+    setNfDropdownOpen(false);
+  }
+
+  function haConteudoDigitado(): boolean {
+    return Boolean(
+      payload.titulo.trim() ||
+        payload.notaFiscal.trim() ||
+        payload.recebimentoId.trim() ||
+        payload.fotos.length > 0 ||
+        payload.observacoes.trim() ||
+        payload.rirCodigo.trim(),
+    );
+  }
+
+  function voltarParaLista() {
+    if (allowEdit && haConteudoDigitado()) {
+      const ok = window.confirm(
+        'Voltar à lista de relatórios? Se ainda não salvou, o que digitou neste ecrã pode ser perdido.',
+      );
+      if (!ok) return;
+    }
+    navigate('/relatorio-fotografico');
+  }
 
   /** Atualiza texto de obra/projeto e payload quando volta das Configurações. */
   useEffect(() => {
@@ -132,6 +241,28 @@ export function RelatorioFotograficoPage() {
     });
   }, [recebimentos]);
 
+  /** Quando o recebimento está vinculado e o campo RIR vazio, sugere o código do RIR do módulo Qualidade (mesmo recebimento). */
+  useEffect(() => {
+    const rid = payload.recebimentoId?.trim() ?? '';
+    if (!rid) return;
+    if (payload.rirCodigo.trim()) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await sugerirCodigoRirParaRecebimento(rid);
+      if (cancelled) return;
+      const codigoSugerido = res.success ? res.data?.trim() ?? '' : '';
+      if (!codigoSugerido) return;
+      setPayload((p) => {
+        const m = mergeObraFromConfig(p);
+        if (m.recebimentoId.trim() !== rid || m.rirCodigo.trim()) return m;
+        return { ...m, rirCodigo: codigoSugerido };
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [payload.recebimentoId, payload.rirCodigo]);
+
   const onDescartar = async () => {
     if (!allowEdit || !reportId?.trim()) return;
     setLoading(true);
@@ -166,6 +297,29 @@ export function RelatorioFotograficoPage() {
     const fr = result.meta?.fallbackReason;
     setMsg({ tone: 'ok', text: fr ? `Salvo localmente. ${fr}` : `Salvo (${src}).` });
     setSyncMeta(fr ? `Local — ${fr}` : src === 'Nuvem' ? 'Nuvem (Supabase)' : 'Local');
+    setRfCatalogVersion((v) => v + 1);
+  };
+
+  const onPreviewDocumento = async () => {
+    setMsg(null);
+    try {
+      const ready = await hydrateRelatorioFotograficoPayload(mergeObraFromConfig(payload));
+      const html = montarHtmlRelatorioFotografico(ready);
+      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      if (!res.ok) {
+        setMsg({
+          tone: 'err',
+          text:
+            res.error ??
+            'Não foi possível abrir a pré-visualização. Permita pop-ups ou use «Imprimir / PDF».',
+        });
+      }
+    } catch {
+      setMsg({
+        tone: 'err',
+        text: 'Falha ao montar a pré-visualização.',
+      });
+    }
   };
 
   const onPrint = async () => {
@@ -176,14 +330,15 @@ export function RelatorioFotograficoPage() {
     const base = mergeObraFromConfig(payload);
     const withNum = ensureNumeroRelatorioFotografico(base);
     setPayload(withNum);
-    const html = montarHtmlRelatorioFotografico(withNum);
+    const ready = await hydrateRelatorioFotograficoPayload(withNum);
+    const html = montarHtmlRelatorioFotografico(ready);
     const ok = imprimirRelatorioFotograficoHtml(html);
     if (!ok) {
       setMsg({ tone: 'err', text: 'O navegador bloqueou a janela de impressao.' });
       return;
     }
     if (allowEdit) {
-      const reg = await registrarRelatorioFotograficoGerado(withNum);
+      const reg = await registrarRelatorioFotograficoGerado(ready);
       if (reg.success && reg.data) setPayload(mergeObraFromConfig(reg.data));
     }
   };
@@ -200,7 +355,12 @@ export function RelatorioFotograficoPage() {
     try {
       for (const file of Array.from(files)) {
         if (next.length >= MAX_FOTOS) break;
-        const out = await compressImageFileToJpeg(file);
+        const out = await compressImageFileToJpeg(file, {
+          maxEdgePx: 1440,
+          maxBytes: 420 * 1024,
+          initialQuality: 0.76,
+          minQuality: 0.42,
+        });
         if (!out) {
           setMsg({ tone: 'info', text: 'Alguns ficheiros nao sao imagens suportadas (ex.: HEIC).' });
           continue;
@@ -244,7 +404,12 @@ export function RelatorioFotograficoPage() {
   };
 
   const removeFoto = async (fotoId: string) => {
-    if (!allowEdit) return;
+    if (!allowEdit || !reportId?.trim()) return;
+    try {
+      await mediaBlobDelete(relatorioFotoBlobKey(reportId.trim(), fotoId));
+    } catch {
+      /* blob pode já não existir */
+    }
     const merged = mergeObraFromConfig(payload);
     const next = { ...merged, fotos: merged.fotos.filter((f) => f.id !== fotoId) };
     setPayload(next);
@@ -272,7 +437,18 @@ export function RelatorioFotograficoPage() {
           <div className="panel-toolbar__group" role="group" aria-label="Navegacao">
             <span className="panel-toolbar__label">Navegação</span>
             <div className="panel-toolbar__buttons">
-              <Link className="ghost-button" to="/relatorio-fotografico">
+              <button className="ghost-button" onClick={() => voltarParaLista()} type="button">
+                Voltar à lista
+              </button>
+              <Link className="ghost-button" to="/relatorio-fotografico" onClick={(e) => {
+                if (allowEdit && haConteudoDigitado()) {
+                  const ok = window.confirm(
+                    'Ir para a lista? Se ainda não salvou, o que digitou neste ecrã pode ser perdido.',
+                  );
+                  if (!ok) e.preventDefault();
+                }
+              }}
+              >
                 Lista de relatórios
               </Link>
               <Link className="ghost-button" to="/relatorios">
@@ -296,6 +472,9 @@ export function RelatorioFotograficoPage() {
           <div className="panel-toolbar__group" role="group" aria-label="Impressao">
             <span className="panel-toolbar__label">Saída</span>
             <div className="panel-toolbar__buttons">
+              <Button disabled={loading} onClick={() => void onPreviewDocumento()} type="button" variant="ghost">
+                Visualizar
+              </Button>
               <Button disabled={loading} onClick={() => void onPrint()} type="button" variant="ghost">
                 Imprimir / PDF
               </Button>
@@ -304,21 +483,25 @@ export function RelatorioFotograficoPage() {
         </div>
       </div>
 
-      <p className="panel-copy">
-        {viewOnly ? (
-          <>
-            Modo <strong>visualização</strong>. Use <strong>Imprimir / PDF</strong> se precisar; para alterar dados ou fotos volte à lista e
-            escolha <strong>Editar</strong>.
-          </>
-        ) : (
-          <>
-            Digite a <strong>nota fiscal</strong> do recebimento e saia do campo (ou Enter) para preencher <strong>fornecedor</strong> e{' '}
-            <strong>romaneio</strong> automaticamente. <strong>Cliente</strong>, <strong>projeto</strong> e <strong>local</strong> seguem as{' '}
-            <strong>Configurações</strong> (mesma base do logo). O <strong>número do relatório</strong> é gerado ao salvar ou imprimir. A
-            remoção de fotos é gravada logo no armazenamento local. Impressão: até 4 fotos por página; legenda opcional por foto.
-          </>
-        )}
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          {viewOnly ? (
+            <>
+              Modo <strong>visualização</strong>. Use <strong>Visualizar</strong> para ver o relatório como na impressão, ou{' '}
+              <strong>Imprimir / PDF</strong> para o diálogo de impressão. Para alterar dados ou fotos volte à lista e escolha{' '}
+              <strong>Editar</strong>.
+            </>
+          ) : (
+            <>
+              Digite ou escolha a <strong>nota fiscal</strong> na lista — preenchem-se <strong>fornecedor</strong> e <strong>romaneio</strong>.
+              Por defeito só aparecem recebimentos <strong>sem relatório fotográfico gravado</strong> (desmarque para ver todas as NFs). Use{' '}
+              <strong>Voltar à lista</strong> ou <strong>Lista de relatórios</strong> para sair sem obrigação de salvar (confirmação se já
+              digitou algo). <strong>Cliente</strong>, <strong>projeto</strong> e <strong>local</strong> vêm das <strong>Configurações</strong>.
+              O <strong>número do relatório</strong> é gerado ao salvar ou imprimir. Impressão: até 4 fotos por página.
+            </>
+          )}
+        </p>
+      </ModuleHelp>
 
       {syncMeta ? (
         <p className="panel-copy" style={{ fontSize: 13 }}>
@@ -351,24 +534,91 @@ export function RelatorioFotograficoPage() {
           value={payload.titulo}
         />
 
-        <Input
-          disabled={!allowEdit}
-          label="Nota fiscal — digite e pressione Enter ou clique fora para localizar o recebimento"
-          onBlur={() => resolverNotaFiscal()}
-          onChange={(e) => setPayload((prev) => ({ ...mergeObraFromConfig(prev), notaFiscal: e.target.value }))}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
+        {allowEdit ? (
+          <label className="rir-rec-filter">
+            <input
+              checked={somenteSemRf}
+              onChange={(e) => setSomenteSemRf(e.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              Mostrar apenas recebimentos <strong>sem relatório fotográfico gravado</strong> (evita duplicar). Desmarque para listar todas as
+              NFs.
+            </span>
+          </label>
+        ) : null}
+
+        <div className="rir-rec-wrap">
+          <Input
+            disabled={!allowEdit}
+            label="Nota fiscal — digite, escolha na lista ou Enter / clique fora para localizar"
+            onBlur={() => {
               resolverNotaFiscal();
-            }
-          }}
-          value={payload.notaFiscal}
-        />
+              window.setTimeout(() => setNfDropdownOpen(false), 180);
+            }}
+            onChange={(e) => {
+              setPayload((prev) => ({ ...mergeObraFromConfig(prev), notaFiscal: e.target.value }));
+              setNfDropdownOpen(true);
+            }}
+            onFocus={() => allowEdit && setNfDropdownOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                resolverNotaFiscal();
+                setNfDropdownOpen(false);
+              }
+              if (e.key === 'Escape') setNfDropdownOpen(false);
+            }}
+            value={payload.notaFiscal}
+          />
+          {allowEdit && nfDropdownOpen && recebimentos.length > 0 && recebimentosMatchNf.length === 0 && payload.notaFiscal.trim() ? (
+            <div className="rir-rec-dropdown rir-rec-dropdown--empty" role="status">
+              Nenhum recebimento corresponde
+              {somenteSemRf ? ' com o filtro «sem RF». Desmarque o filtro ou altere o texto.' : '.'}
+            </div>
+          ) : null}
+          {allowEdit && nfDropdownOpen && recebimentosMatchNf.length > 0 ? (
+            <div className="rir-rec-dropdown" role="listbox">
+              {recebimentosMatchNf.map((r) => {
+                const jaRf = outrosRfNoRecebimento(r.id).length > 0;
+                return (
+                  <button
+                    className={`rir-rec-option${jaRf ? ' rir-rec-option--ja-rir' : ''}`}
+                    key={r.id}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => aplicarRecebimentoDaLista(r)}
+                    type="button"
+                  >
+                    <span className="rir-rec-option-label">{labelRecebimento(r)}</span>
+                    {jaRf ? <span className="rir-rec-option-badge">Já tem RF</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
 
         {payload.recebimentoId ? (
-          <p className="panel-copy" style={{ marginTop: -4 }}>
-            <strong>Recebimento vinculado:</strong> {payload.recebimentoLabel}
-          </p>
+          <>
+            <p className="panel-copy" style={{ marginTop: -4 }}>
+              <strong>Recebimento vinculado:</strong> {payload.recebimentoLabel}
+            </p>
+            {avisoRfDuplicado.length > 0 ? (
+              <div className="rir-duplicado-banner" role="status">
+                <p>
+                  <strong>Atenção:</strong> já existe relatório fotográfico neste computador para o mesmo recebimento:{' '}
+                  {avisoRfDuplicado.map((x) => x.numeroRelatorio.trim() || x.titulo).join(', ')}. Evite duplicar salvo exceção documentada.
+                </p>
+                <div className="rir-duplicado-banner-actions">
+                  {avisoRfDuplicado.map((x) => (
+                    <Link className="ghost-button" key={x.reportId} to={`/relatorio-fotografico/editar/${x.reportId}`}>
+                      Abrir {x.numeroRelatorio.trim() || x.titulo}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
@@ -392,9 +642,11 @@ export function RelatorioFotograficoPage() {
           <p style={{ margin: '4px 0' }}>
             <strong>Local:</strong> {cfgView.local.trim() || '—'}
           </p>
-          <p className="panel-copy" style={{ marginTop: 8, marginBottom: 0 }}>
-            Os mesmos campos de <strong>Configurações</strong> usados no contexto do logo. Altere-os lá para atualizar aqui e na impressão.
-          </p>
+          <ModuleHelp>
+            <p className="panel-copy" style={{ marginTop: 8, marginBottom: 0 }}>
+              Os mesmos campos de <strong>Configurações</strong> usados no contexto do logo. Altere-os lá para atualizar aqui e na impressão.
+            </p>
+          </ModuleHelp>
         </div>
 
         <Input
@@ -403,6 +655,14 @@ export function RelatorioFotograficoPage() {
           onChange={(e) => setPayload((prev) => ({ ...mergeObraFromConfig(prev), rirCodigo: e.target.value }))}
           value={payload.rirCodigo}
         />
+        <ModuleHelp>
+          <p className="panel-copy" style={{ marginTop: 4, fontSize: 12, lineHeight: 1.45 }}>
+            Com o <strong>recebimento vinculado</strong> (NF localizada), se existir RIR em Qualidade para a mesma NF/recebimento e este
+            campo estiver vazio, o <strong>código do RIR</strong> é preenchido automaticamente — prioridade: estado{' '}
+            <strong>Tratado</strong> (relatório pronto), depois <strong>Em análise</strong>, depois <strong>Aberto</strong>; o mais recente
+            em caso de vários. Pode alterar o texto à mão a qualquer momento.
+          </p>
+        </ModuleHelp>
 
         <label className="field" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
@@ -437,6 +697,33 @@ export function RelatorioFotograficoPage() {
             <strong>Fotos</strong> — {payload.fotos.length}/{MAX_FOTOS}. Impressão em blocos de 4 por página.{' '}
             {compressing ? 'A comprimir…' : null}
           </p>
+          {!loading ? (
+            <ModuleHelp>
+              <p
+                className="panel-copy"
+                style={{
+                  marginBottom: 8,
+                  fontSize: 13,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: '1px solid var(--border-strong)',
+                  background:
+                    bytesLsAposGravar >= 4.5 * 1024 * 1024
+                      ? 'rgba(220, 38, 38, 0.12)'
+                      : bytesLsAposGravar >= 3 * 1024 * 1024
+                        ? 'rgba(234, 179, 8, 0.12)'
+                        : 'var(--surface-elevated, rgba(148, 163, 184, 0.08))',
+                }}
+              >
+                <strong>Armazenamento (navegador):</strong> este relatório ~{formatBytesPt(bytesRelatorio)} se gravado agora ·{' '}
+                <strong>total localStorage da app</strong> (estimado após gravar) ~{formatBytesPt(bytesLsAposGravar)}. O limite depende do
+                browser e do Electron (muitas vezes da ordem de <strong>5–10 MB por origem</strong> para o{' '}
+                <code>localStorage</code> total). As fotos do relatório ficam em <strong>IndexedDB</strong> (referências no JSON), o que
+                reduz muito o peso no <code>localStorage</code>. Se subir muito, guarde PDF, reduza fotos ou apague relatórios antigos;
+                com nuvem ativa o risco de perda por quota local diminui.
+              </p>
+            </ModuleHelp>
+          ) : null}
           {allowEdit ? (
             <input
               accept="image/*"
@@ -448,9 +735,11 @@ export function RelatorioFotograficoPage() {
           ) : null}
         </div>
 
-        <p className="panel-copy">
-          Relatórios HTML gerados (contador): <strong>{payload.relatoriosGerados}</strong>
-        </p>
+        <ModuleHelp>
+          <p className="panel-copy">
+            Relatórios HTML gerados (contador): <strong>{payload.relatoriosGerados}</strong>
+          </p>
+        </ModuleHelp>
       </div>
 
       <div
@@ -462,7 +751,26 @@ export function RelatorioFotograficoPage() {
       >
         {payload.fotos.map((f) => (
           <div className="info-card" key={f.id}>
-            <img alt="" src={f.dataUrl} style={{ width: '100%', height: 'auto', borderRadius: 8, marginBottom: 8 }} />
+            <div
+              style={{
+                width: '100%',
+                aspectRatio: '4 / 3',
+                maxHeight: 220,
+                marginBottom: 8,
+                borderRadius: 8,
+                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'var(--surface-elevated, rgba(148, 163, 184, 0.12))',
+              }}
+            >
+              <img
+                alt=""
+                src={f.dataUrl ?? ''}
+                style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto', objectFit: 'contain' }}
+              />
+            </div>
             {allowEdit ? (
               <>
                 <label className="field" style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>

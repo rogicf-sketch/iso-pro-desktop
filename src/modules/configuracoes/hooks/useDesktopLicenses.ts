@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { listDesktopLicenseRegistry } from '../services/desktopLicenseRegistry.service';
@@ -15,46 +18,56 @@ function encodeBase64Url(value: string) {
 }
 
 export function useDesktopLicenses() {
+  const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
-  const [items, setItems] = useState<DesktopLicenseRegistryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const listQueryKey = ['desktop-licenses', 'registry', user?.login] as const;
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [syncSource, setSyncSource] = useState<'supabase' | 'local'>('local');
-  const [syncWarning, setSyncWarning] = useState('');
   const [statusFilter, setStatusFilter] = useState<'todos' | 'active' | 'revoked'>('todos');
   const [periodFilter, setPeriodFilter] = useState<'todos' | '30d' | '90d' | 'expirando'>('todos');
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
-  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  /** Instante fixo de montagem — usado até existir `currentTime` vindo da query. */
+  const [bootClock] = useState(() => Date.now());
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, LISTA_BUSCA_DEBOUNCE_MS);
+
+  const listQuery = useQuery({
+    queryKey: listQueryKey,
+    queryFn: async () => {
+      const result = await listDesktopLicenseRegistry();
+      if (!result.success) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar licencas desktop.');
+      }
+      return {
+        items: result.data ?? [],
+        currentTime: Date.now(),
+        syncSource: (result.meta?.source ?? 'local') as 'supabase' | 'local',
+        syncWarning: result.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  const rawItems = listQuery.data?.items;
+  const items = useMemo(() => rawItems ?? [], [rawItems]);
+
+  const currentTime = listQuery.data?.currentTime ?? bootClock;
+
+  const loading = listQuery.isLoading;
+  const syncSource = listQuery.data?.syncSource ?? 'local';
+  const syncWarning = listQuery.data?.syncWarning ?? '';
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar licencas desktop.'
+        : '';
+
+  const reload = useCallback(async () => {
     setError('');
-
-    const result = await listDesktopLicenseRegistry();
-    if (!result.success) {
-      setItems([]);
-      setError(result.error ?? 'Nao foi possivel carregar licencas desktop.');
-      setLoading(false);
-      return;
-    }
-
-    setItems(result.data ?? []);
-    setCurrentTime(Date.now());
-    setSyncSource(result.meta?.source ?? 'local');
-    setSyncWarning(result.meta?.fallbackReason ?? '');
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['desktop-licenses'] });
+  }, [queryClient]);
 
   async function handleStatusChange(item: DesktopLicenseRegistryItem, status: 'active' | 'revoked') {
     setError('');
@@ -102,12 +115,15 @@ export function useDesktopLicenses() {
           : `Licenca ${item.licenseId} reativada centralmente no painel de licencas desktop.`,
     });
 
+    queryClient.setQueryData(listQueryKey, (prev) =>
+      prev ? { ...prev, currentTime: Date.now() } : prev,
+    );
+    await queryClient.invalidateQueries({ queryKey: ['desktop-licenses'] });
     setSuccess(status === 'revoked' ? 'Licenca desktop revogada com sucesso.' : 'Licenca desktop reativada com sucesso.');
-    await load();
   }
 
   const filteredItems = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLocaleLowerCase();
+    const normalizedSearch = debouncedSearchTerm.trim().toLocaleLowerCase();
     const thirtyDaysAgo = currentTime - 30 * 24 * 60 * 60 * 1000;
     const ninetyDaysAgo = currentTime - 90 * 24 * 60 * 60 * 1000;
     const expiringThreshold = currentTime + 30 * 24 * 60 * 60 * 1000;
@@ -136,7 +152,7 @@ export function useDesktopLicenses() {
 
       return haystack.includes(normalizedSearch);
     });
-  }, [currentTime, items, periodFilter, searchTerm, statusFilter]);
+  }, [currentTime, debouncedSearchTerm, items, periodFilter, statusFilter]);
 
   const paginatedItems = useMemo(() => {
     const start = (page - 1) * pageSize;
@@ -202,7 +218,7 @@ export function useDesktopLicenses() {
     filteredItems,
     paginatedItems,
     loading,
-    error,
+    error: error || listError,
     success,
     syncSource,
     syncWarning,
@@ -225,7 +241,7 @@ export function useDesktopLicenses() {
       setPage(1);
     },
     setPage,
-    reload: load,
+    reload,
     exportLicenses,
     handleRevoke: (item: DesktopLicenseRegistryItem) => void handleStatusChange(item, 'revoked'),
     handleRestore: (item: DesktopLicenseRegistryItem) => void handleStatusChange(item, 'active'),

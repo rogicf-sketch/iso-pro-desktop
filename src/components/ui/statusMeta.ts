@@ -1,4 +1,4 @@
-export type StatusTone = 'ok' | 'warning' | 'danger' | 'neutral';
+export type StatusTone = 'ok' | 'warning' | 'danger' | 'neutral' | 'info';
 
 export type StatusMeta = {
   text: string;

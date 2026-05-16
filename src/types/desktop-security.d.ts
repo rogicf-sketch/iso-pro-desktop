@@ -11,6 +11,16 @@ declare global {
         machineLabel: string;
         appVersion: string;
       }>;
+      /** IPC: impressão de HTML no processo principal (evita PDF em branco no Electron). */
+      printHtml?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: gera PDF com fundos (`printToPDF`), mais fiável que «Guardar como PDF» na impressão. */
+      saveHtmlAsPdf?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: pré-visualização de HTML numa janela (evita pop-up bloqueado / `window.open` null). */
+      previewHtml?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: contexto OCI backup (cliente/projeto das Configurações → ficheiro em userData). */
+      writeOciUploadContext?: (payload: { cliente: string; projeto: string }) => Promise<
+        { ok: true; path: string } | { ok: false; error: string }
+      >;
     };
   }
 }

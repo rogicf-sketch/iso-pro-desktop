@@ -1,6 +1,7 @@
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { EtiquetaFilters } from '../components/EtiquetaFilters';
@@ -58,9 +59,11 @@ export function EtiquetasPage() {
         ) : null}
       </div>
 
-      <p className="panel-copy">
-        <strong>Recebimentos:</strong> use o bloco abaixo para buscar NF, listar itens do recebimento, selecionar linhas, modelo e formato e imprimir — sem precisar cadastrar etiqueta antes. <strong>Historico:</strong> a lista e os filtros seguintes sao o registro de etiquetas salvas (origens diversas); a busca por NF no historico exige etiqueta ja vinculada ao id do recebimento.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          <strong>Recebimentos:</strong> use o bloco abaixo para buscar NF, listar itens do recebimento, selecionar linhas, modelo e formato e imprimir — sem precisar cadastrar etiqueta antes. <strong>Historico:</strong> a lista e os filtros seguintes sao o registro de etiquetas salvas (origens diversas); a busca por NF no historico exige etiqueta ja vinculada ao id do recebimento.
+        </p>
+      </ModuleHelp>
 
       <EtiquetasRecebimentoPanel />
 
@@ -127,7 +130,7 @@ export function EtiquetasPage() {
 
       {!canEdit && !canAdminister ? <OperationalNotice>Seu perfil pode visualizar etiquetas, mas nao pode alterar ou marcar emissoes.</OperationalNotice> : null}
 
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar etiqueta' : 'Nova etiqueta'}>
+      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar etiqueta' : 'Nova etiqueta'} wide>
         <EtiquetaForm key={selected?.id ?? 'new-etiqueta'} initialValue={formInitialValue} onApplyPreset={applyPreset} onCancel={closeModal} onSubmit={submitEtiqueta} />
       </Modal>
     </div>

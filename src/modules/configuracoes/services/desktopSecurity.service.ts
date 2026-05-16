@@ -1,5 +1,7 @@
+import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
+import { parseDesktopLicensePayloadJson } from '../schemas/desktopLicensePayload.zod';
 import { readConfiguracoes } from './configuracoes.service';
 import type { DesktopLicensePayload } from '../types/desktop-license.types';
 
@@ -68,8 +70,18 @@ function parseDesktopLicenseToken(token: string) {
 
   try {
     const payloadJson = new TextDecoder().decode(decodeBase64Url(parts[0]));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payloadJson);
+    } catch {
+      return null;
+    }
+    const payload = parseDesktopLicensePayloadJson(parsed);
+    if (!payload) {
+      return null;
+    }
     return {
-      payload: JSON.parse(payloadJson) as DesktopLicensePayload,
+      payload: payload as DesktopLicensePayload,
       encodedPayload: parts[0],
       encodedSignature: parts[1],
     };
@@ -136,6 +148,7 @@ export async function getDesktopLicenseRegistryStatus(token: string): Promise<Se
     .from('desktop_licencas')
     .select('status')
     .eq('license_id', payload.licenseId)
+    .eq('tenant_id', getActiveTenantId())
     .maybeSingle();
 
   if (error) {
@@ -179,6 +192,7 @@ export async function updateDesktopLicenseRegistryStatus(
   const { error } = await supabase.from('desktop_licencas').upsert(
     {
       license_id: payload.licenseId,
+      tenant_id: getActiveTenantId(),
       issued_to: payload.issuedTo,
       machine_fingerprint: payload.machineFingerprint,
       machine_label: payload.machineLabel ?? null,
@@ -189,7 +203,7 @@ export async function updateDesktopLicenseRegistryStatus(
       revogada_em: status === 'revoked' ? new Date().toISOString() : null,
       motivo_revogacao: status === 'revoked' ? reason?.trim() || 'Revogada administrativamente no desktop.' : null,
     },
-    { onConflict: 'license_id' },
+    { onConflict: 'license_id,tenant_id' },
   );
 
   if (error) {
@@ -318,6 +332,7 @@ async function validateDesktopLicense(context: DesktopSecurityContext): Promise<
         .from('desktop_licencas')
         .select('status, motivo_revogacao')
         .eq('license_id', payload.licenseId)
+        .eq('tenant_id', getActiveTenantId())
         .maybeSingle();
 
       // Se a tabela ainda nao existir ou a consulta falhar, a validacao local continua operando.

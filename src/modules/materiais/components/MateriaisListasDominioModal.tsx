@@ -59,7 +59,7 @@ export function MateriaisListasDominioModal({ open, tipo, onClose, onSaved }: Pr
   }
 
   return (
-    <Modal onClose={onClose} open={open} title={titulo}>
+    <Modal onClose={onClose} open={open} title={titulo} wide>
       <p className="panel-copy" style={{ marginBottom: 12 }}>
         Estas opcoes aparecem nos campos <strong>Disciplina</strong> e <strong>Unidade</strong> ao cadastrar materiais. Valores ja usados em
         materiais existentes continuam disponiveis na lista mesmo que remova daqui.

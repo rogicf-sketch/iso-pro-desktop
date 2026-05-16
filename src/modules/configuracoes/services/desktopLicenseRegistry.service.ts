@@ -1,3 +1,4 @@
+import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
 import type { DesktopLicenseRegistryItem } from '../types/desktop-license-registry.types';
@@ -58,6 +59,7 @@ export async function listDesktopLicenseRegistry(): Promise<ServiceResult<Deskto
   const { data, error } = await supabase
     .from('desktop_licencas')
     .select('license_id, issued_to, machine_fingerprint, machine_label, app_version, status, emitida_em, expira_em, revogada_em, motivo_revogacao')
+    .eq('tenant_id', getActiveTenantId())
     .order('emitida_em', { ascending: false });
 
   if (error) {

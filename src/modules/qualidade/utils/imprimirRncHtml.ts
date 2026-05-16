@@ -1,4 +1,15 @@
-import { abrirImpressaoHtmlRelatorio, cssInstitucionalRelatorio, escapeHtmlRelatorio, htmlBlocoLogoInstitucional } from '../../../lib/htmlRelatorioInstitucional';
+import {
+  abrirImpressaoHtmlRelatorio,
+  cssBarraPreVisualizacaoImpressaoHtml,
+  cssInstitucionalRelatorio,
+  escapeHtmlRelatorio,
+  htmlBarraPreVisualizacaoImpressao,
+  htmlBlocoLogoInstitucional,
+  segmentoInstituicaoRodapeEletronico,
+  scriptBarraPreVisualizacaoImpressao,
+} from '../../../lib/htmlRelatorioInstitucional';
+import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
+import { hydrateRncRegistro } from './rncFotoIdb';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { RncItemLinha, RncRegistro } from '../types/qualidade.types';
 
@@ -144,6 +155,11 @@ function montarHtmlItensNc(registro: RncRegistro): string {
 
 export function montarHtmlRnc(registro: RncRegistro): string {
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso();
+  const cfgRodape = readConfiguracoes();
+  const segRodapeInst = segmentoInstituicaoRodapeEletronico(
+    cfgRodape.documentoRodapeNome,
+    cfgRodape.documentoRodapeCnpj,
+  );
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const ev = registro.evidencias;
   const loc =
@@ -171,7 +187,7 @@ export function montarHtmlRnc(registro: RncRegistro): string {
 <head>
   <meta charset="utf-8" />
   <title>${documentTitle}</title>
-  <style>${cssInstitucionalRelatorio()}
+  <style>${cssInstitucionalRelatorio()}${cssBarraPreVisualizacaoImpressaoHtml()}
     .rnc-doc { max-width: 900px; margin: 0 auto; }
     /* Cabecalho repetido em cada pagina na impressao (thead) */
     table.rnc-print-frame { width: 100%; border-collapse: collapse; margin: 0; }
@@ -261,9 +277,20 @@ export function montarHtmlRnc(registro: RncRegistro): string {
     .rnc-ident-nc-table { font-size: 8.5pt; }
     .rnc-sign .nome { font-size: 12px; margin-top: 6px; color: #0f172a; font-weight: 600; }
     .rnc-sign .data { font-size: 10px; color: #94a3b8; margin-top: 3px; }
+    .rnc-doc-foot {
+      margin-top: 16px;
+      padding-top: 10px;
+      border-top: 1px solid #cbd5e1;
+      font-size: 8pt;
+      color: #64748b;
+      line-height: 1.45;
+      text-align: center;
+      page-break-inside: avoid;
+    }
   </style>
 </head>
 <body class="rnc-doc">
+  ${htmlBarraPreVisualizacaoImpressao()}
   <table class="rnc-print-frame">
     <thead class="rnc-print-head">
       <tr>
@@ -359,15 +386,23 @@ export function montarHtmlRnc(registro: RncRegistro): string {
       </div>
     </div>
     <p style="white-space: pre-wrap; margin-top: 18px;"><strong>Observacoes gerais:</strong> ${escapeHtmlRelatorio(registro.observacoes)}</p>
+    <p class="rnc-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(registro.codigo)}.</p>
   </section>
         </td>
       </tr>
     </tbody>
   </table>
+  ${scriptBarraPreVisualizacaoImpressao()}
 </body>
 </html>`;
 }
 
 export function imprimirRncHtml(registro: RncRegistro): boolean {
   return abrirImpressaoHtmlRelatorio(montarHtmlRnc(registro));
+}
+
+/** Hidrata fotos em IndexedDB antes de montar o HTML (impressão a partir da lista). */
+export async function imprimirRncHtmlAsync(registro: RncRegistro): Promise<boolean> {
+  const h = await hydrateRncRegistro(registro);
+  return abrirImpressaoHtmlRelatorio(montarHtmlRnc(h));
 }

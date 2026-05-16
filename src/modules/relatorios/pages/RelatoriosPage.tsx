@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { listarIndicadoresRelatorios, listarResumosRelatorios } from '../services/relatorios.service';
 import type { RelatorioIndicador, RelatorioResumo } from '../types/relatorio.types';
@@ -23,18 +24,22 @@ export function RelatoriosPage() {
         </div>
       </div>
 
-      <p className="panel-copy">
-        Painel gerencial resumido para acompanhar estoque, planejamento, recebimentos, qualidade e dispositivos mobile sem sobrecarregar o
-        front.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Painel gerencial resumido para acompanhar estoque, planejamento, recebimentos, qualidade e dispositivos mobile sem sobrecarregar o
+          front.
+        </p>
+      </ModuleHelp>
 
       <div className="info-card" style={{ marginBottom: 20 }}>
         <p className="panel-kicker">Evidências</p>
         <h3>Relatório fotográfico</h3>
-        <p className="panel-copy">
-          Registo de fotos com compressão automática, vínculo opcional a recebimentos e impressão em HTML. Sincronização com Supabase
-          (tabela <code>iso_pro_relatorio_snapshot</code>) quando configurado.
-        </p>
+        <ModuleHelp>
+          <p className="panel-copy">
+            Registo de fotos com compressão automática, vínculo opcional a recebimentos e impressão em HTML. Sincronização com Supabase
+            (tabela <code>iso_pro_relatorio_snapshot</code>) quando configurado.
+          </p>
+        </ModuleHelp>
         <Link className="button button-primary" to="/relatorio-fotografico">
           Abrir relatório fotográfico
         </Link>

@@ -1,9 +1,13 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { getScopedIsoProStorageKey } from './isoProAmbiente';
+import { parseSupabaseSavedConfigRoot } from './schemas/supabaseSavedConfig.zod';
 
 let client: SupabaseClient | null = null;
 let clientSignature = '';
 
-const CONFIG_STORAGE_KEY = 'iso-pro-desktop-configuracoes-sistema';
+function configuracaoSistemaStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-configuracoes-sistema');
+}
 
 type RuntimeSupabaseConfig = {
   url: string;
@@ -18,22 +22,80 @@ type SavedConfigShape = Partial<RuntimeSupabaseConfig> & {
 
 export type SupabaseOperationalStatus = 'ready' | 'partial' | 'missing';
 
+function isTruthyViteString(value: unknown): boolean {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes';
+}
+
 function readSavedConfig() {
   if (typeof window === 'undefined') return null;
 
   try {
-    const raw = window.localStorage.getItem(CONFIG_STORAGE_KEY);
+    const raw = window.localStorage.getItem(configuracaoSistemaStorageKey());
     if (!raw) return null;
-    return JSON.parse(raw) as SavedConfigShape;
+    const parsed: unknown = JSON.parse(raw);
+    const obj = parseSupabaseSavedConfigRoot(parsed);
+    if (obj === null) return null;
+    return obj as SavedConfigShape;
   } catch {
     return null;
   }
 }
 
+/**
+ * Resolve URL + anon key.
+ *
+ * - Por omissão: se o build tiver `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, usam-se em
+ *   prioridade ao localStorage (evita config antiga a anular o projecto do instalador).
+ * - Com `VITE_SUPABASE_PREFER_SAVED_CONFIG=true` e URL+chave guardadas nas Configurações,
+ *   volta a prevalecer o localStorage (testes / outro projecto sem rebuild).
+ */
+function resolveSupabaseCredentials(): {
+  url: string;
+  key: string;
+  urlFrom: 'localStorage' | 'vite-env' | 'none';
+  keyFrom: 'localStorage' | 'vite-env' | 'none';
+} {
+  const preferSaved = isTruthyViteString(import.meta.env.VITE_SUPABASE_PREFER_SAVED_CONFIG);
+  const saved = readSavedConfig();
+  const envUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
+  const envKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
+  const storageUrl = String(saved?.url ?? saved?.supabaseUrl ?? '').trim();
+  const storageKey = String(saved?.key ?? saved?.supabaseAnonKey ?? '').trim();
+
+  if (preferSaved && storageUrl && storageKey) {
+    return {
+      url: storageUrl,
+      key: storageKey,
+      urlFrom: 'localStorage',
+      keyFrom: 'localStorage',
+    };
+  }
+
+  if (envUrl && envKey) {
+    return {
+      url: envUrl,
+      key: envKey,
+      urlFrom: 'vite-env',
+      keyFrom: 'vite-env',
+    };
+  }
+
+  const url = storageUrl || envUrl;
+  const key = storageKey || envKey;
+  return {
+    url,
+    key,
+    urlFrom: storageUrl ? 'localStorage' : envUrl ? 'vite-env' : 'none',
+    keyFrom: storageKey ? 'localStorage' : envKey ? 'vite-env' : 'none',
+  };
+}
+
 export function getRuntimeSupabaseConfig(): RuntimeSupabaseConfig {
   const saved = readSavedConfig();
-  const url = String(saved?.url ?? saved?.supabaseUrl ?? import.meta.env.VITE_SUPABASE_URL ?? '').trim();
-  const key = String(saved?.key ?? saved?.supabaseAnonKey ?? import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
+  const { url, key } = resolveSupabaseCredentials();
 
   return {
     url,
@@ -106,14 +168,7 @@ export function getSupabaseConfigDiagnostics(): SupabaseConfigDiagnostics {
     };
   }
 
-  const saved = readSavedConfig();
-  const storageUrl = String(saved?.supabaseUrl ?? saved?.url ?? '').trim();
-  const storageKey = String(saved?.supabaseAnonKey ?? saved?.key ?? '').trim();
-  const envUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
-  const envKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
-
-  const url = storageUrl || envUrl;
-  const key = storageKey || envKey;
+  const { url, key, urlFrom, keyFrom } = resolveSupabaseCredentials();
 
   let urlHost: string | null = null;
   try {
@@ -127,7 +182,7 @@ export function getSupabaseConfigDiagnostics(): SupabaseConfigDiagnostics {
     hasKey: Boolean(key),
     urlHost,
     keyLength: key.length,
-    urlFrom: storageUrl ? 'localStorage' : envUrl ? 'vite-env' : 'none',
-    keyFrom: storageKey ? 'localStorage' : envKey ? 'vite-env' : 'none',
+    urlFrom,
+    keyFrom,
   };
 }

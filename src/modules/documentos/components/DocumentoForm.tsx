@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -22,6 +22,7 @@ export function DocumentoForm({ initialValue, onCancel, onSubmit, onReloadAfterC
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [metricasPorCodigo, setMetricasPorCodigo] = useState<Map<string, MetricasPorCodigoMaterial>>(new Map());
+  const errorBoxRef = useRef<HTMLDivElement>(null);
   const isEditing = Boolean(initialValue.numero || initialValue.descricao || initialValue.itens.length);
 
   useEffect(() => {
@@ -33,6 +34,11 @@ export function DocumentoForm({ initialValue, onCancel, onSubmit, onReloadAfterC
       cancel = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!error) return;
+    errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [error]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,7 +114,11 @@ export function DocumentoForm({ initialValue, onCancel, onSubmit, onReloadAfterC
       />
 
       <SnapshotConflictHint show={snapshotConflict} onReload={onReloadAfterConflict} />
-      {error ? <div className="error-box">{error}</div> : null}
+      {error ? (
+        <div className="error-box" ref={errorBoxRef}>
+          {error}
+        </div>
+      ) : null}
 
       <div className="form-actions">
         <Button onClick={onCancel} variant="ghost">

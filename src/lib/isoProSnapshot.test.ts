@@ -35,14 +35,18 @@ function createTableMockHandlers(handlers: {
   const from = vi.fn(() => ({
     select: vi.fn(() => ({
       eq: vi.fn(() => ({
-        maybeSingle,
+        eq: vi.fn(() => ({
+          maybeSingle,
+        })),
       })),
     })),
     upsert,
     update: vi.fn(() => ({
       eq: vi.fn(() => ({
         eq: vi.fn(() => ({
-          select: vi.fn(() => updateSelect()),
+          eq: vi.fn(() => ({
+            select: vi.fn(() => updateSelect()),
+          })),
         })),
       })),
     })),

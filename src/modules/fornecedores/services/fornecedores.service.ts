@@ -1,20 +1,33 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
+import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { validateFornecedor } from '../schemas/fornecedor.schema';
+import { parseFornecedoresPersistidos } from '../schemas/fornecedorPersistido.zod';
 import type { Fornecedor, FornecedorFiltro, FornecedorFormData } from '../types/fornecedor.types';
 import {
   fornecedorRowToFormData,
   type ResultadoImportacaoFornecedoresCsv,
 } from './fornecedores.import.csv';
 
-const STORAGE_KEY = 'iso-pro-desktop-fornecedores';
+function fornecedoresStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-fornecedores');
+}
+
+function bloqueioLocalFornecedores(tamanhoListaGravacao: number): string | null {
+  return mensagemSeSubstituirLocalPerderiaCadastros([
+    { storageKey: fornecedoresStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'fornecedor(es)' },
+  ]);
+}
 
 const seedData: Fornecedor[] = [
   {
@@ -38,26 +51,46 @@ const seedData: Fornecedor[] = [
 ];
 
 function readAll(): Fornecedor[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(fornecedoresStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
+    localStorage.setItem(fornecedoresStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
 
   try {
-    return JSON.parse(raw) as Fornecedor[];
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseFornecedoresPersistidos(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Fornecedores', fornecedoresStorageKey());
+      return [];
+    }
+    return validated;
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
-    return seedData;
+    avisarPreservacaoLocalStorageCorrupto('Fornecedores', fornecedoresStorageKey());
+    return [];
   }
 }
 
 function writeAll(items: Fornecedor[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(fornecedoresStorageKey(), JSON.stringify(items));
 }
 
 async function loadFornecedores() {
   return hasSupabaseConfig() ? await readSnapshotFornecedores().catch(() => readAll()) : readAll();
+}
+
+/**
+ * Mesma regra da listagem em Fornecedores: snapshot na nuvem com fallback local.
+ * Apenas ativos — para validar recebimentos e importacoes.
+ */
+export async function loadFornecedoresAtivosParaValidacaoRecebimento(): Promise<Fornecedor[]> {
+  const { data } = await withLocalFallback({
+    shouldTryRemote: hasSupabaseConfig(),
+    loadRemote: () => readSnapshotFornecedores(),
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar fornecedores.',
+  });
+  return data.filter((f) => f.ativo);
 }
 
 function normalizeLookupValue(value: string) {
@@ -173,6 +206,10 @@ export async function salvarFornecedor(payload: FornecedorFormData, currentId?: 
       email: payload.email.trim(),
       endereco: payload.endereco.trim(),
     };
+    if (hasSupabaseConfig()) {
+      const bloqueio = bloqueioLocalFornecedores(items.length);
+      if (bloqueio) return { success: false, error: bloqueio };
+    }
     return executeWrite({
       shouldWriteRemote: hasSupabaseConfig(),
       writeRemote: () => writeSnapshotFornecedores(items),
@@ -192,6 +229,10 @@ export async function salvarFornecedor(payload: FornecedorFormData, currentId?: 
     endereco: payload.endereco.trim(),
   };
   items.push(created);
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalFornecedores(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
   return executeWrite({
     shouldWriteRemote: hasSupabaseConfig(),
     writeRemote: () => writeSnapshotFornecedores(items),
@@ -207,11 +248,48 @@ export async function buscarFornecedorPorId(id: string): Promise<ServiceResult<F
   return { success: true, data: item };
 }
 
+/**
+ * Nome exatamente como gravado no cadastro (apenas fornecedores ativos), ou null.
+ * Comparacao sem distincao de maiusculas/acentos (pt-BR).
+ */
+export async function resolverNomeFornecedorCadastradoAtivo(nomeDigitado: string): Promise<string | null> {
+  const raw = nomeDigitado.trim();
+  if (!raw) return null;
+  const items = await loadFornecedoresAtivosParaValidacaoRecebimento();
+  for (const f of items) {
+    if (raw.localeCompare(f.nome.trim(), 'pt-BR', { sensitivity: 'base' }) === 0) {
+      return f.nome.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Valida uma lista de nomes (ex.: cabecalhos de importacao). Retorna mensagem de erro ou null se todos existirem ativos.
+ */
+export async function validarNomesFornecedoresCadastradosAtivos(nomes: string[]): Promise<string | null> {
+  const unique = [...new Set(nomes.map((n) => n.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'pt-BR'),
+  );
+  const invalid: string[] = [];
+  for (const nome of unique) {
+    const resolved = await resolverNomeFornecedorCadastradoAtivo(nome);
+    if (!resolved) invalid.push(nome);
+  }
+  if (invalid.length === 0) return null;
+  const quoted = invalid.map((s) => `"${s}"`).join(', ');
+  return `Importacao nao concluida. Fornecedor nao cadastrado no sistema: ${quoted}. Cadastre em Fornecedores e tente novamente.`;
+}
+
 export async function toggleFornecedorStatus(id: string, ativo: boolean): Promise<ServiceResult<Fornecedor>> {
   const items = await loadFornecedores();
   const index = items.findIndex((item) => item.id === id);
   if (index === -1) return { success: false, error: 'Fornecedor nao encontrado.' };
   items[index] = { ...items[index], ativo };
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalFornecedores(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
   return executeWrite({
     shouldWriteRemote: hasSupabaseConfig(),
     writeRemote: () => writeSnapshotFornecedores(items),
@@ -264,12 +342,16 @@ export async function montarExportacaoFornecedoresCsv(
 export async function importarFornecedoresDoArquivoCsv(
   text: string,
 ): Promise<ServiceResult<ResultadoImportacaoFornecedoresCsv>> {
+  const cabErr = mensagemSeCabecalhoImportCsvIncompativel('fornecedores', text);
+  if (cabErr) {
+    return { success: false, error: cabErr };
+  }
   const parsed = parseCsvToRecords(text);
   if (!parsed || parsed.rows.length === 0) {
     return { success: false, error: 'CSV invalido ou sem linhas de dados (cabecalho obrigatorio).' };
   }
 
-  const cache = await loadFornecedores();
+  const items: Fornecedor[] = [...(await loadFornecedores())];
 
   let criados = 0;
   let atualizados = 0;
@@ -306,23 +388,66 @@ export async function importarFornecedoresDoArquivoCsv(
       continue;
     }
 
-    const existing = cache.find((c) => normalizeLookupValue(c.nome) === nk);
-    const result = await salvarFornecedor(form, existing?.id);
-
-    if (!result.success || !result.data) {
+    const existing = items.find((c) => normalizeLookupValue(c.nome) === nk);
+    const duplicated = items.find((item) => normalizeLookupValue(item.nome) === nk && item.id !== existing?.id);
+    if (duplicated) {
       ignorados += 1;
-      detalhes.push(`Linha ${lineNum}: ${result.error ?? 'Falha ao salvar.'}`);
+      detalhes.push(`Linha ${lineNum}: Ja existe um fornecedor com esse nome.`);
       continue;
     }
 
     if (existing) {
-      const idx = cache.findIndex((c) => c.id === existing.id);
-      if (idx !== -1) cache[idx] = result.data;
+      const index = items.findIndex((item) => item.id === existing.id);
+      if (index === -1) {
+        ignorados += 1;
+        detalhes.push(`Linha ${lineNum}: fornecedor nao encontrado para atualizacao.`);
+        continue;
+      }
+      items[index] = {
+        ...items[index],
+        ...form,
+        nome: form.nome.trim(),
+        cnpj: form.cnpj.trim(),
+        telefone: form.telefone.trim(),
+        email: form.email.trim(),
+        endereco: form.endereco.trim(),
+      };
       atualizados += 1;
     } else {
-      cache.push(result.data);
+      items.push({
+        id: crypto.randomUUID(),
+        ...form,
+        nome: form.nome.trim(),
+        cnpj: form.cnpj.trim(),
+        telefone: form.telefone.trim(),
+        email: form.email.trim(),
+        endereco: form.endereco.trim(),
+      });
       criados += 1;
     }
+  }
+
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalFornecedores(items.length);
+    if (bloqueio) {
+      return { success: false, error: bloqueio };
+    }
+  }
+
+  const writeResult = await executeWrite({
+    shouldWriteRemote: hasSupabaseConfig(),
+    writeRemote: () => writeSnapshotFornecedores(items),
+    writeLocal: () => writeAll(items),
+    successData: items[0] ?? readAll()[0],
+    fallbackMessage: 'Falha ao gravar fornecedores importados no Supabase.',
+  });
+
+  if (!writeResult.success) {
+    return {
+      success: false,
+      error: writeResult.error ?? 'Falha ao concluir importacao.',
+      meta: writeResult.meta,
+    };
   }
 
   return {

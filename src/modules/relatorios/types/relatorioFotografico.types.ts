@@ -1,7 +1,13 @@
-/** Uma evidência fotográfica (JPEG comprimido em data URL). */
+/**
+ * Evidência fotográfica: JPEG comprimido.
+ * Preferencialmente `imageRef` (IndexedDB) + `dataUrl` vazio no JSON local;
+ * `dataUrl` preenchido após hidratar (UI / impressão / nuvem).
+ */
 export type RelatorioFotograficoFoto = {
   id: string;
-  dataUrl: string;
+  dataUrl?: string;
+  /** Chave `iso-media:rf:...` no IndexedDB quando a foto não está inline. */
+  imageRef?: string;
   legenda: string;
   createdAt: string;
   /** Se false, a legenda não aparece na impressão (só a imagem e o número da foto). */

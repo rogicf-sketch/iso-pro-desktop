@@ -3,24 +3,45 @@
  * recebimentos (direto = qtd NF; aguardando conferencia = so entra apos conferido) menos atendimentos em documentos + ajustes.
  * Opcional: saldo explicito no array materiais do snapshot faz max(explicito, calculado).
  */
+import { getScopedIsoProStorageKey } from '../../lib/isoProAmbiente';
+import { parseLocalStorageRecordArray } from '../../lib/schemas/localStorageRecordArray.zod';
 import { normalizeCodigoPlanejamento } from '../documentos/services/documentoPlanejamento';
 
-const ESTOQUE_AJUSTES_KEY = 'iso-pro-desktop-estoque-ajustes';
+function estoqueAjustesStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-estoque-ajustes');
+}
 
 function readJsonLocal<T>(key: string): T[] {
   if (typeof localStorage === 'undefined') return [];
   const raw = localStorage.getItem(key);
   if (!raw) return [];
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as T[];
+    parsed = JSON.parse(raw);
   } catch {
     return [];
   }
+  const rows = parseLocalStorageRecordArray(parsed);
+  if (rows === null) return [];
+  return rows as T[];
 }
 
 /** Mesma regra do atendimento / planejamento: trim + minusculas. */
 export function codigoMaterialKey(codigo: string): string {
   return normalizeCodigoPlanejamento(String(codigo ?? ''));
+}
+
+/**
+ * Quantidade já atendida na linha do planejamento no JSON do snapshot.
+ * Alinha `documentos.service` / app móvel / `buildSaldoMap`: aceita camelCase ou snake_case.
+ */
+export function quantidadeAtendidaDaLinhaDocumento(item: {
+  quantidadeAtendida?: number | string | null;
+  quantidade_atendida?: number | string | null;
+}): number {
+  const v = item.quantidadeAtendida ?? item.quantidade_atendida;
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
 export type SaldoSnapshotPayload = {
@@ -40,6 +61,7 @@ export type SaldoSnapshotPayload = {
       unidade?: string;
       quantidade?: number | string;
       quantidadeAtendida?: number | string;
+      quantidade_atendida?: number | string;
     }>;
   }>;
   recebimentos?: Array<{
@@ -131,14 +153,14 @@ export function buildSaldoMap(payload: SaldoSnapshotPayload): Map<string, number
       const codigoRaw = item.codigo ?? item.codigo_material ?? item.codigoMaterial ?? '';
       const codigo = codigoMaterialKey(String(codigoRaw ?? ''));
       if (!codigo) continue;
-      const qAt = item.quantidadeAtendida ?? item.quantidade_atendida;
+      const qAt = quantidadeAtendidaDaLinhaDocumento(item);
       const atual = atendidoMap.get(codigo) ?? 0;
-      atendidoMap.set(codigo, atual + Number(qAt ?? 0));
+      atendidoMap.set(codigo, atual + qAt);
     }
   }
 
   const ajustesMap = new Map<string, number>();
-  const localAjustes = readJsonLocal<{ codigo?: string; delta?: number | string | null }>(ESTOQUE_AJUSTES_KEY);
+  const localAjustes = readJsonLocal<{ codigo?: string; delta?: number | string | null }>(estoqueAjustesStorageKey());
   for (const ajuste of [...(payload.estoqueAjustes ?? []), ...localAjustes]) {
     const codigo = codigoMaterialKey(String(ajuste.codigo ?? ''));
     if (!codigo) continue;

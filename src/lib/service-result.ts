@@ -1,5 +1,6 @@
 import type { ServiceResult } from '../types/common.types';
 import { isIsoProSnapshotConflictError } from './isoProSnapshot';
+import { businessWriteBlockedFailure, isBusinessLocalWriteBlocked } from './writePolicy';
 
 export function getErrorMessage(error: unknown, fallbackMessage: string) {
   return error instanceof Error ? error.message : fallbackMessage;
@@ -8,6 +9,11 @@ export function getErrorMessage(error: unknown, fallbackMessage: string) {
 /** Indica falha de gravacao por conflito de versao do snapshot (apos retries no cliente). */
 export function isSnapshotConflictResult(result: Pick<ServiceResult<unknown>, 'success' | 'meta'>): boolean {
   return result.success === false && result.meta?.snapshotConflict === true;
+}
+
+/** Indica falha porque a politica de producao bloqueou gravacao local sem Supabase. */
+export function isWriteBlockedResult(result: Pick<ServiceResult<unknown>, 'success' | 'meta'>): boolean {
+  return result.success === false && result.meta?.writeBlocked === true;
 }
 
 export async function withLocalFallback<T>(options: {
@@ -73,6 +79,10 @@ export async function executeWrite<T>(options: {
         },
       };
     }
+  }
+
+  if (isBusinessLocalWriteBlocked()) {
+    return businessWriteBlockedFailure<T>();
   }
 
   options.writeLocal();

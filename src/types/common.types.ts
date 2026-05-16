@@ -7,6 +7,10 @@ export type ServiceResult<T> = {
     fallbackReason?: string;
     /** Conflito de versao em `iso_pro_snapshot` apos retries; ideal recarregar dados na tela. */
     snapshotConflict?: boolean;
+    /** Producao sem Supabase: gravacao local de negocio bloqueada por politica. */
+    writeBlocked?: boolean;
+    /** Copia nuvem→`localStorage` de materiais bloqueada pelo guarda de contagens; UI pode oferecer repetir com forcar. */
+    syncMateriaisLocalBloqueado?: boolean;
   };
 };
 

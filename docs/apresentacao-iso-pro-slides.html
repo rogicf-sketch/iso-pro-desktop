@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>I.S.O PRO — Apresentação (ordem do menu) · 28 slides</title>
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --surface: #12151c;
+      --text: #f4f7fb;
+      --muted: #9aa3b8;
+      --accent: #39ff14;
+      --accent-dim: rgba(57, 255, 20, 0.12);
+      --border: #1f3d2e;
+      --font: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); overflow: hidden; }
+    .deck {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(10px, 2.5vw, 32px);
+      padding-bottom: 88px;
+    }
+    .slide {
+      display: none;
+      width: min(1120px, 100%);
+      height: min(780px, calc(100vh - 88px));
+      max-height: calc(100vh - 88px);
+      flex-direction: column;
+      background: radial-gradient(ellipse 120% 80% at 50% 0%, var(--accent-dim), transparent 55%), var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: clamp(20px, 3vw, 36px);
+      box-shadow: 0 0 0 1px rgba(57, 255, 20, 0.06), 0 24px 80px rgba(0, 0, 0, 0.45);
+      position: relative;
+      overflow: hidden;
+    }
+    .slide.active { display: flex; }
+    .slide-num {
+      position: absolute;
+      top: 14px;
+      right: 18px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      z-index: 2;
+    }
+    .slide-top { flex: 0 0 auto; padding-right: 72px; }
+    .route {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: ui-monospace, Consolas, monospace;
+      margin-bottom: 0.35rem;
+    }
+    h1 {
+      font-size: clamp(1.35rem, 3.2vw, 2rem);
+      font-weight: 700;
+      line-height: 1.12;
+      margin-bottom: 0.35em;
+      max-width: 28ch;
+    }
+    h1 .accent { color: var(--accent); text-shadow: 0 0 20px rgba(57, 255, 20, 0.35); }
+    .subtitle { font-size: clamp(0.9rem, 1.8vw, 1.05rem); color: var(--muted); margin-bottom: 0.5rem; max-width: 42ch; }
+    .slide-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      margin-top: 0.5rem;
+      padding-right: 4px;
+    }
+    .placeholder {
+      min-height: 160px;
+      border: 2px dashed rgba(57, 255, 20, 0.35);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 1.25rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+      background: rgba(0, 0, 0, 0.25);
+    }
+    .placeholder strong { color: var(--accent); display: block; margin-bottom: 0.35em; }
+    .asset-slot {
+      position: relative;
+      width: 100%;
+      min-height: 120px;
+    }
+    .asset-slot .shot {
+      display: block;
+      max-width: 100%;
+      max-height: min(560px, 62vh);
+      width: auto;
+      height: auto;
+      margin: 0 auto;
+      object-fit: contain;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      background: #050608;
+    }
+    .asset-slot .placeholder {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      min-height: 160px;
+      pointer-events: none;
+    }
+    .asset-slot.loaded .placeholder { display: none; }
+    /* Com imagens embutidas (data URI) o placeholder nao deve tapar a foto */
+    .asset-slot .shot[src^="data:image"] ~ .placeholder {
+      display: none !important;
+    }
+    .slide-scroll > .asset-slot:only-child .shot {
+      max-height: min(720px, 78vh);
+    }
+    .asset-duo {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .asset-duo .asset-slot { flex: 1 1 280px; max-width: min(560px, 100%); }
+    .asset-duo .asset-slot .shot { max-height: min(480px, 54vh); }
+    body.prep-gravacao-video .asset-quad-themes .asset-slot .shot {
+      max-height: min(320px, 30vh);
+    }
+    /* Slide 27: grelha 2×2 (ecrã + PDF) — quatro temas sempre no mesmo bloco */
+    .asset-quad-themes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 10px;
+      width: 100%;
+      align-items: start;
+    }
+    .asset-quad-themes .quad-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .asset-quad-themes .quad-label {
+      font-size: clamp(0.75rem, 1.35vw, 0.88rem);
+      color: var(--accent);
+      font-weight: 600;
+      line-height: 1.25;
+      padding-left: 2px;
+    }
+    .asset-quad-themes .asset-slot {
+      width: 100%;
+      max-width: 100%;
+    }
+    .asset-quad-themes .asset-slot .shot {
+      max-height: min(280px, 26vh);
+    }
+    /* Módulo primeiro, relatório/recibo a seguir (scroll vertical) */
+    .asset-seq {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: stretch;
+      width: 100%;
+    }
+    .asset-seq-label {
+      font-size: clamp(0.8rem, 1.45vw, 0.92rem);
+      color: var(--accent);
+      font-weight: 600;
+      line-height: 1.3;
+      margin: 0.2rem 0 0.15rem 0;
+      padding-left: 2px;
+    }
+    .asset-seq .asset-slot { width: 100%; max-width: 100%; }
+    .asset-seq .asset-slot .shot { max-height: min(640px, 58vh); }
+    .legenda {
+      flex: 0 0 auto;
+      margin-top: 0.65rem;
+      padding: 0.75rem 1rem 0.8rem 1rem;
+      font-size: clamp(0.95rem, 2vw, 1.08rem);
+      line-height: 1.5;
+      color: #ecfdf5;
+      background: rgba(8, 28, 18, 0.95);
+      border: 1px solid rgba(57, 255, 20, 0.5);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      box-shadow: 0 6px 28px rgba(0, 0, 0, 0.45);
+    }
+    .legenda strong { color: var(--accent); font-weight: 700; }
+    .notes {
+      flex: 0 0 auto;
+      margin-top: 0.45rem;
+      padding-top: 0.45rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+    .logo-wrap { text-align: center; margin: 0.75rem 0; }
+    .logo-wrap img { max-width: min(320px, 82%); height: auto; filter: drop-shadow(0 0 18px rgba(57, 255, 20, 0.22)); }
+    .toolbar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 10px 16px;
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--muted);
+      z-index: 10;
+    }
+    .toolbar button {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+    .progress { flex: 1; height: 4px; background: var(--border); border-radius: 2px; max-width: 200px; }
+    .progress i { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.2s; }
+    kbd { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #1a1f28; border: 1px solid var(--border); }
+    /* Modo gravação de vídeo: sem caixas de legenda/notas; mais espaço para a captura */
+    body.prep-gravacao-video .legenda,
+    body.prep-gravacao-video .notes { display: none !important; }
+    body.prep-gravacao-video .slide-top .subtitle { display: none; }
+    body.prep-gravacao-video .slide-scroll { margin-top: 0.15rem; }
+    body.prep-gravacao-video .asset-slot .shot,
+    body.prep-gravacao-video .slide-scroll > .asset-slot:only-child .shot,
+    body.prep-gravacao-video .asset-duo .asset-slot .shot {
+      max-height: min(92vh, 1040px);
+    }
+    body.prep-gravacao-video .slide {
+      height: min(840px, calc(100vh - 88px));
+      max-height: calc(100vh - 88px);
+    }
+
+    /*
+      PDF: abrir este HTML a partir da pasta docs (para carregar apresentacao-assets/).
+      Chrome ou Edge → Ctrl+P → Destino «Guardar como PDF» → «Mais definições» → ativar «Gráficos de fundo».
+      Retire a classe prep-gravacao-video do <body> se quiser legendas/notas no PDF.
+    */
+    @media print {
+      @page {
+        size: landscape;
+        margin: 10mm;
+      }
+      html,
+      body {
+        height: auto !important;
+        overflow: visible !important;
+        background: #0a0c10 !important;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+      .toolbar {
+        display: none !important;
+      }
+      .deck {
+        display: block !important;
+        height: auto !important;
+        padding: 0 !important;
+        padding-bottom: 0 !important;
+        max-width: none !important;
+      }
+      .slide {
+        display: flex !important;
+        position: relative;
+        width: 100% !important;
+        max-width: none !important;
+        height: auto !important;
+        max-height: none !important;
+        min-height: 0 !important;
+        margin: 0 auto 10mm auto;
+        page-break-after: always;
+        break-after: page;
+        break-inside: avoid;
+        page-break-inside: avoid;
+        box-shadow: none;
+      }
+      .slide:last-of-type {
+        page-break-after: auto;
+        break-after: auto;
+        margin-bottom: 0;
+      }
+      .slide-scroll {
+        overflow: visible !important;
+      }
+      .asset-slot .shot,
+      .slide-scroll > .asset-slot:only-child .shot,
+      .asset-duo .asset-slot .shot {
+        max-height: 13cm !important;
+      }
+      body.prep-gravacao-video .slide {
+        height: auto !important;
+        max-height: none !important;
+      }
+      /* Slide 27 (PDF): grelha 2×2 única + alturas baixas para os quatro temas caberem na mesma página */
+      .slide[data-slide="27"] .slide-scroll {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .slide[data-slide="27"] .asset-quad-themes {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+        gap: 5px;
+      }
+      .slide[data-slide="27"] .asset-quad-themes .quad-item {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+      }
+      .slide[data-slide="27"] .asset-quad-themes .asset-slot .shot {
+        max-height: 4.5cm !important;
+      }
+      .slide[data-slide="27"] .asset-quad-themes .quad-label {
+        font-size: 8pt;
+      }
+      .slide[data-slide="27"] .slide-top .subtitle {
+        font-size: clamp(8pt, 1.8vw, 10pt);
+        line-height: 1.25;
+      }
+    }
+  </style>
+</head>
+<body class="prep-gravacao-video">
+  <!-- ISO-PRO-DECK-BUILD: 2026-04-19 · body.prep-gravacao-video = modo vídeo (sem legenda). Retire a classe para ver legendas. -->
+  <div class="deck" id="deck">
+    <!-- 1 Apresentação -->
+    <section class="slide active" data-slide="1">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">Abertura</p>
+        <div class="logo-wrap">
+          <img src="../public/logo-institutional-default.svg" alt="I.S.O PRO" width="288" height="92" />
+        </div>
+        <h1 style="text-align:center;max-width:none;"><span class="accent">I.S.O PRO</span> — Gestão de materiais</h1>
+        <p class="subtitle" style="text-align:center;margin-left:auto;margin-right:auto;">Desktop e Campo · mesma operação com rasto</p>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> uma linha única de produto para cadastrar, movimentar e provar materiais na obra — com relatórios e qualidade integrados.</p>
+      <p class="notes">A seguir: ordem dos módulos do menu (como no software). Tema de trabalho recomendado nas demos: <strong>Neon (verde)</strong>; no slide 27 há <strong>quatro</strong> capturas de tema numa grelha 2×2.</p>
+    </section>
+
+    <!-- 2 Login -->
+    <section class="slide" data-slide="2">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/login</p>
+        <h1><span class="accent">Login</span> e acesso</h1>
+        <p class="subtitle">Entrada segura por perfil (Administrador, Planejamento, Operação, Consulta).</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-02-login.png" alt="Login" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-02-login.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> acesso controlado ao desktop — sessões por utilizador, alinhado a permissões e à governança da equipa.</p>
+      <p class="notes">Execute <code>remap-apresentacao-assets-ordem-menu.ps1</code> na pasta <code>docs</code> para gerar estes ficheiros a partir dos PNG antigos.</p>
+    </section>
+
+    <!-- 3 Painel -->
+    <section class="slide" data-slide="3">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/dashboard</p>
+        <h1><span class="accent">Painel</span></h1>
+        <p class="subtitle">Visão geral da operação e indicadores locais / nuvem.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-03-painel.png" alt="Painel" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-03-painel.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> painel consolidado — saúde do armazenamento, ligação Supabase e leitura rápida do que está a acontecer na operação.</p>
+      <p class="notes">Topbar: «Painel».</p>
+    </section>
+
+    <!-- 4 Fornecedores -->
+    <section class="slide" data-slide="4">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/fornecedores</p>
+        <h1><span class="accent">Fornecedores</span></h1>
+        <p class="subtitle">Cadastro base para NF, recebimentos e qualidade.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-04-fornecedores.png" alt="Fornecedores" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-04-fornecedores.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> fornecedores normalizados com importação/exportação CSV e sincronização quando a nuvem está ativa.</p>
+      <p class="notes">Sidebar: «Fornecedores».</p>
+    </section>
+
+    <!-- 5 Colaboradores -->
+    <section class="slide" data-slide="5">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/colaboradores</p>
+        <h1><span class="accent">Colaboradores</span></h1>
+        <p class="subtitle">Quem retira material e quem opera no sistema — rasto humano.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-05-colaboradores.png" alt="Colaboradores" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-05-colaboradores.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> cadastro de colaboradores internos/externos ligado a atendimento, inventário e relatórios.</p>
+      <p class="notes">Sidebar: «Colaboradores».</p>
+    </section>
+
+    <!-- 6 Materiais -->
+    <section class="slide" data-slide="6">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/materiais</p>
+        <h1><span class="accent">Materiais</span> <span style="font-size:0.55em;color:var(--muted);font-weight:600;">(Cadastro de Materiais)</span></h1>
+        <p class="subtitle">Catálogo, códigos de barras e disciplinas.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-06-materiais.png" alt="Materiais" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-06-materiais.png</code> — use tema <strong>Neon</strong> na demo para consistência.</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> material mestre com EAN-13 opcional, saldos e exportação — base para planejamento, etiquetas e atendimento.</p>
+      <p class="notes">Topbar: «Cadastro de Materiais».</p>
+    </section>
+
+    <!-- 7 Planejamento -->
+    <section class="slide" data-slide="7">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/documentos</p>
+        <h1><span class="accent">Planejamento de Materiais</span></h1>
+        <p class="subtitle">Documentos de necessidade e linhas para execução.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-07-planejamento.png" alt="Planejamento" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-07-planejamento.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> planeamento por documento com estados (pendente, parcial, recebido, atendido) e rastreio até ao requerente.</p>
+      <p class="notes">Sidebar «Planejamento»; no mobile o separador equivalente chama-se «Documentos».</p>
+    </section>
+
+    <!-- 8 Recebimentos -->
+    <section class="slide" data-slide="8">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/recebimentos</p>
+        <h1><span class="accent">Recebimentos</span></h1>
+        <p class="subtitle">NF, romaneio e itens alinhados ao estoque.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-08-recebimentos.png" alt="Recebimentos" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-08-recebimentos.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> entrada de material com travas, importação em massa e ligação à conferência e às etiquetas.</p>
+      <p class="notes">Sidebar: «Recebimentos».</p>
+    </section>
+
+    <!-- 9 Conferência -->
+    <section class="slide" data-slide="9">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/conferencia</p>
+        <h1><span class="accent">Conferência</span></h1>
+        <p class="subtitle">Validação de recebimentos antes de libertar stock.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-09-conferencia.png" alt="Conferência" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-09-conferencia.png</code> — módulo Conferência (desktop).</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> fluxo de conferência com divergências tratadas antes da liberação definitiva para o armazém.</p>
+      <p class="notes">No mobile existe o separador «Conferência» com o mesmo conceito operacional.</p>
+    </section>
+
+    <!-- 10 Etiquetas -->
+    <section class="slide" data-slide="10">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/etiquetas</p>
+        <h1><span class="accent">Etiquetas</span></h1>
+        <p class="subtitle">Impressão a partir de recebimentos e histórico.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-duo">
+          <div class="asset-slot">
+            <img class="shot" src="apresentacao-assets/slide-10-etiquetas.png" alt="Módulo Etiquetas" />
+            <div class="placeholder"><strong>Módulo</strong><code>slide-10-etiquetas.png</code></div>
+          </div>
+          <div class="asset-slot">
+            <img class="shot" src="apresentacao-assets/slide-10-etiquetas-amostra.png" alt="Etiquetas impressas" />
+            <div class="placeholder"><strong>Amostra impressa</strong><code>slide-10-etiquetas-amostra.png</code> (origem: <code>etiqueta.png</code>)</div>
+          </div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> etiquetas alinhadas ao recebimento — ligação física ao código que o mobile e o inventário leem.</p>
+      <p class="notes">Sidebar: «Etiquetas».</p>
+    </section>
+
+    <!-- 11 Atendimento — módulo (próximo slide: recibo) -->
+    <section class="slide" data-slide="11">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/atendimento</p>
+        <h1><span class="accent">Atendimento</span> — módulo</h1>
+        <p class="subtitle">Ecrã principal; no slide seguinte: recibo de retirada.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-11-atendimento.png" alt="Atendimento — módulo" />
+          <div class="placeholder"><strong>Módulo</strong><code>slide-11-atendimento.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> atendimento por documento com leitor USB e rasto na lista de lotes.</p>
+      <p class="notes">Próximo slide: <strong>recibo</strong>. Mobile: separador «Atendimento».</p>
+    </section>
+
+    <!-- 12 Atendimento — recibo -->
+    <section class="slide" data-slide="12">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/atendimento · recibo</p>
+        <h1><span class="accent">Atendimento</span> — recibo</h1>
+        <p class="subtitle">Comprovativo de retirada (impressão / PDF).</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-11-recibo.png" alt="Recibo de atendimento" data-fallback="apresentacao-assets/RECIBO%20ATENDIMENTO.png" />
+          <div class="placeholder"><strong>Recibo</strong><code>slide-11-recibo.png</code> ou <code>RECIBO ATENDIMENTO.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> recibo com itens, quantidades e identificação do lote — arquivo e auditoria.</p>
+      <p class="notes">Depois do recibo segue o módulo Inventário no menu.</p>
+    </section>
+
+    <!-- 13 Inventário -->
+    <section class="slide" data-slide="13">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/inventario</p>
+        <h1><span class="accent">Inventário</span></h1>
+        <p class="subtitle">Rotativo ou geral; integração com contagem mobile.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-12-inventario.png" alt="Inventário" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-12-inventario.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> inventários com estados, exportação e opção de contagem pelo I.S.O PRO Mobile.</p>
+      <p class="notes">Sidebar: «Inventário».</p>
+    </section>
+
+    <!-- 14 Equipamentos -->
+    <section class="slide" data-slide="14">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/equipamentos</p>
+        <h1><span class="accent">Equipamentos</span></h1>
+        <p class="subtitle">Registo de equipamentos ligados à operação.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-13-equipamentos.png" alt="Equipamentos" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-13-equipamentos.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> módulo de equipamentos para apoio à obra e rasto patrimonial quando aplicável ao vosso processo.</p>
+      <p class="notes">Sidebar: «Equipamentos».</p>
+    </section>
+
+    <!-- 15 RIR — módulo (próximo: relatório) -->
+    <section class="slide" data-slide="15">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/rir</p>
+        <h1><span class="accent">RIR</span> — módulo (inspeção de recebimento)</h1>
+        <p class="subtitle">Lista e registo no desktop; no slide seguinte: relatório de inspeção.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-14-rir.png" alt="RIR — inspeção de recebimento (módulo)" />
+          <div class="placeholder"><strong>Módulo RIR</strong><code>slide-14-rir.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> RIR com vínculo a NF, procedimentos e listas — preparação para o relatório.</p>
+      <p class="notes">Próximo slide: <strong>relatório RIR</strong>. Sidebar: «RIR».</p>
+    </section>
+
+    <!-- 16 RIR — relatório -->
+    <section class="slide" data-slide="16">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/rir · relatório</p>
+        <h1><span class="accent">RIR</span> — relatório de inspeção de recebimento</h1>
+        <p class="subtitle">Documento para arquivo / impressão.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-14-relatorio-rir.png" alt="RIR — Relatório de inspeção de recebimento" data-fallback="apresentacao-assets/RIR.png" />
+          <div class="placeholder"><strong>Relatório RIR</strong><code>slide-14-relatorio-rir.png</code> ou <code>RIR.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> relatório RIR gerado no fluxo — impressão e auditoria.</p>
+      <p class="notes">Depois segue o módulo RNC no menu.</p>
+    </section>
+
+    <!-- 17 RNC — módulo -->
+    <section class="slide" data-slide="17">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/rnc</p>
+        <h1><span class="accent">RNC</span> — módulo (não conformidade)</h1>
+        <p class="subtitle">Registo no sistema; no slide seguinte: relatório RNC.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-15-rnc.png" alt="RNC — módulo" />
+          <div class="placeholder"><strong>Módulo RNC</strong><code>slide-15-rnc.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> RNC ligada à NF com segregação e evidências.</p>
+      <p class="notes">Próximo slide: <strong>relatório RNC</strong>.</p>
+    </section>
+
+    <!-- 18 RNC — relatório -->
+    <section class="slide" data-slide="18">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/rnc · relatório</p>
+        <h1><span class="accent">RNC</span> — relatório</h1>
+        <p class="subtitle">Documento de não conformidade (impressão / PDF).</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-15-relatorio-rnc.png" alt="Relatório RNC" data-fallback="apresentacao-assets/RNC.png" />
+          <div class="placeholder"><strong>Relatório RNC</strong><code>slide-15-relatorio-rnc.png</code> ou <code>RNC.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> relatório RNC para arquivo, fornecedor e auditoria.</p>
+      <p class="notes">Depois segue «Relatórios» no menu.</p>
+    </section>
+
+    <!-- 19 Relatórios -->
+    <section class="slide" data-slide="19">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/relatorios</p>
+        <h1><span class="accent">Relatórios</span></h1>
+        <p class="subtitle">Indicadores e exportações gerenciais.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-16-relatorios.png" alt="Relatórios" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-16-relatorios.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> painel resumido (materiais, recebimentos, qualidade, mobile, licenças) sem sobrecarregar o operador.</p>
+      <p class="notes">Sidebar: «Relatórios».</p>
+    </section>
+
+    <!-- 20 Relatório fotográfico — módulo -->
+    <section class="slide" data-slide="20">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/relatorio-fotografico</p>
+        <h1><span class="accent">Relatório fotográfico</span> — módulo</h1>
+        <p class="subtitle">Ecrã do módulo; no slide seguinte: documento com fotos.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-20-modulo-rel-fotografico.png" alt="Relatório fotográfico — módulo (sidebar Rel. fotográfico)" data-fallback="apresentacao-assets/slide-13-rel-foto.png" />
+          <div class="placeholder"><strong>Módulo</strong><code>slide-20-modulo-rel-fotografico.png</code> — rota <code>#/relatorio-fotografico</code>, «Rel. fotográfico» ativo na sidebar. Não usar <code>slide-17-rel-fotografico.png</code> (é o painel «Relatórios»). Alternativa: <code>slide-13-rel-foto.png</code>.</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> arquivo por NF/romaneio com compressão e ligação a recebimentos.</p>
+      <p class="notes">Próximo slide: <strong>relatório fotográfico</strong> (documento). Sidebar: «Rel. fotográfico».</p>
+    </section>
+
+    <!-- 21 Relatório fotográfico — documento -->
+    <section class="slide" data-slide="21">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/relatorio-fotografico · documento</p>
+        <h1><span class="accent">Relatório fotográfico</span> — documento</h1>
+        <p class="subtitle">Relatório com grelha de fotos (impressão / PDF).</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-17-relatorio-fotografico.png" alt="Relatório fotográfico — documento gerado" data-fallback="apresentacao-assets/Relat%C3%B3rio%20fotogr%C3%A1fico.png" />
+          <div class="placeholder"><strong>Relatório</strong><code>slide-17-relatorio-fotografico.png</code> ou <code>Relatório fotográfico.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> relatório HTML com fotos para arquivo e obra.</p>
+      <p class="notes">Depois segue «Dispositivos mobile» no menu.</p>
+    </section>
+
+    <!-- 22 Dispositivos mobile — módulo (desktop /mobile) -->
+    <section class="slide" data-slide="22">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/mobile</p>
+        <h1><span class="accent">Dispositivos mobile</span> — módulo</h1>
+        <p class="subtitle">Desktop: painel de aparelhos vinculados, autorização, bloqueio e revogação.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-22-modulo-dispositivos-mobile.png" alt="Dispositivos mobile — módulo desktop" data-fallback="apresentacao-assets/Dispositivo%20Mobile.png|apresentacao-assets/slide-18-dispositivos-mobile.png|apresentacao-assets/slide-05-desktop.png" />
+          <div class="placeholder"><strong>Módulo desktop</strong><code>slide-22-modulo-dispositivos-mobile.png</code> ou <code>Dispositivo Mobile.png</code> — sidebar «Dispositivos mobile» (não Planejamento).</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> governo dos telemóveis que acedem ao snapshot — segurança e conformidade no acesso ao Campo.</p>
+      <p class="notes">Próximo slide: app no Campo (ex.: Documentos). Sem expor chaves ou URLs sensíveis em vídeo.</p>
+    </section>
+
+    <!-- 23 Dispositivos mobile — app no Campo (ex.: Documentos) -->
+    <section class="slide" data-slide="23">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">iso_pro_mobile</p>
+        <h1><span class="accent">Dispositivos mobile</span> — app no Campo</h1>
+        <p class="subtitle">Telemóvel autorizado: mesmo snapshot — exemplo ecrã Documentos / operação.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-23-app-dispositivos-campo.png" alt="App no Campo — Documentos" data-fallback="apresentacao-assets/slide-15-mobile.png|apresentacao-assets/slide-18-dispositivos-mobile.png|apresentacao-assets/slide-11-mobile.png|apresentacao-assets/slide-10-mobile.png|apresentacao-assets/slide-05-mobile.png" />
+          <div class="placeholder"><strong>App no Campo</strong><code>slide-23-app-dispositivos-campo.png</code> (ou <code>slide-15-mobile.png</code> enquanto não exportar a nova captura).</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> após autorização no desktop, o operador usa o app no Campo com o mesmo dado — conferência, atendimento, documentos, inventário.</p>
+      <p class="notes">Texto sugerido para legenda no editor de vídeo: ver <code>apresentacao-iso-pro-roteiro-video.md</code>.</p>
+    </section>
+
+    <!-- 24 Usuários -->
+    <section class="slide" data-slide="24">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/usuarios</p>
+        <h1><span class="accent">Usuários</span> e permissões</h1>
+        <p class="subtitle">Perfis do desktop e estado ativo/inativo.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-19-usuarios.png" alt="Usuários" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-19-usuarios.png</code></div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> administração de contas e perfis — cada ação no desktop fica atribuível a um utilizador.</p>
+      <p class="notes">Sidebar: «Usuários».</p>
+    </section>
+
+    <!-- 25 Licenças desktop -->
+    <section class="slide" data-slide="25">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/licencas-desktop</p>
+        <h1><span class="accent">Licenças desktop</span></h1>
+        <p class="subtitle">Controlo de licenciamento das instalações.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-25-licencas-desktop.png" alt="Licenças desktop" data-fallback="apresentacao-assets/slide-20-licencas-desktop.png|apresentacao-assets/slide-16-relatorios.png|apresentacao-assets/slide-05-desktop.png" />
+          <div class="placeholder"><strong>Licenças desktop</strong><code>slide-25-licencas-desktop.png</code> — ecrã «Licenças desktop» na sidebar. Não usar <code>slide-11-desktop.png</code> (é Atendimento) nem <code>slide-15-desktop.png</code> (Planejamento).</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> visibilidade de licenças e risco (expiração, identificação da máquina) para a equipa de TI ou gestão.</p>
+      <p class="notes">Sidebar: «Licenças desktop».</p>
+    </section>
+
+    <!-- 26 Configurações -->
+    <section class="slide" data-slide="26">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">/configuracoes</p>
+        <h1><span class="accent">Configurações</span></h1>
+        <p class="subtitle">Tema, numeração, cliente/projeto e integrações.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-21-configuracoes.png" alt="Configurações" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-21-configuracoes.png</code> — sem chaves em evidência.</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> central de parâmetros e aparência — incluindo o tema <strong>Neon</strong> recomendado para demos coerentes.</p>
+      <p class="notes">Sidebar: «Configurações».</p>
+    </section>
+
+    <!-- 27 Temas: linha 1 (já usada no deck) + linha 2 (Verde / Claro) -->
+    <section class="slide" data-slide="27">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">Aparência · Configurações</p>
+        <h1><span class="accent">Temas</span> do sistema</h1>
+        <p class="subtitle">Quatro capturas numa grelha 2×2: <strong>Neon</strong>, <strong>tema clássico (azul)</strong>, <strong>Verde</strong> e <strong>Claro</strong>. Nas demos, use um só tema nos restantes slides.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-seq asset-seq--themes">
+          <div class="asset-quad-themes" aria-label="Quatro temas visuais do sistema">
+            <div class="quad-item">
+              <p class="quad-label">Neon (recomendado)</p>
+              <div class="asset-slot">
+                <img class="shot" src="apresentacao-assets/slide-22-tema-neon.png" alt="Tema Neon" />
+                <div class="placeholder"><strong>Neon</strong><code>slide-22-tema-neon.png</code></div>
+              </div>
+            </div>
+            <div class="quad-item">
+              <p class="quad-label">Tema clássico (azul)</p>
+              <div class="asset-slot">
+                <img class="shot" src="apresentacao-assets/slide-22-tema-azul.png" alt="Tema clássico azul" />
+                <div class="placeholder"><strong>Tema clássico (azul)</strong><code>slide-22-tema-azul.png</code></div>
+              </div>
+            </div>
+            <div class="quad-item">
+              <p class="quad-label">Tema Verde</p>
+              <div class="asset-slot">
+                <img
+                  class="shot"
+                  src="apresentacao-assets/TEMA%20VERDE.png"
+                  alt="Tema Verde"
+                  data-fallback="apresentacao-assets/slide-22-tema-neon.png"
+                />
+                <div class="placeholder"><strong>Verde</strong><code>TEMA VERDE.png</code></div>
+              </div>
+            </div>
+            <div class="quad-item">
+              <p class="quad-label">Tema Claro</p>
+              <div class="asset-slot">
+                <img
+                  class="shot"
+                  src="apresentacao-assets/TEMA%20CLARO.png"
+                  alt="Tema Claro"
+                  data-fallback="apresentacao-assets/slide-03-painel.png|apresentacao-assets/slide-22-tema-azul.png"
+                />
+                <div class="placeholder"><strong>Claro</strong><code>TEMA CLARO.png</code></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> em <strong>Configurações → Tema</strong> há vários modos (Neon, padrão escuro, escuro, claro, verde, etc.). Este slide junta <strong>quatro</strong> referências visuais: as duas primeiras já usadas no deck; a linha de baixo mostra as capturas <strong>TEMA VERDE</strong> e <strong>TEMA CLARO</strong>.</p>
+      <p class="notes">Assets: <code>slide-22-tema-neon.png</code>, <code>slide-22-tema-azul.png</code>, <code>TEMA VERDE.png</code>, <code>TEMA CLARO.png</code> em <code>docs/apresentacao-assets/</code>. Versão embutida: <code>gerar-apresentacao-slides-embedded.ps1</code>.</p>
+    </section>
+
+    <!-- 28 I.S.O PRO no Campo (visão geral app) -->
+    <section class="slide" data-slide="28">
+      <span class="slide-num"></span>
+      <div class="slide-top">
+        <p class="route">iso_pro_mobile</p>
+        <h1><span class="accent">I.S.O PRO</span> no Campo</h1>
+        <p class="subtitle">Início · Conferência · Atendimento · Documentos · Inventário.</p>
+      </div>
+      <div class="slide-scroll">
+        <div class="asset-slot">
+          <img class="shot" src="apresentacao-assets/slide-23-mobile-campo.png" alt="I.S.O PRO no Campo — app mobile" />
+          <div class="placeholder"><strong>Captura</strong><code>slide-23-mobile-campo.png</code> — ecrã Início / Campo.</div>
+        </div>
+      </div>
+      <p class="legenda"><strong>O que o sistema entrega:</strong> o mesmo snapshot da operação no telemóvel — atalhos para conferência, atendimento, inventário e documentos no Campo.</p>
+      <p class="notes">Projeto: <code>iso_pro_mobile</code>. Último slide do deck — pode deixar ~2–3 s de silêncio no fim se exportar para vídeo.</p>
+    </section>
+  </div>
+
+  <div class="toolbar">
+    <span style="opacity:0.85;font-size:11px;max-width:180px;line-height:1.2;"><strong>Modo vídeo</strong>: legendas ocultas.<br />Para mostrar caixas verdes: remova no HTML a classe <code>prep-gravacao-video</code> do <code>&lt;body&gt;</code>.</span>
+    <span><kbd>←</kbd> <kbd>→</kbd> ou clique</span>
+    <div class="progress" aria-hidden="true"><i id="bar"></i></div>
+    <span id="label"></span>
+    <button type="button" id="prev">Anterior</button>
+    <button type="button" id="next">Seguinte</button>
+  </div>
+
+  <script>
+    (function () {
+      /* Sem ?v= no URL: em file:// (Windows) o querystring quebra o carregamento de PNG locais. */
+      function buildCandidateList(img) {
+        var list = [];
+        function add(u) {
+          if (!u || list.indexOf(u) !== -1) return;
+          var clean = String(u).split("?")[0];
+          list.push(clean);
+        }
+        add(img.getAttribute("src"));
+        var s = img.getAttribute("src") || "";
+        if (/\.png$/i.test(s)) add(s.replace(/\.png$/i, ".jpg"));
+        (img.getAttribute("data-fallback") || "").split("|").forEach(function (piece) {
+          var x = piece.trim();
+          add(x);
+          if (/\.png$/i.test(x)) add(x.replace(/\.png$/i, ".jpg"));
+        });
+        return list;
+      }
+
+      function initAssetSlots() {
+        document.querySelectorAll(".asset-slot").forEach(function (slot) {
+          var img = slot.querySelector("img.shot");
+          if (!img) return;
+          var candidates = buildCandidateList(img);
+          img.dataset.candidates = JSON.stringify(candidates);
+          img.dataset.candIndex = "0";
+
+          function markLoaded() {
+            slot.classList.add("loaded");
+          }
+
+          img.addEventListener("load", markLoaded);
+          img.addEventListener("error", function () {
+            var list = [];
+            try {
+              list = JSON.parse(img.dataset.candidates || "[]");
+            } catch (e) {
+              list = [];
+            }
+            var ix = parseInt(img.dataset.candIndex || "0", 10);
+            if (ix + 1 < list.length) {
+              img.dataset.candIndex = String(ix + 1);
+              img.src = list[ix + 1];
+            }
+          });
+
+          /* Não reescrever src aqui: o atributo no HTML já aponta para apresentacao-assets/… */
+
+          if (img.complete && img.naturalWidth > 0) markLoaded();
+          else if (img.decode) {
+            img.decode().then(markLoaded).catch(function () {});
+          }
+        });
+
+        setTimeout(function () {
+          document.querySelectorAll(".asset-slot").forEach(function (slot) {
+            var img = slot.querySelector("img.shot");
+            if (!img || !img.complete) return;
+            if (img.naturalWidth > 0 || img.naturalHeight > 0) slot.classList.add("loaded");
+          });
+        }, 400);
+      }
+
+      var slides = [].slice.call(document.querySelectorAll(".slide"));
+      var i = 0;
+      var bar = document.getElementById("bar");
+      var label = document.getElementById("label");
+      var total = slides.length;
+
+      function refreshNums() {
+        slides.forEach(function (s, idx) {
+          var el = s.querySelector(".slide-num");
+          if (el) el.textContent = idx + 1 + " / " + total;
+        });
+      }
+
+      function show(n) {
+        i = Math.max(0, Math.min(total - 1, n));
+        slides.forEach(function (s, idx) { s.classList.toggle("active", idx === i); });
+        bar.style.width = ((i + 1) / total) * 100 + "%";
+        label.textContent = i + 1 + " / " + total;
+      }
+
+      refreshNums();
+      initAssetSlots();
+      show(0);
+
+      document.getElementById("prev").addEventListener("click", function (e) { e.stopPropagation(); show(i - 1); });
+      document.getElementById("next").addEventListener("click", function (e) { e.stopPropagation(); show(i + 1); });
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); show(i + 1); }
+        if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); show(i - 1); }
+        if (e.key === "Home") show(0);
+        if (e.key === "End") show(total - 1);
+      });
+
+      document.getElementById("deck").addEventListener("click", function (e) {
+        if (e.target.closest("button") || e.target.closest("a") || e.target.closest(".asset-slot")) return;
+        var w = e.currentTarget.getBoundingClientRect().width;
+        show(e.clientX - e.currentTarget.getBoundingClientRect().left > w / 2 ? i + 1 : i - 1);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,3 +1,5 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -6,9 +8,14 @@ import {
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
-import { escapeCsvCellSemicolon } from '../../../lib/csv';
+import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
+import { coerceRecebimentoQuantidade, roundPesoKg } from '../../../lib/parseDecimal';
 import { normalizarDataFlexivelParaIso } from '../../../lib/normalizeFlexibleDateToIso';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
+import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import type {
   Recebimento,
@@ -23,25 +30,45 @@ import { recebimentoCorrespondeBuscaInteligente } from '../utils/recebimentoBusc
 import {
   construirIndiceDisciplinaUnidadePorCodigoMaterial,
   construirIndicePesoPorCodigoMaterial,
-  garantirCadastroMateriaisParaItensRecebimento,
+  validarCodigosMateriaisAtivosNoCadastroParaRecebimento,
 } from '../../materiais/services/materiais.service';
+import {
+  resolverNomeFornecedorCadastradoAtivo,
+  validarNomesFornecedoresCadastradosAtivos,
+} from '../../fornecedores/services/fornecedores.service';
 import {
   construirJsonImportacaoRecebimentosPlanoCsv,
   montarModeloCsvImportacaoRecebimentos,
   montarModeloCsvImportacaoRecebimentosItens,
 } from './recebimentos.import.csv';
+import { parseRecebimentosPersistidos } from '../schemas/recebimentoPersistido.zod';
+import {
+  IMPORT_COOPERATIVE_MIN_CSV_ROWS,
+  yieldCooperativeEveryRows,
+  yieldToMain,
+} from '../../../lib/yieldCooperativeImport';
 
 export { montarModeloCsvImportacaoRecebimentos, montarModeloCsvImportacaoRecebimentosItens };
 export { previewImportacaoRecebimentosCsv } from './recebimentos.import.csv';
 
-const STORAGE_KEY = 'iso-pro-desktop-recebimentos';
+const RECEBIMENTOS_STORAGE_BASE = 'iso-pro-desktop-recebimentos';
+
+function recebimentosStorageKey(): string {
+  return getScopedIsoProStorageKey(RECEBIMENTOS_STORAGE_BASE);
+}
+
+function bloqueioLocalRecebimentos(tamanhoListaGravacao: number): string | null {
+  return mensagemSeSubstituirLocalPerderiaCadastros([
+    { storageKey: recebimentosStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'recebimento(s)' },
+  ]);
+}
 
 export const RECEBIMENTOS_EXPORT_SCHEMA_VERSION = 1;
 
 const seedData: Recebimento[] = [
   {
     id: 'rec-1',
-    fornecedor: 'Metal Forte',
+    fornecedor: 'Fornecedor A - Tubos Ltda',
     dataRecebimento: '2026-04-02',
     notaFiscal: 'NF-778810',
     romaneio: 'ROM-100',
@@ -67,7 +94,7 @@ const seedData: Recebimento[] = [
   },
   {
     id: 'rec-2',
-    fornecedor: 'Cabos Brasil',
+    fornecedor: 'Fornecedor B - Conexoes S/A',
     dataRecebimento: '2026-04-01',
     notaFiscal: 'NF-778811',
     romaneio: 'ROM-101',
@@ -119,10 +146,10 @@ function normalizeRecebimentoPayload(payload: RecebimentoFormData): RecebimentoF
       unidade: item.unidade.trim(),
       disciplina: item.disciplina.trim(),
       localizacao: String(item.localizacao ?? '').trim(),
-      quantidadeRecebida: Number(item.quantidadeRecebida ?? 0),
-      quantidadeConferida: Number(item.quantidadeConferida ?? 0),
-      pesoUnitario: Number(item.pesoUnitario ?? 0),
-      pesoTotal: Number(item.pesoTotal ?? 0),
+      quantidadeRecebida: coerceRecebimentoQuantidade(item.quantidadeRecebida ?? 0),
+      quantidadeConferida: coerceRecebimentoQuantidade(item.quantidadeConferida ?? 0),
+      pesoUnitario: coerceRecebimentoQuantidade(item.pesoUnitario ?? 0),
+      pesoTotal: coerceRecebimentoQuantidade(item.pesoTotal ?? 0),
       certificado: String(item.certificado ?? '').trim(),
     })),
   };
@@ -178,13 +205,18 @@ function validateRecebimentoPayload(payload: RecebimentoFormData, items: Recebim
 }
 
 function normalizarItemPeso(item: RecebimentoItem): RecebimentoItem {
-  const pu = Number(item.pesoUnitario ?? 0);
-  const pt = Number(item.pesoTotal ?? 0);
+  const qr = coerceRecebimentoQuantidade(item.quantidadeRecebida ?? 0);
+  const qc = coerceRecebimentoQuantidade(item.quantidadeConferida ?? 0);
+  const pu = coerceRecebimentoQuantidade(item.pesoUnitario ?? 0);
+  const pt = coerceRecebimentoQuantidade(item.pesoTotal ?? 0);
   return {
     ...item,
+    quantidadeRecebida: qr,
+    quantidadeConferida: qc,
     certificado: String(item.certificado ?? '').trim(),
-    pesoUnitario: Number.isFinite(pu) ? pu : 0,
-    pesoTotal: Number.isFinite(pt) ? pt : 0,
+    observacaoItem: String(item.observacaoItem ?? '').trim(),
+    pesoUnitario: roundPesoKg(pu),
+    pesoTotal: roundPesoKg(pt),
   };
 }
 
@@ -194,8 +226,8 @@ function aplicarPesoCadastroUmItem(item: RecebimentoItem, pesoPorCodigo: Map<str
   if (pesoCad == null || pesoCad <= 0) return base;
   const q = Number(base.quantidadeRecebida) || 0;
   const pu = pesoCad;
-  const pt = Number((q * pu).toFixed(3));
-  return { ...base, pesoUnitario: pu, pesoTotal: pt };
+  const pt = roundPesoKg(q * pu);
+  return { ...base, pesoUnitario: roundPesoKg(pu), pesoTotal: pt };
 }
 
 /** Alinha disciplina, unidade e peso ao cadastro de materiais quando o codigo bate (valores do cadastro prevalecem). */
@@ -263,23 +295,28 @@ function normalizarRecebimentoItensLegado(rec: Recebimento): Recebimento {
 }
 
 function readAll(): Recebimento[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(recebimentosStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
+    localStorage.setItem(recebimentosStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
 
   try {
-    const parsed = JSON.parse(raw) as Recebimento[];
-    return parsed.map(normalizarRecebimentoItensLegado);
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseRecebimentosPersistidos(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Recebimentos', recebimentosStorageKey());
+      return [];
+    }
+    return validated.map(normalizarRecebimentoItensLegado);
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
-    return seedData;
+    avisarPreservacaoLocalStorageCorrupto('Recebimentos', recebimentosStorageKey());
+    return [];
   }
 }
 
 function writeAll(items: Recebimento[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(recebimentosStorageKey(), JSON.stringify(items));
 }
 
 async function loadRecebimentos(): Promise<Recebimento[]> {
@@ -313,6 +350,9 @@ type SnapshotPayload = {
     observacoes?: string;
     modoRecebimento?: 'direto' | 'aguardando_conferencia';
     statusConferencia?: 'pendente' | 'conferido' | null;
+    /** App móvel / fluxo de conferência — legado pode ter `modo` errado mas este campo preenchido. */
+    dataConferencia?: string;
+    data_conferencia?: string;
     itens?: Array<{
       codigo?: string;
       descricao?: string;
@@ -324,6 +364,7 @@ type SnapshotPayload = {
       quantidadeConferida?: number | string | null;
       pesoUnitario?: number | string | null;
       pesoTotal?: number | string | null;
+      observacaoItem?: string;
     }>;
   }>;
 };
@@ -341,14 +382,13 @@ async function readSnapshotRecebimentos(): Promise<Recebimento[]> {
     notaFiscal: String(rec.nota ?? ''),
     romaneio: String(rec.romaneio ?? ''),
     conferente: String(rec.conferenteNome ?? ''),
-    modoRecebimento: (() => {
-      const m = rec.modoRecebimento ?? 'direto';
-      /** Registos antigos: conferência já concluída mas modo não atualizado no snapshot. */
-      if (rec.statusConferencia === 'conferido' && m === 'aguardando_conferencia') {
-        return 'direto';
-      }
-      return m;
+    dataConferencia: (() => {
+      const raw = (rec as { dataConferencia?: unknown; data_conferencia?: unknown }).dataConferencia ??
+        (rec as { data_conferencia?: unknown }).data_conferencia;
+      const s = raw != null ? String(raw).trim() : '';
+      return s || undefined;
     })(),
+    modoRecebimento: rec.modoRecebimento ?? 'direto',
     status:
       rec.statusConferencia === 'conferido'
         ? 'conferido'
@@ -364,11 +404,12 @@ async function readSnapshotRecebimentos(): Promise<Recebimento[]> {
         unidade: String(item.unidade ?? 'UN'),
         disciplina: String(item.disciplina ?? ''),
         localizacao: String(item.localizacao ?? ''),
-        quantidadeRecebida: Number(item.quantidade ?? 0),
-        quantidadeConferida: Number(item.quantidadeConferida ?? 0),
-        pesoUnitario: Number(item.pesoUnitario ?? 0),
-        pesoTotal: Number(item.pesoTotal ?? 0),
+        quantidadeRecebida: coerceRecebimentoQuantidade(item.quantidade),
+        quantidadeConferida: coerceRecebimentoQuantidade(item.quantidadeConferida),
+        pesoUnitario: coerceRecebimentoQuantidade(item.pesoUnitario ?? 0),
+        pesoTotal: coerceRecebimentoQuantidade(item.pesoTotal ?? 0),
         certificado: String(item.certificado ?? ''),
+        observacaoItem: String(item.observacaoItem ?? '').trim(),
       }),
     ),
   }));
@@ -390,6 +431,7 @@ async function writeSnapshotRecebimentos(items: Recebimento[]): Promise<void> {
           conferenteNome: item.conferente,
           observacoes: item.observacoes,
           modoRecebimento: item.modoRecebimento,
+          ...(item.dataConferencia?.trim() ? { dataConferencia: item.dataConferencia.trim() } : {}),
           statusConferencia: item.status === 'conferido' ? 'conferido' : 'pendente',
           itens: item.itens.map((recItem) => ({
             codigo: recItem.codigoMaterial,
@@ -402,6 +444,7 @@ async function writeSnapshotRecebimentos(items: Recebimento[]): Promise<void> {
             quantidadeConferida: recItem.quantidadeConferida,
             pesoUnitario: recItem.pesoUnitario ?? 0,
             pesoTotal: recItem.pesoTotal ?? 0,
+            observacaoItem: String(recItem.observacaoItem ?? '').trim(),
           })),
         })),
         dataAtualizacao: new Date().toISOString(),
@@ -484,13 +527,14 @@ function auditarExclusaoDefinitivaRecebimentosVarios(removidos: Recebimento[], o
 }
 
 function toListItem(item: Recebimento): RecebimentoListItem {
-  /** Em modo direto nao ha fluxo de conferencia operacional — qtd conf. pode diferir da NF sem ser "divergencia". */
-  const conferenciaItensDivergentes =
-    item.modoRecebimento === 'direto'
-      ? 0
-      : item.itens.filter(
-          (i) => Number(i.quantidadeRecebida) > 0 && Number(i.quantidadeConferida) < Number(i.quantidadeRecebida),
-        ).length;
+  /** Modo direto «puro» ignora divergência de linhas; legado com `dataConferencia` segue regra de conferência. */
+  const modoDiretoSemFluxoConferencia =
+    item.modoRecebimento === 'direto' && !item.dataConferencia?.trim();
+  const conferenciaItensDivergentes = modoDiretoSemFluxoConferencia
+    ? 0
+    : item.itens.filter(
+        (i) => Number(i.quantidadeRecebida) > 0 && Number(i.quantidadeConferida) < Number(i.quantidadeRecebida),
+      ).length;
   return {
     id: item.id,
     fornecedor: item.fornecedor,
@@ -499,6 +543,7 @@ function toListItem(item: Recebimento): RecebimentoListItem {
     romaneio: item.romaneio,
     conferente: item.conferente,
     modoRecebimento: item.modoRecebimento,
+    dataConferencia: item.dataConferencia,
     status: item.status,
     totalItens: item.itens.length,
     quantidadeRecebidaTotal: item.itens.reduce((total, current) => total + current.quantidadeRecebida, 0),
@@ -645,10 +690,24 @@ export async function salvarRecebimento(
     try {
       const items = await readSnapshotRecebimentos();
       const normalizedBase = normalizeRecebimentoPayload(payload);
-      const normalized = {
+      let normalized = {
         ...normalizedBase,
         itens: await enriquecerItensRecebimentoComPesoCadastroMateriais(normalizedBase.itens),
       };
+      const resolvedFornecedor = await resolverNomeFornecedorCadastradoAtivo(normalized.fornecedor);
+      if (!resolvedFornecedor) {
+        return {
+          success: false,
+          error:
+            'Fornecedor nao cadastrado no sistema. Cadastre em Fornecedores antes de salvar o recebimento.',
+        };
+      }
+      normalized = { ...normalized, fornecedor: resolvedFornecedor };
+      const materialErro = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+        normalized.itens.map((it) => it.codigoMaterial),
+        'salvar',
+      );
+      if (materialErro) return { success: false, error: materialErro };
       const validationError = validateRecebimentoPayload(normalized, items, currentId);
       if (validationError) return { success: false, error: validationError };
 
@@ -660,6 +719,8 @@ export async function salvarRecebimento(
           return { success: false, error: 'Recebimentos com conferencia iniciada nao podem ser editados por este fluxo.' };
         }
         items[index] = { ...normalized, id: currentId, status: deriveStatus(normalized) };
+        const bloqueioEdit = bloqueioLocalRecebimentos(items.length);
+        if (bloqueioEdit) return { success: false, error: bloqueioEdit };
         const writeEdit = await executeWrite({
           shouldWriteRemote: true,
           writeRemote: () => writeSnapshotRecebimentos(items),
@@ -667,9 +728,6 @@ export async function salvarRecebimento(
           successData: items[index],
           fallbackMessage: 'Falha ao salvar recebimento no Supabase.',
         });
-        if (writeEdit.success) {
-          await garantirCadastroMateriaisParaItensRecebimento(normalized.itens);
-        }
         return writeEdit;
       }
 
@@ -679,6 +737,8 @@ export async function salvarRecebimento(
         status: deriveStatus(normalized),
       };
       items.push(created);
+      const bloqueioNovo = bloqueioLocalRecebimentos(items.length);
+      if (bloqueioNovo) return { success: false, error: bloqueioNovo };
       const writeNew = await executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotRecebimentos(items),
@@ -686,9 +746,6 @@ export async function salvarRecebimento(
         successData: created,
         fallbackMessage: 'Falha ao salvar recebimento no Supabase.',
       });
-      if (writeNew.success) {
-        await garantirCadastroMateriaisParaItensRecebimento(normalized.itens);
-      }
       return writeNew;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao salvar recebimento no Supabase.' };
@@ -697,10 +754,23 @@ export async function salvarRecebimento(
 
   const items = readAll();
   const normalizedBase = normalizeRecebimentoPayload(payload);
-  const normalized = {
+  let normalized = {
     ...normalizedBase,
     itens: await enriquecerItensRecebimentoComPesoCadastroMateriais(normalizedBase.itens),
   };
+  const resolvedFornecedorLocal = await resolverNomeFornecedorCadastradoAtivo(normalized.fornecedor);
+  if (!resolvedFornecedorLocal) {
+    return {
+      success: false,
+      error: 'Fornecedor nao cadastrado no sistema. Cadastre em Fornecedores antes de salvar o recebimento.',
+    };
+  }
+  normalized = { ...normalized, fornecedor: resolvedFornecedorLocal };
+  const materialErroLocal = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+    normalized.itens.map((it) => it.codigoMaterial),
+    'salvar',
+  );
+  if (materialErroLocal) return { success: false, error: materialErroLocal };
   const validationError = validateRecebimentoPayload(normalized, items, currentId);
   if (validationError) return { success: false, error: validationError };
 
@@ -713,7 +783,6 @@ export async function salvarRecebimento(
     }
     items[index] = { ...normalized, id: currentId, status: deriveStatus(normalized) };
     writeAll(items);
-    await garantirCadastroMateriaisParaItensRecebimento(normalized.itens);
     return { success: true, data: items[index] };
   }
 
@@ -725,7 +794,6 @@ export async function salvarRecebimento(
 
   items.push(created);
   writeAll(items);
-  await garantirCadastroMateriaisParaItensRecebimento(normalized.itens);
   return { success: true, data: created };
 }
 
@@ -740,6 +808,8 @@ export async function cancelarRecebimento(id: string): Promise<ServiceResult<Rec
         return { success: false, error: 'Recebimentos com conferencia iniciada nao podem ser cancelados por este fluxo.' };
       }
       items[index] = { ...items[index], status: 'cancelado' };
+      const bloqueioCancel = bloqueioLocalRecebimentos(items.length);
+      if (bloqueioCancel) return { success: false, error: bloqueioCancel };
       return executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotRecebimentos(items),
@@ -805,6 +875,8 @@ export async function destravarRecebimentoParaCorrecaoAdministrativa(
       }
       const antes = items[index];
       const atualizado = aplicarDestravamento(items, index);
+      const bloqueioDestravar = bloqueioLocalRecebimentos(items.length);
+      if (bloqueioDestravar) return { success: false, error: bloqueioDestravar };
       const writeResult = await executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotRecebimentos(items),
@@ -874,6 +946,8 @@ export async function excluirRecebimentosDefinitivamente(
       }
       const next = items.filter((item) => !idSet.has(item.id));
 
+      const bloqueioExcluir = bloqueioLocalRecebimentos(next.length);
+      if (bloqueioExcluir) return { success: false, error: bloqueioExcluir };
       const writeResult = await executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotRecebimentos(next),
@@ -967,7 +1041,9 @@ export async function finalizarConferenciaRecebimento(payload: {
 
   const updated: Recebimento = {
     ...current,
-    modoRecebimento: 'direto',
+    /** Mantém o fluxo «aguardando conferência» no histórico; o status operacional passa a `conferido`. */
+    modoRecebimento: 'aguardando_conferencia',
+    dataConferencia: current.dataConferencia?.trim() || new Date().toISOString(),
     conferente: payload.conferente.trim(),
     observacoes: payload.observacoes.trim(),
     itens: nextItens,
@@ -977,6 +1053,8 @@ export async function finalizarConferenciaRecebimento(payload: {
   items[index] = updated;
 
   if (hasSupabaseConfig()) {
+    const bloqueioConferencia = bloqueioLocalRecebimentos(items.length);
+    if (bloqueioConferencia) return { success: false, error: bloqueioConferencia };
     return executeWrite({
       shouldWriteRemote: true,
       writeRemote: () => writeSnapshotRecebimentos(items),
@@ -1012,31 +1090,57 @@ function chaveNegocioRecebimentoForm(form: RecebimentoFormData): string {
 function extrairListaRecebimentosDoImport(
   parsed: unknown,
 ): { ok: true; list: unknown[] } | { ok: false; error: string } {
-  if (Array.isArray(parsed)) {
-    return { ok: true, list: parsed };
+  const list = parseRecebimentosImportJsonRoot(parsed);
+  if (list === null) {
+    return {
+      ok: false,
+      error: 'Formato invalido: use um array de recebimentos ou um objeto com a propriedade "recebimentos".',
+    };
   }
-  if (parsed && typeof parsed === 'object' && Array.isArray((parsed as RecebimentosArquivoExportacao).recebimentos)) {
-    return { ok: true, list: (parsed as RecebimentosArquivoExportacao).recebimentos };
+  return { ok: true, list };
+}
+
+function coletarNomesFornecedoresDaListaImportRecebimentos(list: unknown[]): string[] {
+  const set = new Set<string>();
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const f = String(o.fornecedor ?? o.fornecedorNome ?? '').trim();
+    if (f) set.add(f);
   }
-  return {
-    ok: false,
-    error: 'Formato invalido: use um array de recebimentos ou um objeto com a propriedade "recebimentos".',
-  };
+  return [...set];
+}
+
+function coletarCodigosMateriaisDaListaImportRecebimentos(list: unknown[]): string[] {
+  const set = new Set<string>();
+  for (const raw of list) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const itens = Array.isArray(o.itens) ? o.itens : [];
+    for (const it of itens) {
+      if (!it || typeof it !== 'object') continue;
+      const row = it as Record<string, unknown>;
+      const c = extrairCodigoMaterialDeObjetoImport(row);
+      if (c) set.add(c);
+    }
+  }
+  return [...set];
 }
 
 function normalizarItemImportacaoRecebimento(raw: unknown, recIndex: number, itemIndex: number): RecebimentoItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
-  const codigoMaterial = String(o.codigoMaterial ?? o.codigo ?? '').trim();
+  const codigoMaterial = extrairCodigoMaterialDeObjetoImport(o);
   const descricaoMaterial = String(o.descricaoMaterial ?? o.descricao ?? '').trim();
   const unidade = String(o.unidade ?? 'UN').trim() || 'UN';
   const disciplina = String(o.disciplina ?? '').trim();
   const localizacao = String(o.localizacao ?? '').trim();
-  const quantidadeRecebida = Number(o.quantidadeRecebida ?? o.quantidade ?? 0);
-  const quantidadeConferida = Number(o.quantidadeConferida ?? 0);
-  const pesoUnitario = Number(o.pesoUnitario ?? o.peso_unitario ?? 0);
-  const pesoTotal = Number(o.pesoTotal ?? o.peso_total ?? 0);
+  const quantidadeRecebida = coerceRecebimentoQuantidade(o.quantidadeRecebida ?? o.quantidade ?? 0);
+  const quantidadeConferida = coerceRecebimentoQuantidade(o.quantidadeConferida ?? 0);
+  const pesoUnitario = coerceRecebimentoQuantidade(o.pesoUnitario ?? o.peso_unitario ?? 0);
+  const pesoTotal = coerceRecebimentoQuantidade(o.pesoTotal ?? o.peso_total ?? 0);
   const certificado = String(o.certificado ?? o.cert ?? '').trim();
+  const observacaoItem = String(o.observacaoItem ?? o.observacao_item ?? '').trim();
   const id = String(o.id ?? `imp-rec${recIndex}-i${itemIndex}`).trim();
   if (!codigoMaterial || !descricaoMaterial || !localizacao) return null;
   return normalizarItemPeso({
@@ -1046,11 +1150,12 @@ function normalizarItemImportacaoRecebimento(raw: unknown, recIndex: number, ite
     unidade,
     disciplina,
     localizacao,
-    quantidadeRecebida: Number.isFinite(quantidadeRecebida) ? quantidadeRecebida : 0,
-    quantidadeConferida: Number.isFinite(quantidadeConferida) ? Math.max(0, quantidadeConferida) : 0,
-    pesoUnitario: Number.isFinite(pesoUnitario) ? pesoUnitario : 0,
-    pesoTotal: Number.isFinite(pesoTotal) ? pesoTotal : 0,
+    quantidadeRecebida,
+    quantidadeConferida: Math.max(0, quantidadeConferida),
+    pesoUnitario,
+    pesoTotal,
     certificado,
+    observacaoItem,
   });
 }
 
@@ -1175,8 +1280,8 @@ export async function montarExportacaoRecebimentosCsvResumo(
         li.modoRecebimento,
         li.status,
         String(li.totalItens),
-        String(li.quantidadeRecebidaTotal),
-        String(li.quantidadeConferidaTotal),
+        formatDecimalExcelPtBr(Number(li.quantidadeRecebidaTotal)),
+        formatDecimalExcelPtBr(Number(li.quantidadeConferidaTotal)),
       ]
         .map((c) => escapeCsvCellExcelPt(c))
         .join(CSV_EXCEL_SEP);
@@ -1246,10 +1351,10 @@ export async function montarExportacaoRecebimentosCsvItens(
           it.unidade,
           it.disciplina,
           it.localizacao,
-          String(it.quantidadeRecebida),
-          String(it.quantidadeConferida),
-          String(it.pesoUnitario ?? 0),
-          String(it.pesoTotal ?? 0),
+          formatDecimalExcelPtBr(Number(it.quantidadeRecebida)),
+          formatDecimalExcelPtBr(Number(it.quantidadeConferida)),
+          formatDecimalExcelPtBr(Number(it.pesoUnitario ?? 0)),
+          formatDecimalExcelPtBr(Number(it.pesoTotal ?? 0)),
           String(it.certificado ?? ''),
         ]
           .map((c) => escapeCsvCellExcelPt(c))
@@ -1283,6 +1388,47 @@ export async function importarRecebimentosDoArquivoJson(
     return { success: false, error: 'Nenhum recebimento encontrado no arquivo.' };
   }
 
+  for (let ri = 0; ri < lista.list.length; ri++) {
+    const raw = lista.list[ri];
+    if (!raw || typeof raw !== 'object') {
+      return {
+        success: false,
+        error: `Importacao nao concluida. Registro ${ri + 1}: formato invalido (esperado objeto de recebimento).`,
+      };
+    }
+    const o = raw as Record<string, unknown>;
+    const nomeFornec = String(o.fornecedor ?? o.fornecedorNome ?? '').trim();
+    if (!nomeFornec) {
+      return {
+        success: false,
+        error: `Importacao nao concluida. Registro ${ri + 1}: informe o fornecedor cadastrado em Fornecedores.`,
+      };
+    }
+  }
+
+  const nomesFornecedoresArquivo = coletarNomesFornecedoresDaListaImportRecebimentos(lista.list);
+  const fornecedorImportErro = await validarNomesFornecedoresCadastradosAtivos(nomesFornecedoresArquivo);
+  if (fornecedorImportErro) {
+    return { success: false, error: fornecedorImportErro };
+  }
+
+  const mapaFornecedorCanonicoImport = new Map<string, string>();
+  for (const nome of nomesFornecedoresArquivo) {
+    const resolved = await resolverNomeFornecedorCadastradoAtivo(nome);
+    if (resolved) {
+      mapaFornecedorCanonicoImport.set(normalizeLookupValue(nome), resolved);
+    }
+  }
+
+  const codigosMateriaisArquivo = coletarCodigosMateriaisDaListaImportRecebimentos(lista.list);
+  const materialImportErro = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+    codigosMateriaisArquivo,
+    'import',
+  );
+  if (materialImportErro) {
+    return { success: false, error: materialImportErro };
+  }
+
   const detalhes: string[] = [];
   let criados = 0;
   let atualizados = 0;
@@ -1297,6 +1443,14 @@ export async function importarRecebimentosDoArquivoJson(
       success: false,
       error: error instanceof Error ? error.message : 'Falha ao carregar recebimentos antes da importacao.',
     };
+  }
+
+  const podeEditarImportRecebimentoPorChave = new Map<string, boolean>();
+  for (const r of working) {
+    podeEditarImportRecebimentoPorChave.set(
+      chaveNegocioRecebimentoForm(r),
+      r.status === 'aguardando_conferencia',
+    );
   }
 
   let pesoPorCodigoImport = new Map<string, number>();
@@ -1316,7 +1470,7 @@ export async function importarRecebimentosDoArquivoJson(
     return aplicarCadastroMateriaisLinhaRecebimento(it, pesoPorCodigoImport, disciplinaUnidadeImport);
   }
 
-  const itensImportacaoParaCadastroMateriais: RecebimentoItem[] = [];
+  const cooperativeMerge = lista.list.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
 
   for (let i = 0; i < lista.list.length; i++) {
     const norm = normalizarRecebimentoImportacao(lista.list[i], i);
@@ -1326,7 +1480,15 @@ export async function importarRecebimentosDoArquivoJson(
       continue;
     }
 
-    const { form, idSugerido } = norm;
+    const { idSugerido } = norm;
+    let { form } = norm;
+    const fornecedorCanonico = mapaFornecedorCanonicoImport.get(normalizeLookupValue(form.fornecedor));
+    if (!fornecedorCanonico) {
+      detalhes.push(`Registro ${i + 1}: fornecedor nao cadastrado no sistema.`);
+      ignorados += 1;
+      continue;
+    }
+    form = { ...form, fornecedor: fornecedorCanonico };
     const negocioKey = chaveNegocioRecebimentoForm(form);
 
     const validationPrecheck =
@@ -1349,7 +1511,7 @@ export async function importarRecebimentosDoArquivoJson(
     const matchedIndex = working.findIndex((item) => chaveNegocioRecebimentoForm(item) === negocioKey);
 
     if (matchedIndex !== -1) {
-      if (working[matchedIndex].status !== 'aguardando_conferencia') {
+      if (!podeEditarImportRecebimentoPorChave.get(negocioKey)) {
         detalhes.push(
           `${form.fornecedor}: ja existe e nao esta aguardando conferencia (apenas nesse status pode ser atualizado por importacao).`,
         );
@@ -1371,7 +1533,6 @@ export async function importarRecebimentosDoArquivoJson(
 
       const id = working[matchedIndex].id;
       working[matchedIndex] = { ...normalized, id, status: deriveStatus(normalized) };
-      itensImportacaoParaCadastroMateriais.push(...normalized.itens);
       atualizados += 1;
       detalhes.push(`${form.fornecedor} (${form.notaFiscal || form.romaneio}): atualizado.`);
     } else {
@@ -1403,9 +1564,12 @@ export async function importarRecebimentosDoArquivoJson(
       };
 
       working.push(created);
-      itensImportacaoParaCadastroMateriais.push(...normalized.itens);
       criados += 1;
       detalhes.push(`${form.fornecedor} (${form.notaFiscal || form.romaneio}): incluido.`);
+    }
+
+    if (cooperativeMerge) {
+      await yieldCooperativeEveryRows(i);
     }
   }
 
@@ -1425,6 +1589,11 @@ export async function importarRecebimentosDoArquivoJson(
   }
 
   if (hasSupabaseConfig()) {
+    await yieldToMain();
+    const bloqueioImport = bloqueioLocalRecebimentos(working.length);
+    if (bloqueioImport) {
+      return { success: false, error: bloqueioImport, data: resumo };
+    }
     const importWrite = await executeWrite({
       shouldWriteRemote: true,
       writeRemote: () => writeSnapshotRecebimentos(working),
@@ -1432,14 +1601,12 @@ export async function importarRecebimentosDoArquivoJson(
       successData: resumo,
       fallbackMessage: 'Falha ao importar recebimentos no Supabase.',
     });
-    if (importWrite.success) {
-      await garantirCadastroMateriaisParaItensRecebimento(itensImportacaoParaCadastroMateriais);
-    }
     return importWrite;
   }
 
+  const blockedImport = whenBusinessWriteBlockedResult<RecebimentosImportacaoResumo>();
+  if (blockedImport) return blockedImport;
   writeAll(working);
-  await garantirCadastroMateriaisParaItensRecebimento(itensImportacaoParaCadastroMateriais);
   return { success: true, data: resumo, meta: { source: 'local' } };
 }
 
@@ -1447,7 +1614,7 @@ export async function importarRecebimentosDoArquivoJson(
 export async function importarRecebimentosDoArquivoCsv(
   text: string,
 ): Promise<ServiceResult<RecebimentosImportacaoResumo>> {
-  const built = construirJsonImportacaoRecebimentosPlanoCsv(text);
+  const built = await construirJsonImportacaoRecebimentosPlanoCsv(text);
   if (!built.ok) {
     return { success: false, error: built.error };
   }

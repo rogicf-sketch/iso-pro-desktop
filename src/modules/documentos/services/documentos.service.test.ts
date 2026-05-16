@@ -5,6 +5,7 @@ import type { DocumentoFormData } from '../types/documento.types';
 import { cancelarDocumento, excluirDocumentoDefinitivamente, excluirDocumentosDefinitivamente, salvarDocumento } from './documentos.service';
 
 const STORAGE_KEY = 'iso-pro-desktop-documentos';
+const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
 
 const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockListarMateriais } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('../../../lib/supabase', async (importOriginal) => {
   return {
     ...actual,
     hasSupabaseConfig: vi.fn(() => true),
+    shouldUseCloudMaterials: vi.fn(() => false),
   };
 });
 
@@ -25,9 +27,13 @@ vi.mock('../../recebimentos/services/recebimentos.service', () => ({
   carregarRecebimentosCompletos: vi.fn(async () => []),
 }));
 
-vi.mock('../../materiais/services/materiais.service', () => ({
-  listarMateriais: mockListarMateriais,
-}));
+vi.mock('../../materiais/services/materiais.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../materiais/services/materiais.service')>();
+  return {
+    ...actual,
+    listarMateriais: mockListarMateriais,
+  };
+});
 
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../lib/isoProSnapshot')>();
@@ -89,6 +95,10 @@ function resetMateriaisMockParaDocumentos() {
   });
 }
 
+function seedMateriaisLocalStorageParaValidacao(store: Record<string, string>) {
+  store[MATERIAIS_KEY] = JSON.stringify(['C1', 'X1', 'Y1', 'TB-0001', 'EL-0102', 'MT-0020'].map(mkMaterialListItem));
+}
+
 describe('documentos.service / salvarDocumento (Supabase)', () => {
   let store: Record<string, string>;
 
@@ -133,6 +143,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
         },
       ],
     });
+    seedMateriaisLocalStorageParaValidacao(store);
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
@@ -151,15 +162,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
   });
 
   it('recusa salvar quando o codigo do material nao existe no cadastro de materiais', async () => {
-    mockListarMateriais.mockResolvedValueOnce({
-      success: true,
-      data: {
-        items: [mkMaterialListItem('TB-0001')],
-        total: 1,
-        page: 1,
-        pageSize: 999999,
-      },
-    });
+    store[MATERIAIS_KEY] = JSON.stringify([mkMaterialListItem('TB-0001')]);
     mockReadForWrite.mockResolvedValue({
       payload: { documentos: [] },
       baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
@@ -186,7 +189,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/BV-SUB-TRA501/);
-    expect(result.error).toMatch(/nao esta cadastrado/);
+    expect(result.error).toMatch(/nao cadastrado/i);
     expect(mockCommitWrite).not.toHaveBeenCalled();
   });
 
@@ -207,6 +210,25 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
     expect(result.data?.descricao).toBe('Atualizado');
     const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { id: string; descricao: string }[];
     expect(local.some((d) => d.id === 'doc-edit' && d.descricao === 'Atualizado')).toBe(true);
+  });
+
+  it('recusa salvar na nuvem quando o armazenamento local tem mais documentos que a lista carregada do snapshot', async () => {
+    mockReadForWrite.mockResolvedValue({
+      payload: { documentos: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[STORAGE_KEY] = JSON.stringify([{ id: 'ghost-1' }, { id: 'ghost-2' }, { id: 'ghost-3' }]);
+
+    const result = await salvarDocumento(minimalForm({ descricao: 'Tentativa' }), 'doc-edit');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/armazenamento deste navegador/i);
+    expect(result.error).toMatch(/Enviar planejamento deste PC para a nuvem/i);
+    expect(mockCommitWrite).not.toHaveBeenCalled();
   });
 });
 
@@ -286,6 +308,7 @@ describe('documentos.service / cancelarDocumento (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(payloadDocCancelarPendente());
+    seedMateriaisLocalStorageParaValidacao(store);
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
@@ -318,6 +341,24 @@ describe('documentos.service / cancelarDocumento (Supabase)', () => {
     expect(result.data?.status).toBe('cancelado');
     const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { id: string; status: string }[];
     expect(local.find((d) => d.id === 'doc-cancel')?.status).toBe('cancelado');
+  });
+
+  it('recusa cancelar na nuvem quando armazenamento local tem mais documentos que o snapshot', async () => {
+    mockReadForWrite.mockResolvedValue({
+      payload: { documentos: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[STORAGE_KEY] = JSON.stringify([{ id: 'ghost-1' }, { id: 'ghost-2' }, { id: 'ghost-3' }]);
+
+    const result = await cancelarDocumento('doc-cancel');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/armazenamento deste navegador/i);
+    expect(mockCommitWrite).not.toHaveBeenCalled();
   });
 
   it('documento nao pendente exige justificativa administrativa', async () => {
@@ -408,6 +449,7 @@ describe('documentos.service / excluirDocumentoDefinitivamente (Supabase)', () =
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
+    seedMateriaisLocalStorageParaValidacao(store);
   });
 
   it('remove o documento do snapshot e mantem os demais no armazenamento local', async () => {

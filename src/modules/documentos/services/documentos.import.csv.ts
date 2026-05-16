@@ -3,7 +3,15 @@
  * Agrupa por numero + revisao e monta JSON compativel com importarDocumentosDoArquivoJson.
  */
 
-import { parseCsvToRecords } from '../../../lib/csv';
+import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
+import { parseCsvToRecordsCooperative } from '../../../lib/csv';
+import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
+import { parseDocumentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
+import {
+  IMPORT_COOPERATIVE_MIN_CSV_ROWS,
+  yieldCooperativeEveryRows,
+} from '../../../lib/yieldCooperativeImport';
+import { validarCodigosMateriaisAtivosNoCadastroParaRecebimento } from '../../materiais/services/materiais.service';
 import type { DocumentoItem } from '../types/documento.types';
 
 function cell(row: Record<string, string>, ...aliases: string[]): string {
@@ -33,21 +41,26 @@ type GrupoAcumulador = {
   itensPorCodigo: Map<string, DocumentoItem>;
 };
 
-export function construirJsonImportacaoDocumentosPlanoCsv(
+export async function construirJsonImportacaoDocumentosPlanoCsv(
   text: string,
-): { ok: true; json: string } | { ok: false; error: string } {
-  const parsed = parseCsvToRecords(text);
+): Promise<{ ok: true; json: string } | { ok: false; error: string }> {
+  const cabErr = mensagemSeCabecalhoImportCsvIncompativel('documentos', text);
+  if (cabErr) {
+    return { ok: false, error: cabErr };
+  }
+  const parsed = await parseCsvToRecordsCooperative(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV invalido ou sem linhas de dados (cabecalho obrigatorio).' };
   }
 
   const grupos = new Map<string, GrupoAcumulador>();
+  const useCooperative = parsed.rows.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
 
   for (let r = 0; r < parsed.rows.length; r++) {
     const row = parsed.rows[r];
     const numero = cell(row, 'numero', 'numero_documento').trim();
     const revisao = cell(row, 'revisao', 'rev').trim() || 'A';
-    const descricao = cell(row, 'descricao').trim();
+    const descricao = cell(row, 'descricao', 'descricao_documento').trim();
     const responsavel = cell(row, 'responsavel').trim();
     const dataDocumento = cell(row, 'data_documento', 'data', 'datadocumento').trim();
     const observacao = cell(row, 'observacao', 'observacoes', 'obs').trim();
@@ -84,7 +97,10 @@ export function construirJsonImportacaoDocumentosPlanoCsv(
     const codigoMaterial = cell(row, 'codigo_material', 'codigo').trim();
     const descricaoMaterial = cell(row, 'descricao_material', 'descricao_item').trim();
     const unidade = cell(row, 'unidade', 'um').trim() || 'UN';
-    const qProj = parseDecimal(cell(row, 'quantidade_projeto', 'quantidade', 'qtd_projeto', 'qtde'));
+    const locLinha = cell(row, 'localizacao', 'localizacao_planejamento', 'localizacao_material', 'endereco_estoque').trim();
+    const qProj = parseDecimal(
+      cell(row, 'quantidade_projeto', 'quantidade', 'quantidade_documento', 'qtd_projeto', 'qtde'),
+    );
     const qAtd = parseDecimal(cell(row, 'quantidade_atendida', 'qtd_atendida'));
 
     if (!codigoMaterial) {
@@ -100,6 +116,14 @@ export function construirJsonImportacaoDocumentosPlanoCsv(
     if (existente) {
       existente.quantidadeProjeto += qProj;
       existente.quantidadeAtendida += qAtd;
+      if (locLinha) {
+        const prev = (existente.localizacao ?? '').trim();
+        existente.localizacao = prev
+          ? prev.includes(locLinha)
+            ? prev
+            : `${prev} | ${locLinha}`
+          : locLinha;
+      }
     } else {
       g.itensPorCodigo.set(ck, {
         id: `csv-doc-item-${chaveGrupo}-${ck}-${g.itensPorCodigo.size}`,
@@ -108,7 +132,12 @@ export function construirJsonImportacaoDocumentosPlanoCsv(
         unidade,
         quantidadeProjeto: qProj,
         quantidadeAtendida: qAtd,
+        localizacao: locLinha,
       });
+    }
+
+    if (useCooperative) {
+      await yieldCooperativeEveryRows(r);
     }
   }
 
@@ -132,14 +161,41 @@ export function construirJsonImportacaoDocumentosPlanoCsv(
 }
 
 /** Leitura previa do CSV (contagem de linhas de dados) antes de confirmar importacao na UI. */
-export function previewImportacaoDocumentosCsv(
+export async function previewImportacaoDocumentosCsv(
   text: string,
-): { ok: true; linhaCount: number } | { ok: false; error: string } {
-  const built = construirJsonImportacaoDocumentosPlanoCsv(text);
+): Promise<{ ok: true; linhaCount: number } | { ok: false; error: string }> {
+  const built = await construirJsonImportacaoDocumentosPlanoCsv(text);
   if (!built.ok) {
     return { ok: false, error: built.error };
   }
-  const parsed = parseCsvToRecords(text);
+  let listaDocs: unknown[];
+  try {
+    const parsedJson: unknown = JSON.parse(built.json);
+    const list = parseDocumentosImportJsonRoot(parsedJson);
+    if (list === null) {
+      return { ok: false, error: 'Formato invalido: esperado lista de documentos no plano de importacao.' };
+    }
+    listaDocs = list;
+  } catch {
+    return { ok: false, error: 'Falha ao analisar o plano de importacao.' };
+  }
+  const codigos: string[] = [];
+  for (const doc of listaDocs) {
+    if (!doc || typeof doc !== 'object') continue;
+    const rawItens = (doc as { itens?: unknown }).itens;
+    if (!Array.isArray(rawItens)) continue;
+    for (const raw of rawItens) {
+      if (!raw || typeof raw !== 'object') continue;
+      const o = raw as Record<string, unknown>;
+      const c = extrairCodigoMaterialDeObjetoImport(o);
+      if (c) codigos.push(c);
+    }
+  }
+  const matErr = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(codigos, 'import', 'documento');
+  if (matErr) {
+    return { ok: false, error: matErr };
+  }
+  const parsed = await parseCsvToRecordsCooperative(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV invalido ou sem linhas de dados.' };
   }

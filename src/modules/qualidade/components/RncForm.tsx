@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { compressImageFileToJpeg } from '../../../lib/imageCompress';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -40,15 +41,13 @@ const CAMPOS_TIPO_OCORRENCIA = [
 ] as const;
 
 const MAX_FOTOS_POR_ITEM = 6;
-const MAX_BYTES_FOTO = 1_800_000;
+const MAX_BYTES_FOTO_ORIGINAL = 12 * 1024 * 1024;
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result));
-    fr.onerror = () => reject(new Error('Leitura do arquivo falhou.'));
-    fr.readAsDataURL(file);
-  });
+function textoBuscaRecebimentoInicial(iv: RncFormData): string {
+  if (!iv.recebimentoId?.trim()) return '';
+  const nf = iv.recebimentoNotaFiscal ?? '';
+  const fo = iv.recebimentoFornecedor ?? '';
+  return [nf, fo].filter(Boolean).join(' · ');
 }
 
 export function RncForm({
@@ -66,22 +65,11 @@ export function RncForm({
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [colabAssinaturaNomes, setColabAssinaturaNomes] = useState<string[]>([]);
-  const [recSearch, setRecSearch] = useState('');
+  const [recSearch, setRecSearch] = useState(() => textoBuscaRecebimentoInicial(initialValue));
   const [recOpen, setRecOpen] = useState(false);
   const [recLoading, setRecLoading] = useState(false);
   const [recebimentoCarregado, setRecebimentoCarregado] = useState<Recebimento | null>(null);
   const [carregandoDetalheNf, setCarregandoDetalheNf] = useState(false);
-
-  useEffect(() => {
-    setForm(initialValue);
-    if (initialValue.recebimentoId) {
-      const nf = initialValue.recebimentoNotaFiscal ?? '';
-      const fo = initialValue.recebimentoFornecedor ?? '';
-      setRecSearch([nf, fo].filter(Boolean).join(' · '));
-    } else {
-      setRecSearch('');
-    }
-  }, [initialValue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,30 +112,21 @@ export function RncForm({
       const res = await buscarRecebimentoPorId(id);
       if (cancelled) return;
       setCarregandoDetalheNf(false);
-      if (res.success && res.data) setRecebimentoCarregado(res.data);
-      else setRecebimentoCarregado(null);
+      if (res.success && res.data) {
+        const dados = res.data;
+        setRecebimentoCarregado(dados);
+        setForm((f) => ({
+          ...f,
+          itensRnc: mergeItensRncComRecebimento(dados.itens, f.itensRnc ?? []),
+        }));
+      } else {
+        setRecebimentoCarregado(null);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, [initialValue.recebimentoId]);
-
-  const recItensSig = useMemo(
-    () =>
-      recebimentoCarregado
-        ? `${recebimentoCarregado.id}:${recebimentoCarregado.itens.map((i) => i.id).join(',')}`
-        : '',
-    [recebimentoCarregado],
-  );
-
-  useEffect(() => {
-    if (!recebimentoCarregado) return;
-    setForm((f) => ({
-      ...f,
-      itensRnc: mergeItensRncComRecebimento(recebimentoCarregado.itens, f.itensRnc ?? []),
-    }));
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- recItensSig reflete mudancas relevantes em recebimentoCarregado.itens
-  }, [recItensSig]);
 
   const filtradosRecebimento = useMemo(() => {
     const t = recSearch.trim().toLowerCase();
@@ -178,7 +157,7 @@ export function RncForm({
       materialDescricao: '',
       quantidadeRecebidaRef: 0,
       quantidadeRejeitada: f.quantidadeRejeitada,
-      itensRnc: [],
+      itensRnc: mergeItensRncComRecebimento(rec.itens, []),
     }));
     setRecSearch(`${rec.notaFiscal || '—'} · ${rec.fornecedor}`);
     setRecOpen(false);
@@ -222,12 +201,28 @@ export function RncForm({
     const list = Array.from(files).filter((file) => file.type.startsWith('image/')).slice(0, restantes);
     const novas: string[] = [];
     for (const file of list) {
-      if (file.size > MAX_BYTES_FOTO) {
-        setError('Imagem muito grande (max. ~1,8 MB por arquivo).');
+      if (file.size > MAX_BYTES_FOTO_ORIGINAL) {
+        setError('Imagem muito grande (max. ~12 MB por arquivo antes da compressão).');
         return;
       }
       try {
-        novas.push(await readFileAsDataUrl(file));
+        const out = await compressImageFileToJpeg(file, {
+          maxEdgePx: 1440,
+          maxBytes: 420 * 1024,
+          initialQuality: 0.76,
+          minQuality: 0.42,
+        });
+        if (!out) {
+          setError('Formato de imagem nao suportado (ex.: HEIC).');
+          return;
+        }
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(new Error('Leitura'));
+          fr.readAsDataURL(out.blob);
+        });
+        novas.push(dataUrl);
       } catch {
         setError('Nao foi possivel ler uma das imagens.');
         return;
@@ -1010,7 +1005,7 @@ export function RncForm({
           Cancelar
         </Button>
         <Button onClick={visualizarRelatorio} type="button" variant="ghost">
-          Visualizar relatorio
+          Visualizar
         </Button>
         <Button type="submit">Salvar RNC</Button>
       </div>

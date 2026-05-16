@@ -14,6 +14,8 @@ export type RecebimentoItem = {
   pesoTotal: number;
   /** Certificado do material (importacao planilha ou digitacao); usado no RIR. Ausente em dados antigos = tratado como vazio. */
   certificado?: string;
+  /** Observacao especifica da linha (conferencia / divergencias); vai no snapshot para o app campo. */
+  observacaoItem?: string;
 };
 
 export type Recebimento = {
@@ -27,6 +29,11 @@ export type Recebimento = {
   status: 'rascunho' | 'aguardando_conferencia' | 'conferido' | 'parcialmente_conferido' | 'divergente' | 'cancelado';
   observacoes: string;
   itens: RecebimentoItem[];
+  /**
+   * Preenchido ao finalizar conferência (desktop/mobile). Legado: mobile gravava `modo` errado como `direto`
+   * mas envia `dataConferencia` — usado na listagem para mostrar `conferencia_concluida`.
+   */
+  dataConferencia?: string;
 };
 
 export type RecebimentoFormData = Omit<Recebimento, 'id' | 'status'>;

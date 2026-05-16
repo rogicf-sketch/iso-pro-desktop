@@ -27,9 +27,6 @@ export function DashboardPage() {
   useEffect(() => {
     void getDashboardIndicators().then(setIndicators);
     void getDashboardAlerts().then(setAlerts);
-  }, []);
-
-  useEffect(() => {
     void loadSistema();
   }, [loadSistema]);
 

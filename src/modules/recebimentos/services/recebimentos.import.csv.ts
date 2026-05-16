@@ -3,9 +3,18 @@
  * Agrupa por fornecedor + data + nota + romaneio e monta JSON compativel com importarRecebimentosDoArquivoJson.
  */
 
-import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
+import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
+import { escapeCsvCellSemicolon, parseCsvToRecords, parseCsvToRecordsCooperative } from '../../../lib/csv';
+import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
+import {
+  IMPORT_COOPERATIVE_MIN_CSV_ROWS,
+  yieldCooperativeEveryRows,
+} from '../../../lib/yieldCooperativeImport';
+import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
 import { normalizarDataFlexivelParaIso } from '../../../lib/normalizeFlexibleDateToIso';
-import { parseDecimalFlexible } from '../../../lib/parseDecimal';
+import { parseDecimalFlexible, roundPesoKg } from '../../../lib/parseDecimal';
+import { validarNomesFornecedoresCadastradosAtivos } from '../../fornecedores/services/fornecedores.service';
+import { validarCodigosMateriaisAtivosNoCadastroParaRecebimento } from '../../materiais/services/materiais.service';
 import type { RecebimentoItem } from '../types/recebimento.types';
 
 function cell(row: Record<string, string>, ...aliases: string[]): string {
@@ -28,8 +37,8 @@ function resolverPesosLinha(qRec: number, puRaw: number, ptRaw: number): { pesoU
   if (pt <= 0 && qRec > 0 && pu > 0) pt = qRec * pu;
   if (pu <= 0 && qRec > 0 && pt > 0) pu = pt / qRec;
   return {
-    pesoUnitario: Number((pu || 0).toFixed(3)),
-    pesoTotal: Number((pt || 0).toFixed(3)),
+    pesoUnitario: roundPesoKg(pu || 0),
+    pesoTotal: roundPesoKg(pt || 0),
   };
 }
 
@@ -52,15 +61,20 @@ type GrupoAcumulador = {
   itensPorCodigo: Map<string, RecebimentoItem>;
 };
 
-export function construirJsonImportacaoRecebimentosPlanoCsv(
+export async function construirJsonImportacaoRecebimentosPlanoCsv(
   text: string,
-): { ok: true; json: string } | { ok: false; error: string } {
-  const parsed = parseCsvToRecords(text);
+): Promise<{ ok: true; json: string } | { ok: false; error: string }> {
+  const cabErr = mensagemSeCabecalhoImportCsvIncompativel('recebimentos_plano', text);
+  if (cabErr) {
+    return { ok: false, error: cabErr };
+  }
+  const parsed = await parseCsvToRecordsCooperative(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV invalido ou sem linhas de dados (cabecalho obrigatorio).' };
   }
 
   const grupos = new Map<string, GrupoAcumulador>();
+  const useCooperative = parsed.rows.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
 
   for (let r = 0; r < parsed.rows.length; r++) {
     const row = parsed.rows[r];
@@ -143,8 +157,8 @@ export function construirJsonImportacaoRecebimentosPlanoCsv(
       if (certificado && !existente.certificado?.trim()) existente.certificado = certificado;
       const newQtd = existente.quantidadeRecebida;
       const mergedPt = (existente.pesoTotal ?? 0) + linhaPeso.pesoTotal;
-      existente.pesoTotal = Number(mergedPt.toFixed(3));
-      existente.pesoUnitario = newQtd > 0 ? Number((existente.pesoTotal / newQtd).toFixed(3)) : 0;
+      existente.pesoTotal = roundPesoKg(mergedPt);
+      existente.pesoUnitario = newQtd > 0 ? roundPesoKg(existente.pesoTotal / newQtd) : 0;
     } else {
       g.itensPorCodigo.set(ck, {
         id: `csv-item-${chaveGrupo}-${ck}-${g.itensPorCodigo.size}`,
@@ -159,6 +173,10 @@ export function construirJsonImportacaoRecebimentosPlanoCsv(
         pesoTotal: linhaPeso.pesoTotal,
         certificado,
       });
+    }
+
+    if (useCooperative) {
+      await yieldCooperativeEveryRows(r);
     }
   }
 
@@ -183,17 +201,23 @@ export function construirJsonImportacaoRecebimentosPlanoCsv(
 }
 
 /** Pre-visualizacao antes de confirmar importacao em massa na lista de recebimentos. */
-export function previewImportacaoRecebimentosCsv(
+export async function previewImportacaoRecebimentosCsv(
   text: string,
-): { ok: true; linhaCount: number; recebimentoCount: number } | { ok: false; error: string } {
-  const built = construirJsonImportacaoRecebimentosPlanoCsv(text);
+): Promise<{ ok: true; linhaCount: number; recebimentoCount: number } | { ok: false; error: string }> {
+  const built = await construirJsonImportacaoRecebimentosPlanoCsv(text);
   if (!built.ok) {
     return { ok: false, error: built.error };
   }
   let recebimentoCount = 0;
+  let listaRecebimentos: unknown[];
   try {
-    const j = JSON.parse(built.json) as { recebimentos?: unknown[] };
-    recebimentoCount = Array.isArray(j.recebimentos) ? j.recebimentos.length : 0;
+    const parsed: unknown = JSON.parse(built.json);
+    const list = parseRecebimentosImportJsonRoot(parsed);
+    if (list === null) {
+      return { ok: false, error: 'Formato invalido: esperado lista de recebimentos no plano de importacao.' };
+    }
+    listaRecebimentos = list;
+    recebimentoCount = listaRecebimentos.length;
   } catch {
     return { ok: false, error: 'Falha ao analisar o plano de importacao.' };
   }
@@ -203,7 +227,36 @@ export function previewImportacaoRecebimentosCsv(
       error: 'Nenhum recebimento encontrado no arquivo (verifique fornecedor, data e NF ou romaneio por linha).',
     };
   }
-  const parsed = parseCsvToRecords(text);
+  const nomesFornecedores: string[] = [];
+  for (const raw of listaRecebimentos) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const f = String(o.fornecedor ?? o.fornecedorNome ?? '').trim();
+    if (f) nomesFornecedores.push(f);
+  }
+  const fornecedorErro = await validarNomesFornecedoresCadastradosAtivos(nomesFornecedores);
+  if (fornecedorErro) {
+    return { ok: false, error: fornecedorErro };
+  }
+
+  const codigosMateriais: string[] = [];
+  for (const raw of listaRecebimentos) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const itens = Array.isArray(o.itens) ? o.itens : [];
+    for (const it of itens) {
+      if (!it || typeof it !== 'object') continue;
+      const row = it as Record<string, unknown>;
+      const c = extrairCodigoMaterialDeObjetoImport(row);
+      if (c) codigosMateriais.push(c);
+    }
+  }
+  const materialErro = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(codigosMateriais, 'import');
+  if (materialErro) {
+    return { ok: false, error: materialErro };
+  }
+
+  const parsed = await parseCsvToRecordsCooperative(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV sem linhas de dados.' };
   }
@@ -219,6 +272,10 @@ export function previewImportacaoRecebimentosCsv(
 export function parseItensRecebimentoCsv(
   text: string,
 ): { ok: true; itens: RecebimentoItem[] } | { ok: false; error: string } {
+  const cabErr = mensagemSeCabecalhoImportCsvIncompativel('recebimentos_itens', text);
+  if (cabErr) {
+    return { ok: false, error: cabErr };
+  }
   const parsed = parseCsvToRecords(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV invalido ou sem linhas de dados (cabecalho obrigatorio).' };
@@ -269,8 +326,8 @@ export function parseItensRecebimentoCsv(
       if (certificado && !existente.certificado?.trim()) existente.certificado = certificado;
       const newQtd = existente.quantidadeRecebida;
       const mergedPt = (existente.pesoTotal ?? 0) + linhaPeso.pesoTotal;
-      existente.pesoTotal = Number(mergedPt.toFixed(3));
-      existente.pesoUnitario = newQtd > 0 ? Number((existente.pesoTotal / newQtd).toFixed(3)) : 0;
+      existente.pesoTotal = roundPesoKg(mergedPt);
+      existente.pesoUnitario = newQtd > 0 ? roundPesoKg(existente.pesoTotal / newQtd) : 0;
     } else {
       itensPorCodigo.set(ck, {
         id: crypto.randomUUID(),
@@ -291,13 +348,27 @@ export function parseItensRecebimentoCsv(
   return { ok: true, itens: [...itensPorCodigo.values()] };
 }
 
-/** Leitura previa (contagem de linhas de dados) antes de confirmar importacao na UI. */
-export function previewItensRecebimentoCsv(
+/** Garante que todos os codigos existam e estejam ativos no cadastro de Materiais (mesma regra do import em massa). */
+export async function validarItensRecebimentoCsvContraCadastroMateriais(
+  itens: RecebimentoItem[],
+): Promise<string | null> {
+  return validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+    itens.map((it) => it.codigoMaterial),
+    'import',
+  );
+}
+
+/** Leitura previa (contagem de linhas + validacao de materiais) antes de confirmar importacao na UI. */
+export async function previewItensRecebimentoCsv(
   text: string,
-): { ok: true; linhaCount: number } | { ok: false; error: string } {
+): Promise<{ ok: true; linhaCount: number } | { ok: false; error: string }> {
   const check = parseItensRecebimentoCsv(text);
   if (!check.ok) {
     return { ok: false, error: check.error };
+  }
+  const materialErro = await validarItensRecebimentoCsvContraCadastroMateriais(check.itens);
+  if (materialErro) {
+    return { ok: false, error: materialErro };
   }
   const parsed = parseCsvToRecords(text);
   if (!parsed || parsed.rows.length === 0) {
@@ -334,8 +405,8 @@ export function mergeItensRecebimentoComImportacao(
         certificado: (prev.certificado?.trim() || it.certificado?.trim() || '').trim(),
         quantidadeRecebida: newQtd,
         quantidadeConferida: prev.quantidadeConferida + it.quantidadeConferida,
-        pesoTotal: Number(mergedPt.toFixed(3)),
-        pesoUnitario: newQtd > 0 ? Number((mergedPt / newQtd).toFixed(3)) : 0,
+        pesoTotal: roundPesoKg(mergedPt),
+        pesoUnitario: newQtd > 0 ? roundPesoKg(mergedPt / newQtd) : 0,
       });
     } else {
       map.set(k, { ...it, id: crypto.randomUUID() });
@@ -369,7 +440,7 @@ export function montarModeloCsvImportacaoRecebimentos(): { csv: string; fileName
   ];
   const rows: string[][] = [
     [
-      'Metal Forte',
+      'Fornecedor A - Tubos Ltda',
       '2026-04-02',
       'NF-778810',
       'ROM-100',
@@ -384,7 +455,7 @@ export function montarModeloCsvImportacaoRecebimentos(): { csv: string; fileName
       '',
     ],
     [
-      'Metal Forte',
+      'Fornecedor A - Tubos Ltda',
       '2026-04-02',
       'NF-778810',
       'ROM-100',
@@ -399,7 +470,7 @@ export function montarModeloCsvImportacaoRecebimentos(): { csv: string; fileName
       '',
     ],
     [
-      'Cabos Brasil',
+      'Fornecedor B - Conexoes S/A',
       '2026-04-01',
       'NF-778811',
       'ROM-101',

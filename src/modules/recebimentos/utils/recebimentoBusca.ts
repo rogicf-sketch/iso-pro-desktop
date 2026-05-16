@@ -4,19 +4,42 @@ function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/**
+ * Segmentos muito curtos ("nf", "rom") nao podem casar por `alvo.includes(segmento)` ou `alvo.startsWith(segmento)`
+ * quando o utilizador ja digitou mais texto — senao "NF-742197" coincide com qualquer NF.
+ */
+const MIN_SEGMENTO_AMBIGUO = 4;
+
+function segmentoCasaAlvoSemFalsoPrefixo(p: string, a: string): boolean {
+  if (p.includes(a) || a.includes(p)) {
+    if (
+      a.includes(p) &&
+      p.length < MIN_SEGMENTO_AMBIGUO &&
+      a.length > p.length &&
+      a.startsWith(p)
+    ) {
+      return false;
+    }
+    return true;
+  }
+  if (p.startsWith(a)) return true;
+  if (a.startsWith(p) && p.length >= MIN_SEGMENTO_AMBIGUO) return true;
+  return false;
+}
+
 function numeroSegmentosCorrespondem(textoRaw: string, alvo: string): boolean {
   const n = norm(String(textoRaw ?? ''));
   const a = norm(alvo);
   if (!n || !a || a.length < 2) return false;
   const partes = n.split(/[-_/]+/).filter(Boolean);
-  return partes.some((p) => p.includes(a) || p.startsWith(a) || a.startsWith(p));
+  return partes.some((p) => p.length > 0 && segmentoCasaAlvoSemFalsoPrefixo(p, a));
 }
 
 function textoCorrespondeFlexivel(textoRaw: string, alvoDigitado: string): boolean {
   const n = norm(String(textoRaw ?? ''));
   const a = norm(alvoDigitado);
   if (!n || !a) return false;
-  if (n.includes(a)) return false;
+  if (n.includes(a)) return true;
 
   const aNoLead = a.replace(/^0+/, '') || a;
   if (aNoLead !== a && n.includes(aNoLead)) return true;

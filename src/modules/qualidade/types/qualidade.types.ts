@@ -1,6 +1,16 @@
 export type RirStatus = 'aberto' | 'em_analise' | 'tratado' | 'cancelado';
 export type RncStatus = 'aberto' | 'em_tratativa' | 'concluido' | 'cancelado';
 
+/** Opção na lista «Buscar recebimento» do formulário RIR. */
+export type RirRecebimentoChoice = {
+  id: string;
+  label: string;
+  notaFiscal: string;
+  /** Pelo menos um RIR não cancelado já usa este recebimentoId. */
+  possuiRirNaoCancelado: boolean;
+  rirExistentes: Array<{ id: string; codigo: string; status: RirStatus }>;
+};
+
 export type RirLaudo = 'aprovado' | 'reprovado' | 'observacoes';
 
 export type RirItemLinha = {

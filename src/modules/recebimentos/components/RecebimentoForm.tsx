@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AutocompleteField } from '../../../components/ui/AutocompleteField';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
@@ -15,6 +15,7 @@ import {
   mergeItensRecebimentoComImportacao,
   parseItensRecebimentoCsv,
   previewItensRecebimentoCsv,
+  validarItensRecebimentoCsvContraCadastroMateriais,
 } from '../services/recebimentos.import.csv';
 import type { RecebimentoFormData } from '../types/recebimento.types';
 
@@ -56,6 +57,7 @@ export function RecebimentoForm({
   const [importItensMerging, setImportItensMerging] = useState(false);
   const [importItensResultado, setImportItensResultado] = useState<{ linhaCount: number } | null>(null);
   const importItensInputRef = useRef<HTMLInputElement>(null);
+  const errorBoxRef = useRef<HTMLDivElement>(null);
   const requiresConferencia = form.modoRecebimento === 'aguardando_conferencia';
   const itensEditaveis = !readOnly || (readOnly && podeCorrigirItensNaVisualizacao && editandoItensNf);
   const mostrarBlocoImportItens =
@@ -84,6 +86,11 @@ export function RecebimentoForm({
     if (!result.success || !result.data) return [];
     return result.data.items.map((f) => f.nome);
   }, []);
+
+  useEffect(() => {
+    if (!error) return;
+    errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [error]);
 
   const fetchConferenteOptions = useCallback(async (query: string) => {
     const result = await listarColaboradores({
@@ -169,7 +176,7 @@ export function RecebimentoForm({
       return;
     }
 
-    const preview = previewItensRecebimentoCsv(text);
+    const preview = await previewItensRecebimentoCsv(text);
     if (!preview.ok) {
       setError(preview.error);
       return;
@@ -202,6 +209,14 @@ export function RecebimentoForm({
       return;
     }
 
+    const materialCheck = await validarItensRecebimentoCsvContraCadastroMateriais(parsed.itens);
+    if (materialCheck) {
+      setImportItensMerging(false);
+      setImportStaging(null);
+      setError(materialCheck);
+      return;
+    }
+
     if (parsed.itens.length === 0) {
       setImportItensMerging(false);
       setImportStaging(null);
@@ -225,11 +240,11 @@ export function RecebimentoForm({
   }
 
   return (
-    <form className="form-grid" onSubmit={handleSubmit}>
+    <form className="form-grid rir-form-professional" onSubmit={handleSubmit}>
       {readOnly && podeCorrigirItensNaVisualizacao && editandoItensNf ? (
         <OperationalNotice tone="warning">
-          Edicao dos <strong>itens da nota fiscal</strong> ativa: cabecalho (NF, fornecedor, romaneio, modo, conferente) permanece
-          bloqueado. Grave com <strong>Salvar alteracoes nos itens</strong> ou cancele para descartar.
+          Edicao dos <strong>itens da nota fiscal</strong> ativa: cabecalho (NF, fornecedor, romaneio, modo, conferente e observacoes gerais)
+          permanece bloqueado. Grave com <strong>Salvar alteracoes nos itens</strong> ou cancele para descartar.
         </OperationalNotice>
       ) : null}
       {readOnly && !(podeCorrigirItensNaVisualizacao && editandoItensNf) ? (
@@ -238,8 +253,8 @@ export function RecebimentoForm({
           {podeCorrigirItensNaVisualizacao ? (
             <>
               {' '}
-              Use <strong>Editar itens da nota fiscal</strong> para corrigir codigos, quantidades, localizacao ou importar CSV sem alterar o
-              cabecalho.
+              Use <strong>Editar itens da nota fiscal</strong> para corrigir codigos, quantidades, quantidades conferidas, localizacao,
+              observacao por linha ou importar CSV sem alterar o cabecalho.
             </>
           ) : null}
         </OperationalNotice>
@@ -261,101 +276,109 @@ export function RecebimentoForm({
           )}
         </>
       ) : null}
-      <div className="form-columns">
-        <Input
-          disabled={readOnly}
-          label="Nota fiscal"
-          onChange={(event) => setForm((current) => ({ ...current, notaFiscal: event.target.value }))}
-          value={form.notaFiscal}
-        />
-        <Input
-          disabled={readOnly}
-          label="Data"
-          onChange={(event) => setForm((current) => ({ ...current, dataRecebimento: event.target.value }))}
-          type="date"
-          value={form.dataRecebimento}
-        />
-        <Select
-          disabled={readOnly}
-          label="Modo"
-          onChange={(event) =>
-            setForm((current) => ({
-              ...current,
-              modoRecebimento: event.target.value as RecebimentoFormData['modoRecebimento'],
-            }))
-          }
-          value={form.modoRecebimento}
-        >
-          <option value="direto">Direto</option>
-          <option value="aguardando_conferencia">Aguardando conferencia</option>
-        </Select>
-      </div>
 
-      <div className="form-columns">
-        <AutocompleteField
-          disabled={readOnly}
-          fetchOptions={fetchFornecedorOptions}
-          label="Fornecedor"
-          onChange={(fornecedor) => setForm((current) => ({ ...current, fornecedor }))}
-          placeholder="Digite para buscar no cadastro"
-          value={form.fornecedor}
-        />
-        <Input
-          disabled={readOnly}
-          label="Romaneio"
-          onChange={(event) => setForm((current) => ({ ...current, romaneio: event.target.value }))}
-          value={form.romaneio}
-        />
-        <AutocompleteField
-          disabled={readOnly}
-          fetchOptions={fetchConferenteOptions}
-          label="Conferente"
-          onChange={(conferente) => setForm((current) => ({ ...current, conferente }))}
-          placeholder="Digite para buscar no cadastro"
-          value={form.conferente}
-        />
-      </div>
+      <section className="rir-card">
+        <h4 className="rir-card-title">Dados do recebimento</h4>
+        <div className="form-columns">
+          <Input
+            disabled={readOnly}
+            label="Nota fiscal"
+            onChange={(event) => setForm((current) => ({ ...current, notaFiscal: event.target.value }))}
+            value={form.notaFiscal}
+          />
+          <Input
+            disabled={readOnly}
+            label="Data"
+            onChange={(event) => setForm((current) => ({ ...current, dataRecebimento: event.target.value }))}
+            type="date"
+            value={form.dataRecebimento}
+          />
+          <Select
+            disabled={readOnly}
+            label="Modo"
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                modoRecebimento: event.target.value as RecebimentoFormData['modoRecebimento'],
+              }))
+            }
+            value={form.modoRecebimento}
+          >
+            <option value="direto">Direto</option>
+            <option value="aguardando_conferencia">Aguardando conferencia</option>
+          </Select>
+        </div>
 
-      <label className="field">
-        <span>Observacoes</span>
-        <textarea
-          className="input-control text-area"
-          disabled={readOnly}
-          onChange={(event) => setForm((current) => ({ ...current, observacoes: event.target.value }))}
-          rows={3}
-          value={form.observacoes}
-        />
-      </label>
+        <div className="form-columns">
+          <AutocompleteField
+            disabled={readOnly}
+            emptySuggestionsMessage="Nenhum fornecedor ativo encontrado com esse texto. O nome ao gravar deve existir no modulo Fornecedores (cadastro ativo), com a mesma grafia."
+            fetchOptions={fetchFornecedorOptions}
+            label="Fornecedor"
+            onChange={(fornecedor) => setForm((current) => ({ ...current, fornecedor }))}
+            placeholder="Digite para buscar no cadastro"
+            value={form.fornecedor}
+          />
+          <Input
+            disabled={readOnly}
+            label="Romaneio"
+            onChange={(event) => setForm((current) => ({ ...current, romaneio: event.target.value }))}
+            value={form.romaneio}
+          />
+          <AutocompleteField
+            disabled={readOnly}
+            fetchOptions={fetchConferenteOptions}
+            label="Conferente"
+            onChange={(conferente) => setForm((current) => ({ ...current, conferente }))}
+            placeholder="Digite para buscar no cadastro"
+            value={form.conferente}
+          />
+        </div>
+
+        <label className="field">
+          <span>Observacoes</span>
+          <textarea
+            className="input-control text-area"
+            disabled={readOnly}
+            onChange={(event) => setForm((current) => ({ ...current, observacoes: event.target.value }))}
+            rows={3}
+            value={form.observacoes}
+          />
+        </label>
+      </section>
 
       {mostrarBlocoImportItens ? (
-        <div className="editor-block">
-          <input
-            accept=".csv,.txt,text/csv"
-            onChange={(event) => {
-              void stageImportItensFromFile(event.target.files?.[0] ?? null);
-              event.target.value = '';
-            }}
-            ref={importItensInputRef}
-            style={{ display: 'none' }}
-            type="file"
-          />
-          <div className="editor-header">
-            <span className="panel-copy" style={{ margin: 0 }}>
-              Importe as linhas com colunas <strong>codigo</strong>, <strong>descricao</strong>, <strong>quantidade</strong>,{' '}
-              <strong>unidade</strong>, <strong>localizacao</strong> e <strong>certificado</strong> (opcional). Separador ponto e
-              virgula, como no Excel em portugues. Colunas antigas (ex.: codigo_material, quantidade_recebida, disciplina, pesos) ainda
-              sao aceitas. O cabecalho do recebimento acima e usado ao salvar.
-            </span>
-            <Button
-              disabled={!cabecalhoProntoParaImportItens()}
-              onClick={() => importItensInputRef.current?.click()}
-              type="button"
-              variant="ghost"
-            >
-              Importar itens (CSV)
-            </Button>
+        <section className="rir-card">
+          <h4 className="rir-card-title">Importar itens (CSV)</h4>
+          <div className="editor-block">
+            <input
+              accept=".csv,.txt,text/csv"
+              onChange={(event) => {
+                void stageImportItensFromFile(event.target.files?.[0] ?? null);
+                event.target.value = '';
+              }}
+              ref={importItensInputRef}
+              style={{ display: 'none' }}
+              type="file"
+            />
+            <div className="editor-header">
+              <span className="panel-copy" style={{ margin: 0 }}>
+                Importe as linhas com colunas <strong>codigo</strong>, <strong>descricao</strong>, <strong>quantidade</strong>,{' '}
+                <strong>unidade</strong>, <strong>localizacao</strong> e <strong>certificado</strong> (opcional). Separador ponto e
+                virgula, como no Excel em portugues. Colunas antigas (ex.: codigo_material, quantidade_recebida, disciplina, pesos) ainda
+                sao aceitas. O cabecalho do recebimento acima e usado ao salvar.
+              </span>
+              <Button
+                disabled={!cabecalhoProntoParaImportItens()}
+                onClick={() => importItensInputRef.current?.click()}
+                type="button"
+                variant="ghost"
+              >
+                Importar itens (CSV)
+              </Button>
+            </div>
           </div>
-        </div>
+        </section>
       ) : null}
 
       <Modal
@@ -364,6 +387,7 @@ export function RecebimentoForm({
         }}
         open={Boolean(importStaging)}
         title="Confirmar importacao"
+        wide
       >
         {importStaging ? (
           <div className="editor-block">
@@ -386,7 +410,7 @@ export function RecebimentoForm({
         ) : null}
       </Modal>
 
-      <Modal onClose={closeImportItensResultado} open={Boolean(importItensResultado)} title="Importacao concluida">
+      <Modal onClose={closeImportItensResultado} open={Boolean(importItensResultado)} title="Importacao concluida" wide>
         {importItensResultado ? (
           <div className="editor-block">
             <p>
@@ -408,15 +432,23 @@ export function RecebimentoForm({
         </OperationalNotice>
       ) : null}
 
-      <RecebimentoItensEditor
-        items={form.itens}
-        modoRecebimento={form.modoRecebimento}
-        onChange={(itens) => setForm((current) => ({ ...current, itens }))}
-        readOnly={!itensEditaveis}
-      />
+      <section className="rir-card">
+        <h4 className="rir-card-title">Itens do recebimento</h4>
+        <RecebimentoItensEditor
+          items={form.itens}
+          modoRecebimento={form.modoRecebimento}
+          onChange={(itens) => setForm((current) => ({ ...current, itens }))}
+          readOnly={!itensEditaveis}
+          showHeading={false}
+        />
+      </section>
 
       <SnapshotConflictHint show={snapshotConflict} onReload={onReloadAfterConflict} />
-      {error ? <div className="error-box">{error}</div> : null}
+      {error ? (
+        <div className="error-box" ref={errorBoxRef}>
+          {error}
+        </div>
+      ) : null}
 
       <div className="form-actions">
         <Button onClick={onCancel} type="button" variant="ghost">

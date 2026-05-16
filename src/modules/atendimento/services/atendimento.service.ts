@@ -1,3 +1,4 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -5,15 +6,28 @@ import {
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
-import { escapeCsvCellSemicolon } from '../../../lib/csv';
+import {
+  documentosReconciliadosDoPayload,
+  montarSaldoPayloadComDocumentosReconciliados,
+  type DocumentoPlanejamentoStored,
+} from '../../../lib/snapshotDocumentosReconciliacao';
+import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite } from '../../../lib/service-result';
+import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { ServiceResult } from '../../../types/common.types';
-import { buscarColaboradorPorId, registrarRetiranteExterno } from '../../colaboradores/services/colaboradores.service';
+import {
+  buscarColaboradorPorId,
+  listarColaboradoresAtivos,
+  registrarRetiranteExterno,
+} from '../../colaboradores/services/colaboradores.service';
+import { resolverColaboradorPorTextoAtendente } from '../utils/resolverColaboradorPorTextoAtendente';
 import { consumirSequenciaAtendimento } from '../../configuracoes/services/configuracoes.service';
 import { carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
 import type { Recebimento } from '../../recebimentos/types/recebimento.types';
+import { parseLocalStorageRecordArray } from '../../../lib/schemas/localStorageRecordArray.zod';
 import type {
   Atendimento,
   AtendimentoDocumento,
@@ -22,24 +36,7 @@ import type {
   EstornoAtendimentoLinha,
 } from '../types/atendimento.types';
 
-type DocumentoItemStored = {
-  id: string;
-  codigoMaterial: string;
-  descricaoMaterial: string;
-  unidade: string;
-  quantidadeProjeto: number;
-  quantidadeAtendida: number;
-};
-
-type DocumentoStored = {
-  id: string;
-  numero: string;
-  revisao: string;
-  descricao: string;
-  responsavel: string;
-  status: string;
-  itens: DocumentoItemStored[];
-};
+type DocumentoStored = DocumentoPlanejamentoStored;
 
 type MaterialStored = {
   id: string;
@@ -49,9 +46,43 @@ type MaterialStored = {
   saldoAtual?: number;
 };
 
-const DOCUMENTOS_KEY = 'iso-pro-desktop-documentos';
-const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
-const ATENDIMENTOS_KEY = 'iso-pro-desktop-atendimentos';
+function documentosKeyAtendimento(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-documentos');
+}
+
+function materiaisKeyAtendimento(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-materiais');
+}
+
+function atendimentosStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-atendimentos');
+}
+
+function bloqueioLocalChavesAtendimento(param: {
+  documentosLength: number;
+  materiaisLength: number;
+  atendimentosLength: number;
+}): string | null {
+  return mensagemSeSubstituirLocalPerderiaCadastros(
+    [
+      {
+        storageKey: documentosKeyAtendimento(),
+        tamanhoNovaLista: param.documentosLength,
+        nomeCurto: 'documento(s) de planejamento',
+      },
+      {
+        storageKey: materiaisKeyAtendimento(),
+        tamanhoNovaLista: param.materiaisLength,
+        nomeCurto: 'material(is) do cadastro',
+      },
+      {
+        storageKey: atendimentosStorageKey(),
+        tamanhoNovaLista: param.atendimentosLength,
+        nomeCurto: 'atendimento(s)',
+      },
+    ],
+  );
+}
 
 type SnapshotPayload = {
   materiais?: Array<{
@@ -75,6 +106,8 @@ type SnapshotPayload = {
       unidade?: string;
       quantidade?: number | string;
       quantidadeAtendida?: number | string;
+      /** Alinhado ao snapshot mobile / imports que gravam só snake_case. */
+      quantidade_atendida?: number | string;
     }>;
   }>;
   recebimentos?: Array<{
@@ -97,6 +130,12 @@ type SnapshotPayload = {
     documentoId?: string | number | null;
     documento?: string;
     atendente?: string;
+    /** App móvel: matrícula do atendente (PC usa `atendenteMatricula` no objeto agregado). */
+    matricula?: string;
+    atendenteMatricula?: string;
+    atendenteFuncao?: string;
+    recebedorMatricula?: string;
+    recebedorFuncao?: string;
     recebedorTipo?: AtendimentoRecebedorTipo;
     recebedorColaboradorId?: string | number | null;
     recebedor?: string;
@@ -109,6 +148,7 @@ type SnapshotPayload = {
     descricao?: string;
     unidade?: string;
     quantidade?: number | string;
+    origem?: 'mobile' | 'windows';
   }>;
   atendimentos?: Array<{
     id?: string | number;
@@ -116,9 +156,13 @@ type SnapshotPayload = {
     documentoId?: string | number;
     documentoNumero?: string;
     atendente?: string;
+    atendenteMatricula?: string;
+    atendenteFuncao?: string;
     recebedorTipo?: AtendimentoRecebedorTipo;
     recebedorColaboradorId?: string | number | null;
     recebedor?: string;
+    recebedorMatricula?: string;
+    recebedorFuncao?: string;
     recebedorEmpresa?: string;
     recebedorDocumento?: string;
     recebedorTelefone?: string;
@@ -143,11 +187,16 @@ function readJson<T>(key: string): T[] {
   const raw = localStorage.getItem(key);
   if (!raw) return [];
 
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as T[];
+    parsed = JSON.parse(raw);
   } catch {
     return [];
   }
+
+  const rows = parseLocalStorageRecordArray(parsed);
+  if (rows === null) return [];
+  return rows as T[];
 }
 
 function writeJson<T>(key: string, value: T[]) {
@@ -156,9 +205,9 @@ function writeJson<T>(key: string, value: T[]) {
 
 function loadLocalState() {
   return {
-    documentos: readJson<DocumentoStored>(DOCUMENTOS_KEY),
-    materiais: readJson<MaterialStored>(MATERIAIS_KEY),
-    atendimentos: readJson<Atendimento>(ATENDIMENTOS_KEY),
+    documentos: readJson<DocumentoStored>(documentosKeyAtendimento()),
+    materiais: readJson<MaterialStored>(materiaisKeyAtendimento()),
+    atendimentos: readJson<Atendimento>(atendimentosStorageKey()),
   };
 }
 
@@ -206,9 +255,13 @@ async function writeSnapshotPayload(update: {
                   documentoId: atendimento.documentoId,
                   documento: atendimento.documentoNumero,
                   atendente: atendimento.atendente,
+                  atendenteMatricula: atendimento.atendenteMatricula,
+                  atendenteFuncao: atendimento.atendenteFuncao,
                   recebedorTipo: atendimento.recebedorTipo,
                   recebedorColaboradorId: atendimento.recebedorColaboradorId,
                   recebedor: atendimento.recebedor,
+                  recebedorMatricula: atendimento.recebedorMatricula,
+                  recebedorFuncao: atendimento.recebedorFuncao,
                   recebedorEmpresa: atendimento.recebedorEmpresa,
                   recebedorDocumento: atendimento.recebedorDocumento,
                   recebedorTelefone: atendimento.recebedorTelefone,
@@ -218,6 +271,7 @@ async function writeSnapshotPayload(update: {
                   descricao: item.descricaoMaterial,
                   unidade: item.unidade,
                   quantidade: item.quantidadeAtendida,
+                  origem: atendimento.origem,
                 })),
               ),
               atendimentos: update.atendimentoHistorico.map((atendimento) => ({
@@ -226,9 +280,13 @@ async function writeSnapshotPayload(update: {
                 documentoId: atendimento.documentoId,
                 documentoNumero: atendimento.documentoNumero,
                 atendente: atendimento.atendente,
+                atendenteMatricula: atendimento.atendenteMatricula,
+                atendenteFuncao: atendimento.atendenteFuncao,
                 recebedorTipo: atendimento.recebedorTipo,
                 recebedorColaboradorId: atendimento.recebedorColaboradorId,
                 recebedor: atendimento.recebedor,
+                recebedorMatricula: atendimento.recebedorMatricula,
+                recebedorFuncao: atendimento.recebedorFuncao,
                 recebedorEmpresa: atendimento.recebedorEmpresa,
                 recebedorDocumento: atendimento.recebedorDocumento,
                 recebedorTelefone: atendimento.recebedorTelefone,
@@ -255,23 +313,35 @@ async function writeSnapshotPayload(update: {
   });
 }
 
-function mapSnapshotDocumentos(payload: SnapshotPayload): DocumentoStored[] {
-  return (payload.documentos ?? []).map((doc, index) => ({
-    id: String(doc.id ?? `doc-${index + 1}`),
-    numero: String(doc.numero ?? ''),
-    revisao: String(doc.revisao ?? 'A'),
-    descricao: String(doc.descricao ?? ''),
-    responsavel: String(doc.responsavel ?? ''),
-    status: String(doc.status ?? 'pendente'),
-    itens: (doc.itens ?? []).map((item, itemIndex) => ({
-      id: String(item.id ?? `${doc.id ?? index}-item-${itemIndex + 1}`),
-      codigoMaterial: String(item.codigo ?? ''),
-      descricaoMaterial: String(item.descricao ?? ''),
-      unidade: String(item.unidade ?? 'UN'),
-      quantidadeProjeto: Number(item.quantidade ?? 0),
-      quantidadeAtendida: Number(item.quantidadeAtendida ?? 0),
+function buildLocalPayloadParaReconciliacao(
+  local: ReturnType<typeof loadLocalState>,
+  recebimentos: Recebimento[],
+): SnapshotPayload {
+  return {
+    materiais: local.materiais.map((m) => ({
+      id: m.id,
+      codigo: m.codigo,
+      saldoAtual: m.saldoAtual,
     })),
-  }));
+    documentos: local.documentos.map((doc) => ({
+      id: doc.id,
+      numero: doc.numero,
+      revisao: doc.revisao,
+      descricao: doc.descricao,
+      responsavel: doc.responsavel,
+      status: doc.status,
+      itens: doc.itens.map((i) => ({
+        id: i.id,
+        codigo: i.codigoMaterial,
+        descricao: i.descricaoMaterial,
+        unidade: i.unidade,
+        quantidade: i.quantidadeProjeto,
+        quantidadeAtendida: i.quantidadeAtendida,
+      })),
+    })),
+    recebimentos: recebimentos.filter((r) => r.status !== 'cancelado').map(recebimentoParaSnapshotSaldo),
+    atendimentos: local.atendimentos as SnapshotPayload['atendimentos'],
+  };
 }
 
 function recebimentoParaSnapshotSaldo(rec: Recebimento): NonNullable<SnapshotPayload['recebimentos']>[number] {
@@ -320,6 +390,24 @@ async function enrichMateriaisSaldoFromLocalMovement(
   }));
 }
 
+/** Saldo recebimentos − já atendido (+ ajustes), igual ao mobile e à lista de Materiais após recálculo. */
+async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const payload = await readSnapshotPayload();
+      const documentosRec = documentosReconciliadosDoPayload(payload);
+      return buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
+    } catch {
+      return new Map();
+    }
+  }
+  const local = loadLocalState();
+  const recebimentos = await carregarRecebimentosCompletos();
+  const payload = buildLocalPayloadParaReconciliacao(local, recebimentos);
+  const documentosRec = documentosReconciliadosDoPayload(payload);
+  return buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
+}
+
 async function resolveDocumentosEMateriaisAtendimento(): Promise<{
   documentos: DocumentoStored[];
   materiais: MaterialStored[];
@@ -330,16 +418,22 @@ async function resolveDocumentosEMateriaisAtendimento(): Promise<{
       return { documentos: state.documentos, materiais: state.materiais };
     } catch {
       const local = loadLocalState();
+      const recebimentos = await carregarRecebimentosCompletos();
+      const payload = buildLocalPayloadParaReconciliacao(local, recebimentos);
+      const documentos = documentosReconciliadosDoPayload(payload);
       return {
-        documentos: local.documentos,
-        materiais: await enrichMateriaisSaldoFromLocalMovement(local.materiais, local.documentos),
+        documentos,
+        materiais: await enrichMateriaisSaldoFromLocalMovement(local.materiais, documentos),
       };
     }
   }
   const local = loadLocalState();
+  const recebimentos = await carregarRecebimentosCompletos();
+  const payloadLocal = buildLocalPayloadParaReconciliacao(local, recebimentos);
+  const documentos = documentosReconciliadosDoPayload(payloadLocal);
   return {
-    documentos: local.documentos,
-    materiais: await enrichMateriaisSaldoFromLocalMovement(local.materiais, local.documentos),
+    documentos,
+    materiais: await enrichMateriaisSaldoFromLocalMovement(local.materiais, documentos),
   };
 }
 
@@ -385,37 +479,68 @@ function mergeMateriaisSnapshotComCadastroNuvem(
   return Array.from(porCodigo.values());
 }
 
-function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
-  if (payload.atendimentos?.length) {
-    return payload.atendimentos.map((atendimento, index) => ({
-      id: String(atendimento.id ?? `atd-${index + 1}`),
-      numero: String(atendimento.numero ?? buildNumeroAtendimento(index + 1)),
-      documentoId: String(atendimento.documentoId ?? ''),
-      documentoNumero: String(atendimento.documentoNumero ?? '-'),
-      atendente: String(atendimento.atendente ?? ''),
-      recebedorTipo: atendimento.recebedorTipo === 'externo' ? 'externo' : 'interno',
-      recebedorColaboradorId: atendimento.recebedorColaboradorId != null ? String(atendimento.recebedorColaboradorId) : null,
-      recebedor: String(atendimento.recebedor ?? ''),
-      recebedorEmpresa: String(atendimento.recebedorEmpresa ?? ''),
-      recebedorDocumento: String(atendimento.recebedorDocumento ?? ''),
-      recebedorTelefone: String(atendimento.recebedorTelefone ?? ''),
-      autorizadorInterno: String(atendimento.autorizadorInterno ?? ''),
-      motivoRetirada: String(atendimento.motivoRetirada ?? ''),
-      origem: atendimento.origem === 'mobile' ? 'mobile' : 'windows',
-      status: atendimento.status === 'estornado' ? 'estornado' : 'concluido',
-      dataAtendimento: String(atendimento.dataAtendimento ?? new Date().toISOString()),
-      itens: (atendimento.itens ?? []).map((item, itemIndex) => ({
-        id: String(item.id ?? `${atendimento.id ?? index}-item-${itemIndex + 1}`),
-        documentoItemId: String(item.documentoItemId ?? ''),
-        materialId: item.materialId != null ? String(item.materialId) : null,
-        codigoMaterial: String(item.codigoMaterial ?? ''),
-        descricaoMaterial: String(item.descricaoMaterial ?? ''),
-        unidade: String(item.unidade ?? 'UN'),
-        quantidadeAtendida: Number(item.quantidadeAtendida ?? 0),
-      })),
-    }));
-  }
+function mapAtendimentosFromSnapshotArray(payload: SnapshotPayload): Atendimento[] {
+  if (!payload.atendimentos?.length) return [];
+  return payload.atendimentos.map((atendimento, index) => ({
+    id: String(atendimento.id ?? `atd-${index + 1}`),
+    numero: String(atendimento.numero ?? buildNumeroAtendimento(index + 1)),
+    documentoId: String(atendimento.documentoId ?? ''),
+    documentoNumero: String(atendimento.documentoNumero ?? '-'),
+    atendente: String(atendimento.atendente ?? ''),
+    atendenteMatricula: String(atendimento.atendenteMatricula ?? ''),
+    atendenteFuncao: String(atendimento.atendenteFuncao ?? ''),
+    recebedorTipo: atendimento.recebedorTipo === 'externo' ? 'externo' : 'interno',
+    recebedorColaboradorId: atendimento.recebedorColaboradorId != null ? String(atendimento.recebedorColaboradorId) : null,
+    recebedor: String(atendimento.recebedor ?? ''),
+    recebedorMatricula: String(atendimento.recebedorMatricula ?? ''),
+    recebedorFuncao: String(atendimento.recebedorFuncao ?? ''),
+    recebedorEmpresa: String(atendimento.recebedorEmpresa ?? ''),
+    recebedorDocumento: String(atendimento.recebedorDocumento ?? ''),
+    recebedorTelefone: String(atendimento.recebedorTelefone ?? ''),
+    autorizadorInterno: String(atendimento.autorizadorInterno ?? ''),
+    motivoRetirada: String(atendimento.motivoRetirada ?? ''),
+    origem: atendimento.origem === 'mobile' ? 'mobile' : 'windows',
+    status: atendimento.status === 'estornado' ? 'estornado' : 'concluido',
+    dataAtendimento: String(atendimento.dataAtendimento ?? new Date().toISOString()),
+    itens: (atendimento.itens ?? []).map((item, itemIndex) => ({
+      id: String(item.id ?? `${atendimento.id ?? index}-item-${itemIndex + 1}`),
+      documentoItemId: String(item.documentoItemId ?? ''),
+      materialId: item.materialId != null ? String(item.materialId) : null,
+      codigoMaterial: String(item.codigoMaterial ?? ''),
+      descricaoMaterial: String(item.descricaoMaterial ?? ''),
+      unidade: String(item.unidade ?? 'UN'),
+      quantidadeAtendida: Number(item.quantidadeAtendida ?? 0),
+      documentoNumero: String(atendimento.documentoNumero ?? ''),
+    })),
+  }));
+}
 
+/** Copia matrícula/função das linhas planas do histórico (mobile grava `matricula` no atendente). */
+function mergeIdentificacaoHistoricoLinha(
+  current: Atendimento,
+  raw: NonNullable<SnapshotPayload['atendimentoHistorico']>[number],
+) {
+  const r = raw as Record<string, unknown>;
+  const matAt = String(raw.matricula ?? raw.atendenteMatricula ?? r.atendente_matricula ?? '').trim();
+  if (matAt && matAt !== '-') {
+    if (!String(current.atendenteMatricula ?? '').trim()) current.atendenteMatricula = matAt;
+  }
+  const funAt = String(raw.atendenteFuncao ?? r.atendente_funcao ?? '').trim();
+  if (funAt && funAt !== '—') {
+    if (!String(current.atendenteFuncao ?? '').trim()) current.atendenteFuncao = funAt;
+  }
+  const matRec = String(raw.recebedorMatricula ?? r.recebedor_matricula ?? '').trim();
+  if (matRec && matRec !== '-') {
+    if (!String(current.recebedorMatricula ?? '').trim()) current.recebedorMatricula = matRec;
+  }
+  const funRec = String(raw.recebedorFuncao ?? r.recebedor_funcao ?? '').trim();
+  if (funRec && funRec !== '—') {
+    if (!String(current.recebedorFuncao ?? '').trim()) current.recebedorFuncao = funRec;
+  }
+}
+
+/** Agrupa linhas planas do historico (formato mobile / legado) por `loteNumero`. */
+function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendimento[] {
   const grouped = new Map<string, Atendimento>();
   for (const raw of payload.atendimentoHistorico ?? []) {
     const numero = String(raw.loteNumero ?? '');
@@ -428,19 +553,29 @@ function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
         documentoId: String(raw.documentoId ?? ''),
         documentoNumero: String(raw.documento ?? '-'),
         atendente: String(raw.atendente ?? ''),
+        atendenteMatricula: '',
+        atendenteFuncao: '',
         recebedorTipo: raw.recebedorTipo === 'externo' ? 'externo' : 'interno',
         recebedorColaboradorId: raw.recebedorColaboradorId != null ? String(raw.recebedorColaboradorId) : null,
         recebedor: String(raw.recebedor ?? ''),
+        recebedorMatricula: '',
+        recebedorFuncao: '',
         recebedorEmpresa: String(raw.recebedorEmpresa ?? ''),
         recebedorDocumento: String(raw.recebedorDocumento ?? ''),
         recebedorTelefone: String(raw.recebedorTelefone ?? ''),
         autorizadorInterno: String(raw.autorizadorInterno ?? ''),
         motivoRetirada: String(raw.motivoRetirada ?? ''),
-        origem: 'windows' as const,
+        origem: raw.origem === 'mobile' ? ('mobile' as const) : ('windows' as const),
         status: 'concluido' as const,
         dataAtendimento: String(raw.data ?? new Date().toISOString()),
         itens: [],
       };
+
+    if (raw.origem === 'mobile') {
+      current.origem = 'mobile';
+    }
+
+    mergeIdentificacaoHistoricoLinha(current, raw);
 
     current.itens.push({
       id: String(raw.id ?? crypto.randomUUID()),
@@ -450,17 +585,37 @@ function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
       descricaoMaterial: String(raw.descricao ?? ''),
       unidade: String(raw.unidade ?? 'UN'),
       quantidadeAtendida: Number(raw.quantidade ?? 0),
+      documentoNumero: String(raw.documento ?? ''),
     });
 
     grouped.set(numero, current);
   }
 
-  return Array.from(grouped.values()).sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+  return Array.from(grouped.values());
+}
+
+/**
+ * O app movel grava atendimentos em `atendimentoHistorico` (linhas por material).
+ * O PC grava tambem o array `atendimentos` (lotes agregados). Se existir `atendimentos`,
+ * a listagem antiga ignorava o historico — lotes criados so no telefone sumiam na lista do PC.
+ */
+function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
+  const porNumero = new Map<string, Atendimento>();
+  for (const a of mapAtendimentosFromSnapshotArray(payload)) {
+    porNumero.set(a.numero, a);
+  }
+  for (const a of mapAtendimentosFromHistoricoGrouped(payload)) {
+    if (!porNumero.has(a.numero)) {
+      porNumero.set(a.numero, a);
+    }
+  }
+  return Array.from(porNumero.values()).sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
 
 async function readRemoteState() {
   const payload = await readSnapshotPayload();
-  const saldoMap = buildSaldoMap(payload);
+  const documentosRec = documentosReconciliadosDoPayload(payload);
+  const saldoMap = buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
   let materiais = mapSnapshotMateriais(payload, saldoMap);
   if (shouldUseCloudMaterials()) {
     try {
@@ -471,7 +626,7 @@ async function readRemoteState() {
     }
   }
   return {
-    documentos: mapSnapshotDocumentos(payload),
+    documentos: documentosRec,
     materiais,
     atendimentos: mapSnapshotAtendimentos(payload),
   };
@@ -541,6 +696,7 @@ export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[
   const { documentos, materiais } = await resolveDocumentosEMateriaisAtendimento();
 
   const materialByCode = new Map(materiais.map((material) => [codigoMaterialKey(material.codigo), material]));
+  const saldoMap = await obterSaldoMapOperacional();
 
   return documentos
     .filter((doc) => doc.status !== 'cancelado')
@@ -553,8 +709,12 @@ export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[
       status: doc.status,
       linhas: doc.itens
         .map((item) => {
-          const material = materialByCode.get(codigoMaterialKey(item.codigoMaterial));
-          const saldo = material?.saldoAtual ?? 0;
+          const key = codigoMaterialKey(item.codigoMaterial);
+          const material = materialByCode.get(key);
+          const saldoOperacional = saldoMap.get(key);
+          /** Antes: só `material?.saldoAtual` — se o código não entrou no merge snapshot+cadastro, ficava 0 com NF já conferida. */
+          const saldo =
+            saldoOperacional !== undefined ? saldoOperacional : (material?.saldoAtual ?? 0);
           const pendente = Math.max(0, item.quantidadeProjeto - item.quantidadeAtendida);
 
           return {
@@ -602,8 +762,8 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
 
 export async function listarHistoricoAtendimentos(): Promise<Atendimento[]> {
   const items = hasSupabaseConfig()
-    ? await readRemoteState().then((state) => state.atendimentos).catch(() => readJson<Atendimento>(ATENDIMENTOS_KEY))
-    : readJson<Atendimento>(ATENDIMENTOS_KEY);
+    ? await readRemoteState().then((state) => state.atendimentos).catch(() => readJson<Atendimento>(atendimentosStorageKey()))
+    : readJson<Atendimento>(atendimentosStorageKey());
   return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
 
@@ -785,7 +945,7 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
       const podeLinha = at.status === 'concluido' && qtdLinha > 0 ? 'sim' : 'nao';
       const atendidoLinha = qtdLinha > 0 ? 'sim' : 'nao';
       const estornoPermitidoLinha = podeLinha;
-      const qtdPodeEstornar = podeLinha === 'sim' ? String(qtdLinha) : '0';
+      const qtdPodeEstornar = podeLinha === 'sim' ? formatDecimalExcelPtBr(qtdLinha) : '0';
       linhas.push(
         [
           at.numero,
@@ -815,7 +975,7 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
           it.codigoMaterial,
           it.descricaoMaterial,
           it.unidade,
-          String(it.quantidadeAtendida),
+          formatDecimalExcelPtBr(Number(it.quantidadeAtendida)),
         ]
           .map((c) => escapeCsvCellSemicolon(String(c)))
           .join(CSV_EXCEL_SEP_ATD),
@@ -881,6 +1041,8 @@ export async function registrarAtendimento(payload: {
   let recebedorEmpresa = payload.recebedorEmpresa?.trim() ?? '';
   let recebedorDocumento = payload.recebedorDocumento?.trim() ?? '';
   let recebedorTelefone = payload.recebedorTelefone?.trim() ?? '';
+  let recebedorMatricula = '';
+  let recebedorFuncao = '';
   const autorizadorInterno = payload.autorizadorInterno?.trim() ?? '';
   const motivoRetirada = payload.motivoRetirada?.trim() ?? '';
 
@@ -897,6 +1059,8 @@ export async function registrarAtendimento(payload: {
     recebedorEmpresa = colaboradorResult.data.empresa;
     recebedorDocumento = colaboradorResult.data.documento;
     recebedorTelefone = colaboradorResult.data.telefone;
+    recebedorMatricula = String(colaboradorResult.data.matricula ?? '').trim();
+    recebedorFuncao = String(colaboradorResult.data.funcao ?? '').trim();
   } else {
     if (!recebedorNome) return { success: false, error: 'Informe o nome de quem esta retirando.' };
     if (!recebedorEmpresa) return { success: false, error: 'Informe a empresa do retirante externo.' };
@@ -919,7 +1083,14 @@ export async function registrarAtendimento(payload: {
       return { success: false, error: externalResult.error ?? 'Nao foi possivel registrar o retirante externo.' };
     }
     recebedorColaboradorId = externalResult.data.id;
+    recebedorMatricula = String(externalResult.data.matricula ?? '').trim();
+    recebedorFuncao = String(externalResult.data.funcao ?? '').trim();
   }
+
+  const colaboradoresAtivos = await listarColaboradoresAtivos();
+  const colabAtendente = resolverColaboradorPorTextoAtendente(payload.atendente, colaboradoresAtivos);
+  const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
+  const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
 
   const remoteState = hasSupabaseConfig() ? await readRemoteState().catch(() => null) : null;
   const localState = loadLocalState();
@@ -992,9 +1163,13 @@ export async function registrarAtendimento(payload: {
     documentoId: documento.id,
     documentoNumero: documento.numero,
     atendente: payload.atendente.trim(),
+    atendenteMatricula,
+    atendenteFuncao,
     recebedorTipo: payload.recebedorTipo,
     recebedorColaboradorId,
     recebedor: recebedorNome,
+    recebedorMatricula,
+    recebedorFuncao,
     recebedorEmpresa,
     recebedorDocumento,
     recebedorTelefone,
@@ -1009,21 +1184,29 @@ export async function registrarAtendimento(payload: {
   atendimentos.push(atendimento);
 
   if (remoteState) {
+    const bloqueioAtendimento = bloqueioLocalChavesAtendimento({
+      documentosLength: documentos.length,
+      materiaisLength: materiais.length,
+      atendimentosLength: atendimentos.length,
+    });
+    if (bloqueioAtendimento) return { success: false, error: bloqueioAtendimento };
     return executeWrite({
       shouldWriteRemote: true,
       writeRemote: () => writeSnapshotPayload({ documentos, atendimentoHistorico: atendimentos }),
       writeLocal: () => {
-        writeJson(DOCUMENTOS_KEY, documentos);
-        writeJson(MATERIAIS_KEY, materiais);
-        writeJson(ATENDIMENTOS_KEY, atendimentos);
+        writeJson(documentosKeyAtendimento(), documentos);
+        writeJson(materiaisKeyAtendimento(), materiais);
+        writeJson(atendimentosStorageKey(), atendimentos);
       },
       successData: atendimento,
       fallbackMessage: 'Falha ao salvar atendimento no Supabase.',
     });
   }
-  writeJson(DOCUMENTOS_KEY, documentos);
-  writeJson(MATERIAIS_KEY, materiais);
-  writeJson(ATENDIMENTOS_KEY, atendimentos);
+  const blockedSalvar = whenBusinessWriteBlockedResult<Atendimento>();
+  if (blockedSalvar) return blockedSalvar;
+  writeJson(documentosKeyAtendimento(), documentos);
+  writeJson(materiaisKeyAtendimento(), materiais);
+  writeJson(atendimentosStorageKey(), atendimentos);
   return { success: true, data: atendimento, meta: { source: 'local' } };
 }
 
@@ -1122,20 +1305,28 @@ export async function estornarAtendimento(
   atendimentos[atendimentoIndex] = { ...atendimento, itens: workingItems, status: novoStatus };
 
   if (remoteState) {
+    const bloqueioEstorno = bloqueioLocalChavesAtendimento({
+      documentosLength: documentos.length,
+      materiaisLength: materiais.length,
+      atendimentosLength: atendimentos.length,
+    });
+    if (bloqueioEstorno) return { success: false, error: bloqueioEstorno };
     return executeWrite({
       shouldWriteRemote: true,
       writeRemote: () => writeSnapshotPayload({ documentos, atendimentoHistorico: atendimentos }),
       writeLocal: () => {
-        writeJson(DOCUMENTOS_KEY, documentos);
-        writeJson(MATERIAIS_KEY, materiais);
-        writeJson(ATENDIMENTOS_KEY, atendimentos);
+        writeJson(documentosKeyAtendimento(), documentos);
+        writeJson(materiaisKeyAtendimento(), materiais);
+        writeJson(atendimentosStorageKey(), atendimentos);
       },
       successData: atendimentos[atendimentoIndex],
       fallbackMessage: 'Falha ao estornar atendimento no Supabase.',
     });
   }
-  writeJson(DOCUMENTOS_KEY, documentos);
-  writeJson(MATERIAIS_KEY, materiais);
-  writeJson(ATENDIMENTOS_KEY, atendimentos);
+  const blockedEstorno = whenBusinessWriteBlockedResult<Atendimento>();
+  if (blockedEstorno) return blockedEstorno;
+  writeJson(documentosKeyAtendimento(), documentos);
+  writeJson(materiaisKeyAtendimento(), materiais);
+  writeJson(atendimentosStorageKey(), atendimentos);
   return { success: true, data: atendimentos[atendimentoIndex], meta: { source: 'local' } };
 }

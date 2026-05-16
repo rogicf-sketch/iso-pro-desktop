@@ -1,22 +1,59 @@
-import { escapeCsvCellSemicolon } from '../../../lib/csv';
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
+import {
+  IMPORT_COOPERATIVE_MIN_CSV_ROWS,
+  yieldCooperativeEveryRows,
+  yieldToMain,
+} from '../../../lib/yieldCooperativeImport';
 import { buildSaldoMap, codigoMaterialKey, type SaldoSnapshotPayload } from '../../estoque/saldoFromSnapshot';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { getCurrentUser } from '../../auth/services/auth.service';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
-import type { RecebimentoItem } from '../../recebimentos/types/recebimento.types';
 import type { Material, MaterialFiltro, MaterialFormData, MaterialListItem } from '../types/material.types';
-import { validateMaterial } from '../schemas/material.schema';
+import { parseMateriaisPersistidos } from '../schemas/materialPersistido.zod';
 import { backfillCodigosBarrasMateriais } from '../utils/backfillCodigosBarrasMateriais';
 import { gerarProximoCodigoBarrasEan13 } from '../utils/gerarCodigoBarrasEan13';
-import { construirDocumentoStagingImportacaoMateriais } from './materiais.import.pipeline';
+import {
+  construirDocumentoStagingImportacaoMateriais,
+  validarDominiosCadastroImportacaoMateriais,
+} from './materiais.import.pipeline';
 import { readMateriaisDominiosListas, writeMateriaisDominiosListas } from './materiaisDominios.storage';
 
-export { materialRegistroCsvParaFormData, serializarDocumentoStagingMateriais, validarImportacaoMaterialEmCamadas } from './materiais.import.pipeline';
+export {
+  materialRegistroCsvParaFormData,
+  serializarDocumentoStagingMateriais,
+  validarDominiosCadastroImportacaoMateriais,
+  validarImportacaoMaterialEmCamadas,
+  valorPermitidoNaListaDominio,
+} from './materiais.import.pipeline';
 export type { MaterialImportStagingDocument, MaterialImportStagingLinha } from './materiais.import.pipeline';
 
-const STORAGE_KEY = 'iso-pro-desktop-materiais';
+function materiaisStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-materiais');
+}
+
+/**
+ * Cadastro de materiais — dois modos (ver `materiaisNuvem` em configuracoes / `shouldUseCloudMaterials`):
+ *
+ * - **Nuvem**: linhas na tabela Supabase `materiais`; `salvar` / exclusao / import nuvem nao reescrevem esta chave.
+ * - **Local**: array JSON em `iso-pro-desktop-materiais`; `writeAll` substitui o ficheiro inteiro.
+ *
+ * Com Supabase ligado mas cadastro **local**, o risco e o mesmo dos outros modulos: `localStorage` pode ter
+ * mais linhas "brutas" do que a lista valida que vamos gravar. A protecao abaixo bloqueia essa substituicao.
+ * Atendimento que grava `MATERIAIS_KEY` a partir do snapshot ja e coberto em `atendimento.service.ts`.
+ */
+function bloqueioSubstituicaoTotalMateriaisLocal(tamanhoNovaLista: number): string | null {
+  if (!hasSupabaseConfig()) return null;
+  return mensagemSeSubstituirLocalPerderiaCadastros([
+    { storageKey: materiaisStorageKey(), tamanhoNovaLista: tamanhoNovaLista, nomeCurto: 'material(is) do cadastro' },
+  ]);
+}
 
 const seedData: Material[] = [
   {
@@ -64,38 +101,38 @@ const seedData: Material[] = [
 ];
 
 function readAll(): Material[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(materiaisStorageKey());
   if (!raw) {
     let initial = seedData.map(normalizarMaterialLeitura);
     const bf = backfillCodigosBarrasMateriais(initial);
     if (bf.alterou) {
       initial = bf.next;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+    localStorage.setItem(materiaisStorageKey(), JSON.stringify(initial));
     return initial;
   }
 
   try {
-    const parsed = JSON.parse(raw) as Material[];
-    const withNorm = parsed.map(normalizarMaterialLeitura);
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseMateriaisPersistidos(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey());
+      return [];
+    }
+    const withNorm = validated.map(normalizarMaterialLeitura);
     const { next, alterou } = backfillCodigosBarrasMateriais(withNorm);
     if (alterou) {
       writeAll(next);
     }
     return next;
   } catch {
-    let initial = seedData.map(normalizarMaterialLeitura);
-    const bf = backfillCodigosBarrasMateriais(initial);
-    if (bf.alterou) {
-      initial = bf.next;
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
-    return initial;
+    avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey());
+    return [];
   }
 }
 
 function writeAll(items: Material[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(materiaisStorageKey(), JSON.stringify(items));
 }
 
 function normalizarMaterialLeitura(m: Material): Material {
@@ -163,6 +200,7 @@ async function listRemoteMaterials(): Promise<Material[]> {
   const { data, error } = await supabase
     .from('materiais')
     .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
+    .eq('tenant_id', getActiveTenantId())
     .order('codigo', { ascending: true });
 
   if (error) {
@@ -182,7 +220,8 @@ async function listRemoteMaterials(): Promise<Material[]> {
       const { error: upErr } = await supabase
         .from('materiais')
         .update({ codigo_barras: m.codigoBarras })
-        .eq('id', Number(m.id));
+        .eq('id', Number(m.id))
+        .eq('tenant_id', getActiveTenantId());
       if (upErr) {
         throw new Error(upErr.message);
       }
@@ -198,13 +237,62 @@ async function getNextMaterialId() {
     throw new Error('Supabase nao configurado.');
   }
 
-  const { data, error } = await supabase.from('materiais').select('id').order('id', { ascending: false }).limit(1);
+  const { data, error } = await supabase
+    .from('materiais')
+    .select('id')
+    .eq('tenant_id', getActiveTenantId())
+    .order('id', { ascending: false })
+    .limit(1);
 
   if (error) {
     throw new Error(error.message);
   }
 
   return Number(data?.[0]?.id ?? 0) + 1;
+}
+
+async function fetchMaxMaterialIdRemote(): Promise<number> {
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new Error('Supabase nao configurado.');
+  }
+  const { data, error } = await supabase
+    .from('materiais')
+    .select('id')
+    .eq('tenant_id', getActiveTenantId())
+    .order('id', { ascending: false })
+    .limit(1);
+  if (error) {
+    throw new Error(error.message);
+  }
+  return Number(data?.[0]?.id ?? 0);
+}
+
+/** Insercoes em massa na tabela remota (menos round-trips que um insert por linha). */
+const IMPORT_MATERIAIS_CHUNK_INSERT = 400;
+/** Atualizacoes em paralelo controlado (evita saturar rede / limites). */
+const IMPORT_MATERIAIS_PARALLEL_UPDATES = 20;
+
+type PreparedMateriaisLinha = {
+  numeroLinha: number;
+  form: MaterialFormData;
+  key: string;
+  existing: Material | undefined;
+  antes: string;
+};
+
+function formParaPayloadNuvem(form: MaterialFormData, codigoBarras: string) {
+  return {
+    codigo: form.codigo.trim(),
+    codigo_barras: codigoBarras,
+    descricao: form.descricao.trim(),
+    diametro: form.diametro.trim(),
+    disciplina: form.disciplina.trim(),
+    unidade: form.unidade.trim(),
+    peso: form.peso,
+    estoque_minimo: form.estoqueMinimo,
+    ativo: form.ativo,
+  };
 }
 
 async function loadMateriaisBase(): Promise<Material[]> {
@@ -235,6 +323,67 @@ async function aplicarSaldoCalculadoNosMateriais(materiais: Material[]): Promise
 /** Cadastro completo (Supabase ou local). Usado pelo atendimento para alinhar saldo ao snapshot. */
 export async function carregarMateriaisDoCadastro(): Promise<Material[]> {
   return loadMateriaisBase();
+}
+
+export type SincronizarMateriaisNuvemParaLocalOpcoes = {
+  /** Login para auditoria. */
+  actorLogin?: string;
+  /**
+   * Ignora o bloqueio quando o `localStorage` deste navegador tem mais linhas que a lista vinda da nuvem.
+   * Usar apenas apos exportar backup e confirmar que linhas extra podem ser descartadas.
+   */
+  forcar?: boolean;
+};
+
+/**
+ * Copia o cadastro actual da tabela Supabase `materiais` para `iso-pro-desktop-materiais`, com `saldoAtual`
+ * alinhado ao snapshot (quando Supabase esta configurado). Exige materiais em nuvem activos.
+ *
+ * Por defeito aplica o mesmo guarda que outras gravacoes locais: se o navegador tiver mais linhas brutas
+ * guardadas do que a lista da nuvem, devolve erro e `meta.syncMateriaisLocalBloqueado`; use `forcar: true`
+ * na segunda tentativa apos confirmacao na UI.
+ */
+export async function sincronizarMateriaisNuvemParaArmazenamentoLocal(
+  opcoes?: SincronizarMateriaisNuvemParaLocalOpcoes,
+): Promise<ServiceResult<{ total: number }>> {
+  if (!hasSupabaseConfig()) {
+    return { success: false, error: 'Supabase nao esta configurado (URL e chave em Configuracoes).' };
+  }
+  if (!shouldUseCloudMaterials()) {
+    return {
+      success: false,
+      error:
+        'Cadastro na nuvem desligado: em Configuracoes, active "materiais na nuvem" para poder gravar esta copia local a partir da tabela.',
+    };
+  }
+
+  try {
+    const items = await aplicarSaldoCalculadoNosMateriais(await listRemoteMaterials());
+    if (!opcoes?.forcar) {
+      const bloqueio = bloqueioSubstituicaoTotalMateriaisLocal(items.length);
+      if (bloqueio) {
+        return {
+          success: false,
+          error: bloqueio,
+          meta: { syncMateriaisLocalBloqueado: true },
+        };
+      }
+    }
+    writeAll(items);
+    invalidateIsoProSnapshotCache();
+    const actor = opcoes?.actorLogin?.trim() || getCurrentUser()?.login || 'desconhecido';
+    appendAuthAuditEvent({
+      type: 'materiais_copia_local_desde_nuvem',
+      actorLogin: actor,
+      detail: `Gravada copia local com ${items.length} material(is) a partir da nuvem${opcoes?.forcar ? ' (substituicao forcada).' : '.'}`,
+    });
+    return { success: true, data: { total: items.length } };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Nao foi possivel ler o cadastro de materiais na nuvem.',
+    };
+  }
 }
 
 /**
@@ -394,6 +543,7 @@ export async function salvarMaterial(
           .from('materiais')
           .update(normalizedPayload)
           .eq('id', Number(currentId))
+          .eq('tenant_id', getActiveTenantId())
           .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
           .single();
 
@@ -404,7 +554,7 @@ export async function salvarMaterial(
       const nextId = await getNextMaterialId();
       const { data, error } = await supabase
         .from('materiais')
-        .insert({ id: nextId, ...normalizedPayload })
+        .insert({ id: nextId, tenant_id: getActiveTenantId(), ...normalizedPayload })
         .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
         .single();
 
@@ -424,6 +574,9 @@ export async function salvarMaterial(
     return { success: false, error: 'Ja existe um material com esse codigo.' };
   }
 
+  const blockedMat = whenBusinessWriteBlockedResult<Material>();
+  if (blockedMat) return blockedMat;
+
   if (currentId) {
     const index = items.findIndex((item) => item.id === currentId);
     if (index === -1) return { success: false, error: 'Material nao encontrado.' };
@@ -435,6 +588,8 @@ export async function salvarMaterial(
       descricao: payload.descricao.trim(),
       codigoBarras,
     };
+    const bloqueioMatEdit = bloqueioSubstituicaoTotalMateriaisLocal(items.length);
+    if (bloqueioMatEdit) return { success: false, error: bloqueioMatEdit };
     writeAll(items);
     return { success: true, data: items[index] };
   }
@@ -449,50 +604,63 @@ export async function salvarMaterial(
   };
 
   items.push(created);
+  const bloqueioMatNovo = bloqueioSubstituicaoTotalMateriaisLocal(items.length);
+  if (bloqueioMatNovo) return { success: false, error: bloqueioMatNovo };
   writeAll(items);
 
   return { success: true, data: created };
 }
 
 /**
- * Para cada linha de recebimento cujo codigo ainda nao existe no cadastro, cria o material
- * (disciplina/unidade/peso vindos da linha; descricao obrigatoria).
- * Chamado apos gravar recebimento para alinhar cadastro ao que ja entrou por NF/importacao.
+ * Recebimentos / documentos: bloqueia codigo inexistente ou material inativo (mesma base que o cadastro em uso).
  */
-export async function garantirCadastroMateriaisParaItensRecebimento(itens: RecebimentoItem[]): Promise<void> {
-  if (!itens.length) return;
-  const base = await loadMateriaisBase();
-  const existentes = new Set(base.map((m) => m.codigo.trim().toLowerCase()).filter(Boolean));
-
-  for (const it of itens) {
-    const cod = it.codigoMaterial.trim();
-    if (!cod) continue;
-    const key = cod.toLowerCase();
-    if (existentes.has(key)) continue;
-
-    const form: MaterialFormData = {
-      codigo: cod,
-      codigoBarras: '',
-      descricao: it.descricaoMaterial.trim() || cod,
-      diametro: '',
-      disciplina: it.disciplina.trim() || 'Geral',
-      unidade: it.unidade.trim() || 'UN',
-      peso: Number.isFinite(it.pesoUnitario) && (it.pesoUnitario ?? 0) >= 0 ? Number(it.pesoUnitario) : 0,
-      estoqueMinimo: 0,
-      ativo: true,
-      observacao: 'Incluido automaticamente a partir de recebimento.',
-    };
-
-    const validacao = validateMaterial(form);
-    if (validacao) {
-      continue;
-    }
-
-    const res = await salvarMaterial(form);
-    if (res.success) {
-      existentes.add(key);
-    }
+export async function validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+  codigos: string[],
+  modo: 'import' | 'salvar' = 'salvar',
+  modulo: 'recebimento' | 'documento' = 'recebimento',
+): Promise<string | null> {
+  const unique = [...new Set(codigos.map((c) => c.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, 'pt-BR'),
+  );
+  if (!unique.length) {
+    return modo === 'import'
+      ? 'Importacao nao concluida. Nenhum codigo de material valido nas linhas do arquivo.'
+      : modulo === 'documento'
+        ? 'Adicione ao menos um item com codigo de material cadastrado e ativo.'
+        : 'Informe ao menos um material com codigo valido.';
   }
+
+  const base = await loadMateriaisBase();
+  const porCodigo = new Map<string, Material>();
+  for (const m of base) {
+    const k = m.codigo.trim().toLowerCase();
+    if (k) porCodigo.set(k, m);
+  }
+
+  const naoCadastrados: string[] = [];
+  const inativos: string[] = [];
+  for (const c of unique) {
+    const k = c.toLowerCase();
+    const m = porCodigo.get(k);
+    if (!m) naoCadastrados.push(c);
+    else if (!m.ativo) inativos.push(c);
+  }
+
+  if (naoCadastrados.length === 0 && inativos.length === 0) return null;
+
+  const detalhes: string[] = [];
+  if (naoCadastrados.length) {
+    detalhes.push(`codigo(s) nao cadastrado(s): ${naoCadastrados.map((x) => `"${x}"`).join(', ')}`);
+  }
+  if (inativos.length) {
+    detalhes.push(`codigo(s) inativo(s) no cadastro: ${inativos.map((x) => `"${x}"`).join(', ')}`);
+  }
+  const corpo = `${detalhes.join(' ')} Cadastre ou reative em Materiais`;
+  if (modo === 'import') {
+    return `Importacao nao concluida. ${corpo} e tente novamente.`;
+  }
+  const alvo = modulo === 'documento' ? 'documento' : 'recebimento';
+  return `${corpo} antes de salvar o ${alvo}.`;
 }
 
 export async function toggleMaterialStatus(id: string, ativo: boolean): Promise<ServiceResult<Material>> {
@@ -505,6 +673,7 @@ export async function toggleMaterialStatus(id: string, ativo: boolean): Promise<
         .from('materiais')
         .update({ ativo })
         .eq('id', Number(id))
+        .eq('tenant_id', getActiveTenantId())
         .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
         .single();
 
@@ -527,7 +696,12 @@ export async function toggleMaterialStatus(id: string, ativo: boolean): Promise<
   const index = items.findIndex((item) => item.id === id);
   if (index === -1) return { success: false, error: 'Material nao encontrado.' };
 
+  const blockedToggle = whenBusinessWriteBlockedResult<Material>();
+  if (blockedToggle) return blockedToggle;
+
   items[index] = { ...items[index], ativo };
+  const bloqueioMatToggle = bloqueioSubstituicaoTotalMateriaisLocal(items.length);
+  if (bloqueioMatToggle) return { success: false, error: bloqueioMatToggle };
   writeAll(items);
 
   return { success: true, data: items[index] };
@@ -636,7 +810,7 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
         };
       }
 
-      const { error } = await supabase.from('materiais').delete().in('id', numericIds);
+      const { error } = await supabase.from('materiais').delete().eq('tenant_id', getActiveTenantId()).in('id', numericIds);
       if (error) {
         return { success: false, error: mensagemErroExclusaoMateriais(error.message) };
       }
@@ -662,6 +836,8 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
   if (!removidos) {
     return { success: false, error: 'Nenhum material encontrado para excluir.' };
   }
+  const blockedExcluirMat = whenBusinessWriteBlockedResult<{ removidos: number }>();
+  if (blockedExcluirMat) return blockedExcluirMat;
   writeAll(next);
   invalidateIsoProSnapshotCache();
   appendAuthAuditEvent({
@@ -707,11 +883,13 @@ export function obterListasDominioMateriaisArmazenadas() {
 }
 
 export function salvarDominiosDisciplinasMateriais(disciplinas: string[]): void {
+  if (whenBusinessWriteBlockedResult<void>()) return;
   const cur = readMateriaisDominiosListas();
   writeMateriaisDominiosListas({ ...cur, disciplinas });
 }
 
 export function salvarDominiosUnidadesMateriais(unidades: string[]): void {
+  if (whenBusinessWriteBlockedResult<void>()) return;
   const cur = readMateriaisDominiosListas();
   writeMateriaisDominiosListas({ ...cur, unidades });
 }
@@ -725,6 +903,7 @@ export async function buscarMaterialPorId(id: string): Promise<ServiceResult<Mat
         .from('materiais')
         .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
         .eq('id', Number(id))
+        .eq('tenant_id', getActiveTenantId())
         .single();
       if (error) return { success: false, error: error.message };
       const mat = mapRemoteMaterial(data as RemoteMaterialRow);
@@ -852,9 +1031,9 @@ export async function montarExportacaoMateriaisCsv(
         m.diametro,
         m.disciplina,
         m.unidade,
-        String(m.peso),
-        String(m.estoqueMinimo),
-        String(m.saldoAtual),
+        formatDecimalExcelPtBr(Number(m.peso)),
+        formatDecimalExcelPtBr(Number(m.estoqueMinimo)),
+        formatDecimalExcelPtBr(Number(m.saldoAtual)),
         m.ativo ? 'sim' : 'nao',
         m.observacao,
       ]
@@ -881,7 +1060,290 @@ export function previewImportacaoMateriaisCsv(text: string): { ok: true; linhaCo
   if (erroEstrutural || !documento) {
     return { ok: false, error: erroEstrutural ?? 'CSV invalido ou sem linhas de dados.' };
   }
+  const domErr = validarDominiosCadastroImportacaoMateriais(documento);
+  if (domErr) {
+    return { ok: false, error: domErr };
+  }
   return { ok: true, linhaCount: documento.linhas.length };
+}
+
+async function importarMateriaisCsvLocalEmLote(
+  prepared: PreparedMateriaisLinha[],
+  amostrasAuditoria: { codigo: string; tipo: 'criado' | 'atualizado'; antes: string; depois: string }[],
+): Promise<ServiceResult<MateriaisImportacaoResumo>> {
+  const bloqueado = whenBusinessWriteBlockedResult<MateriaisImportacaoResumo>();
+  if (bloqueado) return bloqueado;
+
+  const detalhes: string[] = [];
+  let criados = 0;
+  let atualizados = 0;
+  let ignorados = 0;
+
+  const base = await loadMateriaisBase();
+  const working = base.map((m) => ({ ...m }));
+  const byCodigo = new Map(working.map((m) => [m.codigo.toLowerCase(), m]));
+  const cooperativeLocal = prepared.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
+
+  for (let idx = 0; idx < prepared.length; idx++) {
+    const p = prepared[idx];
+    const existing = byCodigo.get(p.key);
+    const cbRes = resolverCodigoBarrasParaSalvar(p.form, working, existing?.id);
+    if ('error' in cbRes) {
+      detalhes.push(`Linha ${p.numeroLinha} (${p.form.codigo}): ${cbRes.error}`);
+      ignorados += 1;
+      continue;
+    }
+    const codigoBarras = cbRes.codigoBarras;
+
+    if (existing) {
+      const index = working.findIndex((item) => item.id === existing.id);
+      if (index === -1) {
+        detalhes.push(`Linha ${p.numeroLinha} (${p.form.codigo}): material nao encontrado na base.`);
+        ignorados += 1;
+        continue;
+      }
+      working[index] = {
+        ...working[index],
+        ...p.form,
+        codigo: p.form.codigo.trim(),
+        descricao: p.form.descricao.trim(),
+        codigoBarras,
+        observacao: p.form.observacao?.trim() ?? '',
+      };
+      byCodigo.set(p.key, working[index]);
+      const depois = snapshotMaterialResumo(working[index]);
+      atualizados += 1;
+      detalhes.push(`${p.form.codigo}: atualizado.`);
+      if (amostrasAuditoria.length < 8) {
+        amostrasAuditoria.push({ codigo: p.form.codigo, tipo: 'atualizado', antes: p.antes, depois });
+      }
+    } else {
+      const created: Material = {
+        id: crypto.randomUUID(),
+        saldoAtual: 0,
+        ...p.form,
+        codigo: p.form.codigo.trim(),
+        descricao: p.form.descricao.trim(),
+        codigoBarras,
+        observacao: p.form.observacao?.trim() ?? '',
+      };
+      working.push(created);
+      byCodigo.set(p.key, created);
+      const depois = snapshotMaterialResumo(created);
+      criados += 1;
+      detalhes.push(`${p.form.codigo}: incluido.`);
+      if (amostrasAuditoria.length < 8) {
+        amostrasAuditoria.push({ codigo: p.form.codigo, tipo: 'criado', antes: p.antes, depois });
+      }
+    }
+
+    if (cooperativeLocal) {
+      await yieldCooperativeEveryRows(idx);
+    }
+  }
+
+  const bloqueioMatImport = bloqueioSubstituicaoTotalMateriaisLocal(working.length);
+  if (bloqueioMatImport) {
+    return { success: false, error: bloqueioMatImport };
+  }
+  writeAll(working);
+
+  return {
+    success: true,
+    data: {
+      criados,
+      atualizados,
+      ignorados,
+      ignoradosPorDuplicidadeNoArquivo: 0,
+      detalhes,
+    },
+  };
+}
+
+type InsertMateriaisNuvemOp = {
+  numeroLinha: number;
+  codigo: string;
+  row: Record<string, unknown>;
+};
+
+type UpdateMateriaisNuvemOp = {
+  numeroLinha: number;
+  codigo: string;
+  id: number;
+  payload: ReturnType<typeof formParaPayloadNuvem>;
+};
+
+async function importarMateriaisCsvNuvemEmLotes(
+  prepared: PreparedMateriaisLinha[],
+  amostrasAuditoria: { codigo: string; tipo: 'criado' | 'atualizado'; antes: string; depois: string }[],
+): Promise<ServiceResult<MateriaisImportacaoResumo>> {
+  const supabase = getSupabase();
+  if (!supabase) {
+    return { success: false, error: 'Supabase nao configurado.' };
+  }
+
+  const detalhes: string[] = [];
+  let criados = 0;
+  let atualizados = 0;
+  let ignorados = 0;
+
+  const base = await listRemoteMaterials().catch(() => readAll());
+  const working = base.map((m) => ({ ...m }));
+  const byCodigo = new Map(working.map((m) => [m.codigo.toLowerCase(), m]));
+  let nextId = (await fetchMaxMaterialIdRemote()) + 1;
+
+  const inserts: InsertMateriaisNuvemOp[] = [];
+  const updates: UpdateMateriaisNuvemOp[] = [];
+  const cooperativeNuvem = prepared.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
+
+  for (const p of prepared) {
+    const existing = byCodigo.get(p.key);
+    const cbRes = resolverCodigoBarrasParaSalvar(p.form, working, existing?.id);
+    if ('error' in cbRes) {
+      detalhes.push(`Linha ${p.numeroLinha} (${p.form.codigo}): ${cbRes.error}`);
+      ignorados += 1;
+      continue;
+    }
+    const payload = formParaPayloadNuvem(p.form, cbRes.codigoBarras);
+
+    if (existing) {
+      updates.push({
+        numeroLinha: p.numeroLinha,
+        codigo: p.form.codigo,
+        id: Number(existing.id),
+        payload,
+      });
+      const idx = working.findIndex((m) => m.id === existing.id);
+      const merged = mapRemoteMaterial({
+        id: Number(existing.id),
+        codigo: payload.codigo,
+        codigo_barras: payload.codigo_barras,
+        descricao: payload.descricao,
+        diametro: payload.diametro,
+        disciplina: payload.disciplina,
+        unidade: payload.unidade,
+        peso: payload.peso,
+        estoque_minimo: payload.estoque_minimo,
+        ativo: payload.ativo,
+      } as RemoteMaterialRow);
+      merged.saldoAtual = existing.saldoAtual;
+      working[idx] = merged;
+      byCodigo.set(p.key, merged);
+    } else {
+      const id = nextId++;
+      inserts.push({
+        numeroLinha: p.numeroLinha,
+        codigo: p.form.codigo,
+        row: { id, ...payload },
+      });
+      const mat = mapRemoteMaterial({
+        id,
+        codigo: payload.codigo,
+        codigo_barras: payload.codigo_barras,
+        descricao: payload.descricao,
+        diametro: payload.diametro,
+        disciplina: payload.disciplina,
+        unidade: payload.unidade,
+        peso: payload.peso,
+        estoque_minimo: payload.estoque_minimo,
+        ativo: payload.ativo,
+      } as RemoteMaterialRow);
+      working.push(mat);
+      byCodigo.set(p.key, mat);
+    }
+  }
+
+  for (let i = 0; i < inserts.length; i += IMPORT_MATERIAIS_CHUNK_INSERT) {
+    const chunk = inserts.slice(i, i + IMPORT_MATERIAIS_CHUNK_INSERT);
+    const tid = getActiveTenantId();
+    const { error } = await supabase.from('materiais').insert(chunk.map((c) => ({ ...c.row, tenant_id: tid })));
+    if (error) {
+      for (const c of chunk) {
+        const { error: e2 } = await supabase.from('materiais').insert({ ...c.row, tenant_id: tid });
+        if (e2) {
+          detalhes.push(`Linha ${c.numeroLinha} (${c.codigo}): ${e2.message}`);
+          ignorados += 1;
+        } else {
+          criados += 1;
+          detalhes.push(`${c.codigo}: incluido.`);
+          const prep = prepared.find((x) => x.numeroLinha === c.numeroLinha);
+          const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
+          if (prep && depoisMat && amostrasAuditoria.length < 8) {
+            amostrasAuditoria.push({
+              codigo: c.codigo,
+              tipo: 'criado',
+              antes: prep.antes,
+              depois: snapshotMaterialResumo(depoisMat),
+            });
+          }
+        }
+      }
+    } else {
+      criados += chunk.length;
+      for (const c of chunk) {
+        detalhes.push(`${c.codigo}: incluido.`);
+        const prep = prepared.find((x) => x.numeroLinha === c.numeroLinha);
+        const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
+        if (prep && depoisMat && amostrasAuditoria.length < 8) {
+          amostrasAuditoria.push({
+            codigo: c.codigo,
+            tipo: 'criado',
+            antes: prep.antes,
+            depois: snapshotMaterialResumo(depoisMat),
+          });
+        }
+      }
+    }
+    if (cooperativeNuvem) {
+      await yieldToMain();
+    }
+  }
+
+  for (let i = 0; i < updates.length; i += IMPORT_MATERIAIS_PARALLEL_UPDATES) {
+    const slice = updates.slice(i, i + IMPORT_MATERIAIS_PARALLEL_UPDATES);
+    const outcomes = await Promise.all(
+      slice.map((u) =>
+        supabase.from('materiais').update(u.payload).eq('id', u.id).eq('tenant_id', getActiveTenantId()),
+      ),
+    );
+    for (let j = 0; j < outcomes.length; j++) {
+      const u = slice[j];
+      const err = outcomes[j].error;
+      if (err) {
+        detalhes.push(`Linha ${u.numeroLinha} (${u.codigo}): ${err.message}`);
+        ignorados += 1;
+      } else {
+        atualizados += 1;
+        detalhes.push(`${u.codigo}: atualizado.`);
+        const prep = prepared.find((x) => x.numeroLinha === u.numeroLinha);
+        const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
+        if (prep && depoisMat && amostrasAuditoria.length < 8) {
+          amostrasAuditoria.push({
+            codigo: u.codigo,
+            tipo: 'atualizado',
+            antes: prep.antes,
+            depois: snapshotMaterialResumo(depoisMat),
+          });
+        }
+      }
+    }
+    if (cooperativeNuvem) {
+      await yieldToMain();
+    }
+  }
+
+  invalidateIsoProSnapshotCache();
+
+  return {
+    success: true,
+    data: {
+      criados,
+      atualizados,
+      ignorados,
+      ignoradosPorDuplicidadeNoArquivo: 0,
+      detalhes,
+    },
+  };
 }
 
 export async function importarMateriaisDoArquivoCsv(
@@ -893,22 +1355,23 @@ export async function importarMateriaisDoArquivoCsv(
     return { success: false, error: erroEstrutural ?? 'Falha na camada estrutural do CSV.' };
   }
 
-  const detalhes: string[] = [];
-  let criados = 0;
-  let atualizados = 0;
-  let ignorados = 0;
-  let ignoradosPorDuplicidadeNoArquivo = 0;
-  const amostrasAuditoria: { codigo: string; tipo: 'criado' | 'atualizado'; antes: string; depois: string }[] = [];
+  const domErr = validarDominiosCadastroImportacaoMateriais(documento);
+  if (domErr) {
+    return { success: false, error: domErr };
+  }
 
   const base = await loadMateriaisBase();
   const byCodigo = new Map(base.map((m) => [m.codigo.toLowerCase(), m]));
-  /** Primeira linha do arquivo em que cada codigo foi importado com sucesso (evita segunda linha igual no mesmo CSV). */
   const codigoImportadoNesteArquivo = new Map<string, number>();
+  const detalhesPre: string[] = [];
+  let ignoradosPre = 0;
+  let ignoradosPorDuplicidadeNoArquivo = 0;
+  const prepared: PreparedMateriaisLinha[] = [];
 
   for (const linha of documento.linhas) {
     if (linha.erros.length > 0) {
-      detalhes.push(`Linha ${linha.numeroLinha}: ${linha.erros.join(' ')}`);
-      ignorados += 1;
+      detalhesPre.push(`Linha ${linha.numeroLinha}: ${linha.erros.join(' ')}`);
+      ignoradosPre += 1;
       continue;
     }
 
@@ -917,54 +1380,45 @@ export async function importarMateriaisDoArquivoCsv(
 
     if (codigoImportadoNesteArquivo.has(key)) {
       const primeira = codigoImportadoNesteArquivo.get(key)!;
-      detalhes.push(
+      detalhesPre.push(
         `Linha ${linha.numeroLinha}: codigo "${form.codigo}" repetido no arquivo (ja importado na linha ${primeira}). Linha ignorada.`,
       );
-      ignorados += 1;
+      ignoradosPre += 1;
       ignoradosPorDuplicidadeNoArquivo += 1;
       continue;
     }
+
     const existing = byCodigo.get(key);
     const antes = existing ? snapshotMaterialResumo(existing) : '(novo)';
+    prepared.push({
+      numeroLinha: linha.numeroLinha,
+      form,
+      key,
+      existing,
+      antes,
+    });
+    codigoImportadoNesteArquivo.set(key, linha.numeroLinha);
+  }
 
-    const result = await salvarMaterial(form, existing?.id);
-    if (!result.success || !result.data) {
-      detalhes.push(`Linha ${linha.numeroLinha} (${form.codigo}): ${result.error ?? 'falha ao salvar.'}`);
-      ignorados += 1;
-      continue;
-    }
+  const amostrasAuditoria: { codigo: string; tipo: 'criado' | 'atualizado'; antes: string; depois: string }[] = [];
 
-    const saved = result.data;
-    const depois = snapshotMaterialResumo(saved);
+  const inner = shouldUseCloudMaterials()
+    ? await importarMateriaisCsvNuvemEmLotes(prepared, amostrasAuditoria)
+    : await importarMateriaisCsvLocalEmLote(prepared, amostrasAuditoria);
 
-    if (existing) {
-      atualizados += 1;
-      byCodigo.set(key, saved);
-      codigoImportadoNesteArquivo.set(key, linha.numeroLinha);
-      detalhes.push(`${form.codigo}: atualizado.`);
-      if (amostrasAuditoria.length < 8) {
-        amostrasAuditoria.push({ codigo: form.codigo, tipo: 'atualizado', antes, depois });
-      }
-    } else {
-      criados += 1;
-      byCodigo.set(key, saved);
-      codigoImportadoNesteArquivo.set(key, linha.numeroLinha);
-      detalhes.push(`${form.codigo}: incluido.`);
-      if (amostrasAuditoria.length < 8) {
-        amostrasAuditoria.push({ codigo: form.codigo, tipo: 'criado', antes, depois });
-      }
-    }
+  if (!inner.success || !inner.data) {
+    return inner;
   }
 
   const resumo: MateriaisImportacaoResumo = {
-    criados,
-    atualizados,
-    ignorados,
+    criados: inner.data.criados,
+    atualizados: inner.data.atualizados,
+    ignorados: inner.data.ignorados + ignoradosPre,
     ignoradosPorDuplicidadeNoArquivo,
-    detalhes,
+    detalhes: [...detalhesPre, ...inner.data.detalhes],
   };
 
-  if (criados === 0 && atualizados === 0) {
+  if (resumo.criados === 0 && resumo.atualizados === 0) {
     return {
       success: false,
       error: 'Nenhuma alteracao aplicada. Revise o arquivo e os avisos acima.',
@@ -975,7 +1429,12 @@ export async function importarMateriaisDoArquivoCsv(
   appendAuthAuditEvent({
     type: 'materiais_csv_imported',
     actorLogin: opcoes?.actorLogin ?? 'desconhecido',
-    detail: montarDetalheAuditoriaImportMateriais(criados, atualizados, ignorados, amostrasAuditoria),
+    detail: montarDetalheAuditoriaImportMateriais(
+      resumo.criados,
+      resumo.atualizados,
+      resumo.ignorados,
+      amostrasAuditoria,
+    ),
   });
 
   return { success: true, data: resumo };

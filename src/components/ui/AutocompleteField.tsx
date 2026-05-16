@@ -7,11 +7,25 @@ type Props = {
   /** Retorna textos sugeridos conforme o que o usuario digitou (use cadastros ativos). */
   fetchOptions: (query: string) => Promise<string[]>;
   placeholder?: string;
+  /** Mensagem quando a busca nao retorna sugestoes (ex.: avisar que o valor deve existir no cadastro). */
+  emptySuggestionsMessage?: string;
   disabled?: boolean;
   id?: string;
 };
 
-export function AutocompleteField({ label, value, onChange, fetchOptions, placeholder, disabled, id: idProp }: Props) {
+export function AutocompleteField({
+  label,
+  value,
+  onChange,
+  fetchOptions,
+  placeholder,
+  emptySuggestionsMessage,
+  disabled,
+  id: idProp,
+}: Props) {
+  const emptyHint =
+    emptySuggestionsMessage ??
+    'Nenhum cadastro encontrado. Voce pode digitar livremente.';
   const reactId = useId();
   const listId = `${reactId}-list`;
   const inputId = idProp ?? `${reactId}-input`;
@@ -107,9 +121,7 @@ export function AutocompleteField({ label, value, onChange, fetchOptions, placeh
         {open ? (
           <ul className="autocomplete-list" id={listId} role="listbox">
             {loading ? <li className="autocomplete-muted">Carregando...</li> : null}
-            {!loading && suggestions.length === 0 ? (
-              <li className="autocomplete-muted">Nenhum cadastro encontrado. Voce pode digitar livremente.</li>
-            ) : null}
+            {!loading && suggestions.length === 0 ? <li className="autocomplete-muted">{emptyHint}</li> : null}
             {!loading &&
               suggestions.map((s, i) => (
                 <li key={`${s}-${i}`}>

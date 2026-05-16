@@ -1,4 +1,11 @@
-import { abrirImpressaoHtmlRelatorio, cssInstitucionalRelatorio, escapeHtmlRelatorio, htmlBlocoLogoInstitucional } from '../../../lib/htmlRelatorioInstitucional';
+import {
+  abrirImpressaoHtmlRelatorio,
+  cssInstitucionalRelatorio,
+  escapeHtmlRelatorio,
+  htmlBlocoLogoInstitucional,
+  segmentoInstituicaoRodapeEletronico,
+} from '../../../lib/htmlRelatorioInstitucional';
+import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { resolverUrlLogoInstitucional, resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { Atendimento, DadosReciboAtendimento } from '../types/atendimento.types';
 
@@ -9,6 +16,32 @@ function totalQuantidadeItens(at: Atendimento): number {
   return at.itens.reduce((acc, it) => acc + (Number(it.quantidadeAtendida) || 0), 0);
 }
 
+function textoReciboOuEmDash(v: string | undefined): string {
+  const t = (v ?? '').trim();
+  return t || '—';
+}
+
+/** Evita duplicar matrícula na linha «Nome» quando o campo atendente veio do autocomplete «Nome - matrícula». */
+function nomeExibicaoAtendenteAssinatura(at: Atendimento): string {
+  const full = at.atendente.trim();
+  const m = (at.atendenteMatricula ?? '').trim();
+  if (m && full.endsWith(` - ${m}`)) return full.slice(0, full.length - m.length - 3).trim();
+  return full;
+}
+
+/** Uma linha secundária: matrícula e função (evita três rótulos «Nome / Matrícula / Função»). */
+function linhaMatriculaFuncaoAssinatura(mat: string | undefined, funcao: string | undefined): string {
+  const m = (mat ?? '').trim();
+  const f = (funcao ?? '').trim();
+  const mOk = m && m !== '—';
+  const fOk = f && f !== '—';
+  if (!mOk && !fOk) return '—';
+  const partes: string[] = [];
+  if (mOk) partes.push(`Mat. ${m}`);
+  if (fOk) partes.push(f);
+  return partes.join(' · ');
+}
+
 /** Resolve URL do logo: campo explicito no objeto > Configuracoes > localStorage legado. */
 export function resolverUrlLogoRecibo(dados: DadosReciboAtendimento): string {
   return resolverUrlLogoInstitucional(dados.logoUrl);
@@ -17,6 +50,8 @@ export function resolverUrlLogoRecibo(dados: DadosReciboAtendimento): string {
 export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   const at = dados.atendimento;
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso(dados.logoUrl);
+  const cfgR = readConfiguracoes();
+  const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfgR.documentoRodapeNome, cfgR.documentoRodapeCnpj);
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const dataFmt = (() => {
     try {
@@ -195,13 +230,25 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     }
     .assinaturas { margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; page-break-inside: avoid; }
     .assinatura-box { text-align: center; }
-    .linha-ass { border-top: 1px solid #0f172a; margin: 48px 8px 8px; padding-top: 6px; }
-    .rotulo-ass { font-weight: 700; font-size: 10pt; color: #334155; }
-    .nome-ass { font-size: 10pt; margin-top: 4px; min-height: 1.2em; color: #0f172a; }
+    .linha-ass { border-top: 1px solid #0f172a; margin: 40px 8px 0; padding-top: 8px; }
+    .rotulo-ass { font-weight: 700; font-size: 9pt; color: #475569; margin: 10px 0 0; letter-spacing: 0.02em; }
+    .bloco-ass-pessoa { margin: 8px auto 0; max-width: 340px; text-align: left; }
+    .ass-nome-principal { font-size: 11pt; font-weight: 650; color: #0f172a; margin: 6px 0 3px; line-height: 1.28; }
+    .ass-meta-linha { font-size: 9.25pt; color: #64748b; margin: 0; line-height: 1.45; }
     @media print {
       .assinaturas { margin-top: 28px; }
       .recibo-bloco-itens tbody tr:nth-child(even) { background: transparent; }
       .recibo-total-linha { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+    .recibo-doc-foot {
+      margin-top: 18px;
+      padding-top: 10px;
+      border-top: 1px solid #cbd5e1;
+      font-size: 8pt;
+      color: #64748b;
+      line-height: 1.45;
+      text-align: center;
+      page-break-inside: avoid;
     }
   `;
 
@@ -266,14 +313,25 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     <div class="assinatura-box">
       <div class="linha-ass"></div>
       <p class="rotulo-ass">Atendente (operador)</p>
-      <p class="nome-ass">${escapeHtmlRelatorio(at.atendente)}</p>
+      <div class="bloco-ass-pessoa">
+        <p class="ass-nome-principal">${escapeHtmlRelatorio(nomeExibicaoAtendenteAssinatura(at))}</p>
+        <p class="ass-meta-linha">${escapeHtmlRelatorio(
+          linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.atendenteMatricula), textoReciboOuEmDash(at.atendenteFuncao)),
+        )}</p>
+      </div>
     </div>
     <div class="assinatura-box">
       <div class="linha-ass"></div>
       <p class="rotulo-ass">Atendido (quem retirou)</p>
-      <p class="nome-ass">${escapeHtmlRelatorio(dados.nomeAtendido)}</p>
+      <div class="bloco-ass-pessoa">
+        <p class="ass-nome-principal">${escapeHtmlRelatorio(at.recebedor.trim() || dados.nomeAtendido.trim() || '—')}</p>
+        <p class="ass-meta-linha">${escapeHtmlRelatorio(
+          linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.recebedorMatricula), textoReciboOuEmDash(at.recebedorFuncao)),
+        )}</p>
+      </div>
     </div>
   </section>
+  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(at.numero)}.</p>
   </div>
 </body>
 </html>`;

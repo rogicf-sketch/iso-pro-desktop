@@ -1,0 +1,121 @@
+1
+00:00:00,000 --> 00:00:05,000
+Produto único: cadastrar, movimentar e provar materiais na obra —
+com relatórios e qualidade.
+
+2
+00:00:05,000 --> 00:00:08,000
+Entrada segura por perfil —
+Administrador, Planejamento, Operação, Consulta.
+
+3
+00:00:08,000 --> 00:00:12,000
+Visão geral: armazenamento local, Supabase
+e indicadores da operação.
+
+4
+00:00:12,000 --> 00:00:14,000
+Cadastro base para NF, recebimentos e qualidade — com CSV.
+
+5
+00:00:14,000 --> 00:00:16,000
+Quem retira material e quem opera — rasto humano.
+
+6
+00:00:16,000 --> 00:00:20,000
+Catálogo mestre: códigos de barras, disciplinas,
+base para o resto do fluxo.
+
+7
+00:00:20,000 --> 00:00:25,000
+Documentos de necessidade e linhas até à execução.
+
+8
+00:00:25,000 --> 00:00:29,000
+NF, romaneio e itens alinhados ao stock.
+
+9
+00:00:29,000 --> 00:00:33,000
+Validar recebimentos antes de libertar stock.
+
+10
+00:00:33,000 --> 00:00:36,000
+Impressão a partir de recebimentos —
+ligação física ao código.
+
+11
+00:00:36,000 --> 00:00:40,000
+Atendimento por documento — leitor USB
+e rasto na lista de lotes.
+
+12
+00:00:40,000 --> 00:00:43,000
+Comprovativo de retirada — arquivo e auditoria.
+
+13
+00:00:43,000 --> 00:00:46,000
+Rotativo ou geral — integração com contagem no mobile.
+
+14
+00:00:46,000 --> 00:00:48,000
+Equipamentos ligados à operação e rasto patrimonial quando aplicável.
+
+15
+00:00:48,000 --> 00:00:51,000
+Inspeção de recebimento — vínculo a NF e listas.
+
+16
+00:00:51,000 --> 00:00:54,000
+Relatório RIR para arquivo e impressão.
+
+17
+00:00:54,000 --> 00:00:57,000
+Não conformidade ligada à NF — com evidências.
+
+18
+00:00:57,000 --> 00:01:00,000
+Relatório RNC — fornecedor, arquivo, auditoria.
+
+19
+00:01:00,000 --> 00:01:03,000
+Indicadores e exportações gerenciais — visão resumida.
+
+20
+00:01:03,000 --> 00:01:06,000
+Arquivo por NF/romaneio — fotos ligadas a recebimentos.
+
+21
+00:01:06,000 --> 00:01:09,000
+Relatório HTML com fotos — obra e arquivo.
+
+22
+00:01:09,000 --> 00:01:12,000
+Autorizar, bloquear e revogar telemóveis que acedem ao snapshot.
+
+23
+00:01:12,000 --> 00:01:17,000
+Mesmo snapshot no telemóvel —
+Documentos, conferência, atendimento, inventário.
+
+24
+00:01:17,000 --> 00:01:20,000
+Contas, perfis e ativo/inativo — cada ação atribuível.
+
+25
+00:01:20,000 --> 00:01:22,000
+Licenças, expiração e identificação da máquina.
+
+26
+00:01:22,000 --> 00:01:25,000
+Tema, numeração, cliente/projeto, integrações —
+central administrativa.
+
+27
+00:01:25,000 --> 00:01:29,000
+Quatro temas: Neon e azul em cima;
+Verde e Claro em baixo.
+
+28
+00:01:29,000 --> 00:01:34,000
+O mesmo snapshot no telemóvel —
+início, conferência, atendimento, documentos, inventário.

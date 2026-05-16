@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
@@ -37,47 +40,58 @@ const emptyForm: ColaboradorFormData = {
   ativo: true,
 };
 
+function colaboradoresListaQueryKey(filters: ColaboradorFiltro, userLogin: string | undefined) {
+  return ['colaboradores', 'lista', userLogin ?? '', filters] as const;
+}
+
 export function useColaboradores() {
-  const { canAccessAction } = useAuth();
+  const queryClient = useQueryClient();
+  const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const importInputRef = useRef<HTMLInputElement>(null);
   const [filters, setFilters] = useState<ColaboradorFiltro>(initialFilters);
-  const [items, setItems] = useState<Colaborador[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fallbackReason, setFallbackReason] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Colaborador | null>(null);
   const [importStaging, setImportStaging] = useState<{ fileName: string; text: string; linhaCount: number } | null>(null);
   const [importingColaboradores, setImportingColaboradores] = useState(false);
   const [importResultado, setImportResultado] = useState<ResultadoImportacaoColaboradoresCsv | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  const listQuery = useQuery({
+    queryKey: colaboradoresListaQueryKey(filtersForLista, user?.login),
+    queryFn: async () => {
+      const result = await listarColaboradores(filtersForLista);
+      if (!result.success || !result.data) {
+        throw new Error(result.error ?? 'Nao foi possivel carregar colaboradores.');
+      }
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+      };
+    },
+  });
+
+  const items = listQuery.data?.items ?? [];
+  const total = listQuery.data?.total ?? 0;
+  const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listError =
+    listQuery.isError && listQuery.error instanceof Error
+      ? listQuery.error.message
+      : listQuery.isError
+        ? 'Nao foi possivel carregar colaboradores.'
+        : '';
+
+  const invalidateColaboradoresLista = useCallback(async () => {
     setError('');
     setSuccess('');
-    const result = await listarColaboradores(filters);
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel carregar colaboradores.');
-      setItems([]);
-      setTotal(0);
-      setFallbackReason('');
-    } else {
-      setItems(result.data.items);
-      setTotal(result.data.total);
-      setFallbackReason(result.meta?.fallbackReason ?? '');
-    }
-    setLoading(false);
-  }, [filters]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, [load]);
+    await queryClient.invalidateQueries({ queryKey: ['colaboradores'] });
+  }, [queryClient]);
 
   const formInitialValue = useMemo<ColaboradorFormData>(
     () =>
@@ -105,10 +119,10 @@ export function useColaboradores() {
     if (validationError) return { success: false, error: validationError };
     const result = await salvarColaborador(data, selected?.id);
     if (result.success) {
-      setSuccess(result.meta?.source === 'local' ? 'Colaborador salvo localmente.' : 'Colaborador salvo com sucesso.');
       setIsModalOpen(false);
       setSelected(null);
-      await load();
+      await invalidateColaboradoresLista();
+      setSuccess(result.meta?.source === 'local' ? 'Colaborador salvo localmente.' : 'Colaborador salvo com sucesso.');
     }
     return result;
   }
@@ -123,8 +137,8 @@ export function useColaboradores() {
       setError(result.error ?? 'Nao foi possivel atualizar colaborador.');
       return;
     }
+    await invalidateColaboradoresLista();
     setSuccess(result.meta?.source === 'local' ? 'Status do colaborador atualizado localmente.' : 'Status do colaborador atualizado com sucesso.');
-    await load();
   }
 
   function baixarModeloCsvImportacaoColaboradores() {
@@ -219,7 +233,7 @@ export function useColaboradores() {
       setError('Resumo da importacao indisponivel.');
       return;
     }
-    await load();
+    await invalidateColaboradoresLista();
     setImportResultado(r);
   }
 
@@ -249,7 +263,7 @@ export function useColaboradores() {
       return;
     }
     setError('');
-    const result = await montarExportacaoColaboradoresCsv({ filtroLista: filters });
+    const result = await montarExportacaoColaboradoresCsv({ filtroLista: filtersForLista });
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar a planilha.');
       return;
@@ -267,7 +281,7 @@ export function useColaboradores() {
     items,
     total,
     loading,
-    error,
+    error: error || listError,
     success,
     fallbackReason,
     hasCloudConfig,
@@ -275,7 +289,7 @@ export function useColaboradores() {
     formInitialValue,
     isModalOpen,
     selected,
-    load,
+    load: invalidateColaboradoresLista,
     setFilters,
     openCreateModal: () => {
       if (!canAccessAction('colaboradores', 'editar')) {

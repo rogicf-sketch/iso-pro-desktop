@@ -23,9 +23,17 @@ if (exes.length === 0) {
 }
 
 const hasNsis = exes.some((f) => /setup/i.test(f));
-if (!hasNsis) {
-  console.error('verify-release: esperado instalador NSIS (*Setup*.exe) em release/.');
+const hasPortable = exes.some((f) => /portable/i.test(f));
+if (!hasNsis && !hasPortable) {
+  console.error(
+    'verify-release: esperado *Setup*.exe (NSIS) ou *portable*.exe em release/.',
+  );
   process.exit(1);
+}
+if (!hasNsis && hasPortable) {
+  console.warn(
+    'verify-release: só existe o .exe portátil (sem instalador NSIS). Normal com `npm run dist:win:portable` ou se o NSIS falhou.',
+  );
 }
 
 const lines = [];

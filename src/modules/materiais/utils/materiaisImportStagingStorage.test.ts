@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { montarModeloCsvImportacaoMateriais } from '../services/materiais.service';
 import {
   loadPersistedMateriaisImportStaging,
-  MATERIAIS_IMPORT_STAGING_STORAGE_KEY,
+  materiaisImportStagingStorageKey,
   persistMateriaisImportStaging,
 } from './materiaisImportStagingStorage';
 
 describe('materiaisImportStagingStorage', () => {
   afterEach(() => {
-    localStorage.removeItem(MATERIAIS_IMPORT_STAGING_STORAGE_KEY);
+    localStorage.removeItem(materiaisImportStagingStorageKey());
     vi.useRealTimers();
   });
 
@@ -26,9 +26,9 @@ describe('materiaisImportStagingStorage', () => {
 
   it('persist null remove a chave', () => {
     persistMateriaisImportStaging({ fileName: 'x.csv', text: 'codigo;descricao\nA;B', linhaCount: 1 });
-    expect(localStorage.getItem(MATERIAIS_IMPORT_STAGING_STORAGE_KEY)).toBeTruthy();
+    expect(localStorage.getItem(materiaisImportStagingStorageKey())).toBeTruthy();
     persistMateriaisImportStaging(null);
-    expect(localStorage.getItem(MATERIAIS_IMPORT_STAGING_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(materiaisImportStagingStorageKey())).toBeNull();
   });
 
   it('ignora payload expirado', () => {
@@ -38,11 +38,11 @@ describe('materiaisImportStagingStorage', () => {
     persistMateriaisImportStaging({ fileName: 'old.csv', text: csv, linhaCount: 2 });
     vi.setSystemTime(new Date('2020-01-20T12:00:00Z'));
     expect(loadPersistedMateriaisImportStaging()).toBeNull();
-    expect(localStorage.getItem(MATERIAIS_IMPORT_STAGING_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(materiaisImportStagingStorageKey())).toBeNull();
   });
 
   it('remove JSON invalido', () => {
-    localStorage.setItem(MATERIAIS_IMPORT_STAGING_STORAGE_KEY, '{not json');
+    localStorage.setItem(materiaisImportStagingStorageKey(), '{not json');
     expect(loadPersistedMateriaisImportStaging()).toBeNull();
   });
 });

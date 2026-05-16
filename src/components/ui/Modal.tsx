@@ -1,30 +1,113 @@
 import type { ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { IconFullscreenEnter, IconFullscreenExit } from './FullscreenIcons';
+
+export type ModalSize = 'default' | 'wide' | 'fullscreen';
 
 type Props = {
   title: string;
   open: boolean;
   onClose: () => void;
   children: ReactNode;
-  /** Modal largo (formularios RIR completos). */
+  /** Largura extra (planejamento, RIR, formularios densos). */
   wide?: boolean;
+  /** Controla a largura maxima do cartao. `fullscreen` quase encosta na viewport. */
+  size?: ModalSize;
+  /**
+   * Mostra icone de tela inteira no cabecalho (Fullscreen API no cartao do modal),
+   * como na pre-visualizacao de etiquetas.
+   */
+  browserFullscreen?: boolean;
 };
 
-export function Modal({ title, open, onClose, children, wide = false }: Props) {
+function resolveModalSize(wide: boolean | undefined, size: ModalSize | undefined): ModalSize {
+  if (size) return size;
+  if (wide) return 'wide';
+  return 'default';
+}
+
+function modalCardClassName(resolved: ModalSize): string {
+  if (resolved === 'fullscreen') return 'modal-card modal-card--fullscreen';
+  if (resolved === 'wide') return 'modal-card modal-card--wide';
+  return 'modal-card';
+}
+
+export function Modal({
+  title,
+  open,
+  onClose,
+  children,
+  wide = false,
+  size,
+  browserFullscreen = false,
+}: Props) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [browserFs, setBrowserFs] = useState(false);
+
+  useEffect(() => {
+    function sync() {
+      setBrowserFs(document.fullscreenElement === cardRef.current);
+    }
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) return;
+    const fs = document.fullscreenElement;
+    if (fs instanceof HTMLElement && fs.dataset.modalFsHost === '1') {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  }, [open]);
+
+  async function toggleBrowserFullscreen() {
+    const el = cardRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      /* API indisponivel ou recusada */
+    }
+  }
+
   if (!open) return null;
 
+  const resolved = resolveModalSize(wide, size);
+  const backdropClass =
+    resolved === 'fullscreen' ? 'modal-backdrop modal-backdrop--fullscreen' : 'modal-backdrop';
+
   return (
-    <div className="modal-backdrop" onClick={onClose} role="presentation">
+    <div className={backdropClass} onClick={onClose} role="presentation">
       <div
+        ref={cardRef}
         aria-modal="true"
-        className={wide ? 'modal-card modal-card--wide' : 'modal-card'}
+        className={modalCardClassName(resolved)}
+        data-modal-fs-host={browserFullscreen ? '1' : undefined}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
       >
         <div className="modal-header">
-          <h3>{title}</h3>
-          <button className="icon-button" onClick={onClose} type="button">
-            Fechar
-          </button>
+          <h2>{title}</h2>
+          <div className="modal-header__actions">
+            {browserFullscreen ? (
+              <button
+                aria-label={browserFs ? 'Sair da tela inteira' : 'Tela inteira do formulario'}
+                className="icon-button"
+                onClick={() => void toggleBrowserFullscreen()}
+                title={browserFs ? 'Sair da tela inteira' : 'Tela inteira'}
+                type="button"
+              >
+                <span className="modal-fs-icon">{browserFs ? <IconFullscreenExit /> : <IconFullscreenEnter />}</span>
+              </button>
+            ) : null}
+            <button className="icon-button" onClick={onClose} type="button">
+              Fechar
+            </button>
+          </div>
         </div>
         <div className="modal-body">{children}</div>
       </div>

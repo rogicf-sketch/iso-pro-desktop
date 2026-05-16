@@ -1,0 +1,140 @@
+1
+00:00:00,000 --> 00:00:09,000
+Bem-vindo ao I.S.O PRO — Gestão de Materiais.
+Nesta apresentação percorremos o sistema na ordem do menu —
+do acesso ao app no campo, em poucos minutos.
+
+2
+00:00:09,000 --> 00:00:16,000
+Login por perfis: Administrador, Planejamento,
+Operação e Consulta — cada um com o acesso certo.
+
+3
+00:00:16,000 --> 00:00:22,000
+Painel com o pulso da operação: armazenamento local,
+nuvem e indicadores em um só lugar.
+
+4
+00:00:22,000 --> 00:00:28,000
+Fornecedores alinhados a NF, recebimento e auditoria —
+importação e exportação em CSV.
+
+5
+00:00:28,000 --> 00:00:33,000
+Colaboradores: quem opera e quem retira material —
+rastreio humano no processo.
+
+6
+00:00:33,000 --> 00:00:41,000
+Catálogo mestre: código, disciplina e código de barras —
+a base para planejar, etiquetar e atender.
+
+7
+00:00:41,000 --> 00:00:46,000
+Planejamento por documento: da necessidade nas linhas
+até a execução na obra.
+
+8
+00:00:46,000 --> 00:00:52,000
+Recebimentos que amarram NF, romaneio e itens
+ao estoque que a operação usa.
+
+9
+00:00:52,000 --> 00:00:56,000
+Conferência antes de liberar estoque:
+divergências tratadas com segurança.
+
+10
+00:00:56,000 --> 00:01:03,000
+Etiquetas geradas a partir do recebimento —
+o físico passa a falar o mesmo código do sistema.
+
+11
+00:01:03,000 --> 00:01:08,000
+Atendimento por documento, leitor USB
+e rastreio de cada lote na lista.
+
+12
+00:01:08,000 --> 00:01:12,000
+Recibo de retirada para arquivo,
+impressão e auditoria.
+
+13
+00:01:12,000 --> 00:01:17,000
+Inventário rotativo ou geral —
+contagem integrada ao app no celular.
+
+14
+00:01:17,000 --> 00:01:22,000
+Equipamentos ligados à operação e ao controle patrimonial,
+quando o processo exige.
+
+15
+00:01:22,000 --> 00:01:27,000
+RIR: inspeção de recebimento vinculada à NF
+e às listas do seu procedimento.
+
+16
+00:01:27,000 --> 00:01:31,000
+Relatório de inspeção de recebimento
+pronto para arquivo e impressão.
+
+17
+00:01:31,000 --> 00:01:35,000
+RNC: não conformidade ligada à NF,
+com evidências registradas.
+
+18
+00:01:35,000 --> 00:01:40,000
+Relatório de não conformidade —
+fornecedor, arquivo interno e trilha de auditoria.
+
+19
+00:01:40,000 --> 00:01:44,000
+Relatórios gerenciais: indicadores e exportações
+numa visão resumida.
+
+20
+00:01:44,000 --> 00:01:49,000
+Relatório fotográfico ligado a NF e romaneio —
+evidência junto ao recebimento.
+
+21
+00:01:49,000 --> 00:01:54,000
+Documento em HTML com grelha de fotos —
+obra, arquivo e compartilhamento.
+
+22
+00:01:54,000 --> 00:02:00,000
+Dispositivos mobile: no desktop você autoriza,
+bloqueia ou revoga o acesso ao dado.
+
+23
+00:02:00,000 --> 00:02:07,000
+No campo, o app usa o mesmo snapshot —
+documentos, conferência, atendimento e inventário.
+
+24
+00:02:07,000 --> 00:02:12,000
+Usuários e permissões: perfis ativos ou inativos
+e responsabilização por ação.
+
+25
+00:02:12,000 --> 00:02:16,000
+Licenças desktop: validade e identificação da máquina
+sob controle.
+
+26
+00:02:16,000 --> 00:02:21,000
+Configurações: tema, numeração, dados do projeto
+e integrações numa central.
+
+27
+00:02:21,000 --> 00:02:28,000
+Quatro temas visuais: Neon e azul em cima;
+Verde e Claro embaixo — escolha da equipe.
+
+28
+00:02:28,000 --> 00:02:36,000
+I.S.O PRO onde a obra acontece —
+no bolso do operador, com o mesmo rigor do escritório.

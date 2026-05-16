@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -79,10 +80,12 @@ export function MobileDevicesPage() {
         </div>
       </div>
 
-      <p className="panel-copy">
-        Painel para acompanhar os celulares vinculados ao sistema, autorizar novos aparelhos, bloquear acessos e revogar dispositivos que nao
-        fazem mais parte da operacao.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Painel para acompanhar os celulares vinculados ao sistema, autorizar novos aparelhos, bloquear acessos e revogar dispositivos que nao
+          fazem mais parte da operacao.
+        </p>
+      </ModuleHelp>
 
       {!cloudOk ? (
         <>
@@ -167,6 +170,7 @@ export function MobileDevicesPage() {
         onClose={cancelPendingConfirmation}
         open={Boolean(pendingConfirm && confirmCopy)}
         title={confirmCopy?.title ?? 'Confirmar'}
+        wide
       >
         {confirmCopy ? (
           <div className="editor-block">

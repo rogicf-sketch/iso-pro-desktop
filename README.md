@@ -5,8 +5,10 @@ Aplicacao desktop em `React + TypeScript + Electron`, preparada para ser o execu
 ## Repositorio
 
 - [Contribuir](CONTRIBUTING.md) — `npm run ci`, fluxo de PR, desenvolvimento.
+- [Runbook de operação](docs/runbook-operacao.md) — backups, incidentes, licenças, go-live.
+- [Sentry (SDK + lockfile)](docs/sentry-sdk-opcional.md) — `@sentry/react` / `npm install` após pull.
 - [Seguranca](SECURITY.md) — como reportar vulnerabilidades.
-- **CI** (GitHub Actions): mesmo fluxo que `npm run ci` (typecheck, testes, lint, build, icon, audit).
+- **CI** (GitHub Actions): typecheck, testes, lint, build, ícone, **smoke E2E web (Playwright)**, audit.
 - **Instalador Windows** (local): `npm run dist:win` — gera artefactos em `release/` e valida com **`verify-release`** + ficheiro **`SHA256SUMS.txt`** (hashes dos `.exe`). Ver secção abaixo.
 - **Limpar artefactos** (`dist/`, `dist-electron/`, `build/`): `npm run clean` — detalhes em [CONTRIBUTING](CONTRIBUTING.md).
 - **Node**: `.nvmrc` + `engines` no `package.json`; `.npmrc` com `engine-strict=true` faz `npm ci` falhar se a versão for incompatível.
@@ -22,9 +24,23 @@ npm run dev
 
 Para desenvolvimento só no browser: `npm run dev:web`.
 
+## Bundle web (mesmo código que o site)
+
+O `vite build` gera `dist/` servido em produção (ex.: Nginx). O **número de versão** em `package.json` alimenta `__APP_VERSION__` no build — útil para confirmar que o servidor tem o mesmo artefacto que o CI (`npm run build:web && npm run test:e2e`).
+
+- **Variáveis**: modelo em `.env.example` (`VITE_SUPABASE_*`, `VITE_SENTRY_DSN` opcional). No deploy, use os mesmos valores que no ambiente de build (ficheiro local ou secrets no CI).
+- **Sentry (opcional)**: com `VITE_SENTRY_DSN`, o SDK **`@sentry/react`** envia erros e tracing de browser (`initSentryDesktop` + `captureException`). Ver [docs/sentry-sdk-opcional.md](docs/sentry-sdk-opcional.md) para `npm install` / lockfile.
+
+## Direitos de autor, EULA e terceiros
+
+- **`legal/EULA.txt`** — texto mostrado no **instalador NSIS** antes da instalação (o utilizador deve aceitar). O ficheiro actual é um **modelo**: substitui-o pelo EULA definitivo aprovado pelo **advogado** antes de distribuir comercialmente.
+- **`legal/NOTICE.md`** — como listar licenças das dependências npm (open-source) para auditoria ou releases.
+- **`package.json`** — campo `"license": "UNLICENSED"` indica software **não** open-source por omissão do npm; não substitui o EULA nem contratos com clientes.
+- **Portable** (`*portable*.exe`) — não usa o assistente NSIS; **não apresenta** a página do EULA. Para uso corporate, prefira o **Setup** ou combine com contrato assinado à parte.
+
 ## Executavel Windows (distribuicao)
 
-1. **`npm run dist:win`** — gera em `release/` o instalador NSIS (`*Setup*.exe`), o `.exe` portable (se configurado) e **`SHA256SUMS.txt`** com SHA-256 de cada `.exe` (para utilizadores verificarem o download).
+1. **`npm run dist:win`** — gera em `release/` o instalador NSIS (`*Setup*.exe`), o `.exe` portable (se configurado) e **`SHA256SUMS.txt`** com SHA-256 de cada `.exe` (para utilizadores verificarem o download). O Setup inclui o fluxo de aceitação do **`legal/EULA.txt`**.
 2. **Assinatura** (opcional, menos avisos SmartScreen): `npm run dist:win:signed` com certificado e variáveis `CSC_*` / secrets no CI — ver `electron-builder.yml` e [SECURITY](SECURITY.md).
 3. **Backend**: em produção, as **políticas RLS** do Supabase devem estar correctas; a chave `anon` no cliente é pública por desenho — a segurança dos dados é no servidor.
 4. **Testar** o instalador num PC limpo ou VM antes de distribuir amplamente.

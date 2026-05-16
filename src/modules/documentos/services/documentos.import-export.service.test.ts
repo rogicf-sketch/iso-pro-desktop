@@ -10,6 +10,7 @@ import {
 
 const STORAGE_KEY = 'iso-pro-desktop-documentos';
 const MATERIAIS_STORAGE_KEY = 'iso-pro-desktop-materiais';
+const RECEBIMENTOS_STORAGE_KEY = 'iso-pro-desktop-recebimentos';
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => false),
@@ -180,6 +181,7 @@ describe('documentos.service / exportacao e importacao JSON (local)', () => {
           unidade: 'KG',
           quantidadeProjeto: 4,
           quantidadeAtendida: 0,
+          localizacao: 'Rua-01 | Prateleira-B',
         },
       ],
     };
@@ -192,12 +194,88 @@ describe('documentos.service / exportacao e importacao JSON (local)', () => {
     const csv = result.data?.csv ?? '';
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     expect(csv).toContain('descricao_documento;responsavel;data_documento;status_documento');
+    expect(csv).toContain('localizacao_planejamento');
+    expect(csv).toContain('localizacao_consolidada');
     expect(csv).toContain(
       'quantidade_documento;quantidade_atendida;quantidade_pendente_atendimento;quantidade_prevista;quantidade_atendida_global;quantidade_recebida;status_planejamento',
     );
     expect(csv).toContain('peso_unitario;peso_total_documento;peso_total_atendido_documento;saldo_material');
     expect(csv).toContain('CSV-1');
-    expect(csv).toContain(';Z;Mat;D;KG;4;0;4;4;0;0;Pendente;2.5;10;0;15');
+    expect(csv).toContain(
+      ';Z;Mat;Rua-01 | Prateleira-B;Rua-01 | Prateleira-B;D;KG;4;0;4;4;0;0;Pendente;"2,5";10;0;15',
+    );
+  });
+
+  it('export CSV: localizacao_consolidada prioriza recebimentos sobre texto do documento', async () => {
+    store[MATERIAIS_STORAGE_KEY] = JSON.stringify([
+      {
+        id: 'mz',
+        codigo: 'Z',
+        descricao: 'Mat',
+        diametro: '-',
+        disciplina: 'D',
+        unidade: 'KG',
+        peso: 1,
+        estoqueMinimo: 0,
+        saldoAtual: 10,
+        ativo: true,
+        observacao: '',
+      },
+    ]);
+    store[RECEBIMENTOS_STORAGE_KEY] = JSON.stringify([
+      {
+        id: 'rec-1',
+        fornecedor: 'F',
+        dataRecebimento: '2026-04-01',
+        notaFiscal: 'NF-1',
+        romaneio: 'R1',
+        conferente: 'C',
+        modoRecebimento: 'direto',
+        status: 'conferido',
+        observacoes: '',
+        itens: [
+          {
+            id: 'ri',
+            codigoMaterial: 'Z',
+            descricaoMaterial: 'Mat',
+            unidade: 'KG',
+            disciplina: 'D',
+            localizacao: 'GALPAO-NORTE',
+            quantidadeRecebida: 5,
+            quantidadeConferida: 5,
+            pesoUnitario: 0,
+            pesoTotal: 0,
+          },
+        ],
+      },
+    ]);
+    const doc: Documento = {
+      id: 'c-loc',
+      numero: 'LOC-1',
+      revisao: 'A',
+      descricao: 'Doc',
+      responsavel: 'R',
+      dataDocumento: '2026-05-10',
+      status: 'pendente',
+      observacao: '',
+      itens: [
+        {
+          id: 'ci',
+          codigoMaterial: 'Z',
+          descricaoMaterial: 'Mat',
+          unidade: 'KG',
+          quantidadeProjeto: 1,
+          quantidadeAtendida: 0,
+          localizacao: 'Texto manual',
+        },
+      ],
+    };
+    store[STORAGE_KEY] = JSON.stringify([doc]);
+
+    const result = await montarExportacaoDocumentosCsvResumo();
+    expect(result.success).toBe(true);
+    const csv = result.data?.csv ?? '';
+    expect(csv).toContain(';Z;Mat;Texto manual;GALPAO-NORTE;D;KG;');
   });
 
   it('export CSV repete quantidade_prevista global por codigo em varios documentos', async () => {
@@ -325,8 +403,8 @@ describe('documentos.service / exportacao e importacao JSON (local)', () => {
 
     const result = await importarDocumentosDoArquivoJson(json);
     expect(result.success).toBe(false);
-    expect(result.data?.criados).toBe(0);
-    expect(result.data?.detalhes.some((d) => d.includes('CODIGO_NAO_CADASTRADO_XYZ'))).toBe(true);
+    expect(result.error).toMatch(/CODIGO_NAO_CADASTRADO_XYZ/);
+    expect(result.data).toBeUndefined();
 
     const saved = JSON.parse(store[STORAGE_KEY] ?? '[]') as Documento[];
     expect(saved.some((d) => d.numero === 'IMP-BAD')).toBe(false);

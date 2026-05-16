@@ -1,8 +1,14 @@
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
+import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
 import type { Etiqueta, EtiquetaFiltro, EtiquetaFormData, EtiquetaFormato, EtiquetaListItem, EtiquetaModelo } from '../types/etiqueta.types';
+import { parseEtiquetasPersistidas } from '../schemas/etiquetaPersistido.zod';
 
-const STORAGE_KEY = 'iso-pro-desktop-etiquetas';
+function etiquetasStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-etiquetas');
+}
 
 const seedData: Etiqueta[] = [
   {
@@ -42,22 +48,28 @@ const seedData: Etiqueta[] = [
 ];
 
 function readAll(): Etiqueta[] {
-  const raw = localStorage.getItem(STORAGE_KEY);
+  const raw = localStorage.getItem(etiquetasStorageKey());
   if (!raw) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
+    localStorage.setItem(etiquetasStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
 
   try {
-    return JSON.parse(raw) as Etiqueta[];
+    const parsed: unknown = JSON.parse(raw);
+    const validated = parseEtiquetasPersistidas(parsed);
+    if (!validated) {
+      avisarPreservacaoLocalStorageCorrupto('Etiquetas', etiquetasStorageKey());
+      return [];
+    }
+    return validated;
   } catch {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedData));
-    return seedData;
+    avisarPreservacaoLocalStorageCorrupto('Etiquetas', etiquetasStorageKey());
+    return [];
   }
 }
 
 function writeAll(items: Etiqueta[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  localStorage.setItem(etiquetasStorageKey(), JSON.stringify(items));
 }
 
 function loadEtiquetas() {
@@ -238,6 +250,9 @@ export async function salvarEtiqueta(payload: EtiquetaFormData, currentId?: stri
     observacoes: normalizeText(payload.observacoes),
   };
 
+  const blockedEtq = whenBusinessWriteBlockedResult<Etiqueta>();
+  if (blockedEtq) return blockedEtq;
+
   if (currentId) {
     const index = items.findIndex((item) => item.id === currentId);
     if (index === -1) return { success: false, error: 'Etiqueta nao encontrada.' };
@@ -258,6 +273,8 @@ export async function salvarEtiqueta(payload: EtiquetaFormData, currentId?: stri
 }
 
 export async function atualizarStatusEtiqueta(id: string, status: Etiqueta['status']): Promise<ServiceResult<Etiqueta>> {
+  const blockedStatus = whenBusinessWriteBlockedResult<Etiqueta>();
+  if (blockedStatus) return blockedStatus;
   const items = loadEtiquetas();
   const index = items.findIndex((item) => item.id === id);
   if (index === -1) return { success: false, error: 'Etiqueta nao encontrada.' };

@@ -2,9 +2,11 @@ import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { hasSupabaseConfig } from '../../../lib/supabase';
 import { UsuariosAuditTable } from '../components/UsuariosAuditTable';
 import { UsuarioForm } from '../components/UsuarioForm';
 import { UsuariosFilters } from '../components/UsuariosFilters';
@@ -38,6 +40,8 @@ export function UsuariosPage() {
     closeModal,
     submitUsuario,
     handleToggleStatus,
+    refreshSelectedUsuarioForm,
+    usuarioFormInstance,
   } = useUsuarios();
   const canEdit = canAccessAction('usuarios', 'editar');
   const canAdminister = canAccessAction('usuarios', 'administrar');
@@ -61,9 +65,11 @@ export function UsuariosPage() {
         ) : null}
       </div>
 
-      <p className="panel-copy">
-        Painel administrativo para controlar acessos do desktop por perfil, ativar ou desativar usuarios e preparar a governanca do sistema.
-      </p>
+      <ModuleHelp>
+        <p className="panel-copy">
+          Painel administrativo para controlar acessos do desktop por perfil, ativar ou desativar usuarios e preparar a governanca do sistema.
+        </p>
+      </ModuleHelp>
 
       <UsuariosFilters filters={filters} onChange={setFilters} profiles={profiles} />
 
@@ -152,14 +158,17 @@ export function UsuariosPage() {
         <UsuariosAuditTable items={auditItems} />
       </div>
 
-      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar usuario' : 'Novo usuario'}>
+      <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar usuario' : 'Novo usuario'} wide>
         <UsuarioForm
           canAdminister={canAdminister}
-          key={selected?.id ?? 'new'}
+          enableSupabaseAuthLink={hasSupabaseConfig() && Boolean(selected)}
+          key={`${selected?.id ?? 'new'}-${usuarioFormInstance}`}
           initialValue={formInitialValue}
+          onAuthLinkUpdated={refreshSelectedUsuarioForm}
           onCancel={closeModal}
           onSubmit={submitUsuario}
           profiles={profiles}
+          remoteUsuarioId={selected?.id ?? null}
         />
       </Modal>
     </div>

@@ -11,6 +11,26 @@ import {
 } from './recebimentos.service';
 
 const STORAGE_KEY = 'iso-pro-desktop-recebimentos';
+const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
+
+function seedMateriaisAtivosNoArmazenamento(storage: Record<string, string>, codigos: string[]) {
+  storage[MATERIAIS_KEY] = JSON.stringify(
+    codigos.map((codigo, i) => ({
+      id: `mat-seed-${i}`,
+      codigo,
+      codigoBarras: '',
+      descricao: 'Teste',
+      diametro: '',
+      disciplina: 'Geral',
+      unidade: 'UN',
+      peso: 0,
+      estoqueMinimo: 0,
+      saldoAtual: 0,
+      ativo: true,
+      observacao: '',
+    })),
+  );
+}
 
 const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
@@ -35,6 +55,17 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
 
 function snapshotRecebimentoAntigo() {
   return {
+    fornecedores: [
+      {
+        id: 'for-a',
+        nome: 'Forn A',
+        cnpj: '',
+        telefone: '',
+        email: '',
+        endereco: '',
+        ativo: true,
+      },
+    ],
     recebimentos: [
       {
         id: 'rec-edit',
@@ -142,6 +173,7 @@ describe('recebimentos.service / salvarRecebimento (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(snapshotRecebimentoAntigo());
+    seedMateriaisAtivosNoArmazenamento(store, ['C1']);
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
@@ -226,7 +258,21 @@ describe('recebimentos.service / salvarRecebimento criacao (Supabase)', () => {
         length: 0,
       } as Storage,
     );
-    mockReadPayload.mockResolvedValue({ recebimentos: [] });
+    mockReadPayload.mockResolvedValue({
+      recebimentos: [],
+      fornecedores: [
+        {
+          id: 'for-criacao',
+          nome: 'Forn Criacao',
+          cnpj: '',
+          telefone: '',
+          email: '',
+          endereco: '',
+          ativo: true,
+        },
+      ],
+    });
+    seedMateriaisAtivosNoArmazenamento(store, ['Z9']);
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
@@ -326,13 +372,13 @@ describe('recebimentos.service / finalizarConferenciaRecebimento (Supabase)', ()
 
     expect(result.success).toBe(true);
     expect(result.data?.status).toBe('conferido');
-    expect(result.data?.modoRecebimento).toBe('direto');
+    expect(result.data?.modoRecebimento).toBe('aguardando_conferencia');
     expect(result.data?.conferente).toBe('Maria');
 
     const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as Recebimento[];
     const saved = local.find((r) => r.id === 'rec-conf');
     expect(saved?.status).toBe('conferido');
-    expect(saved?.modoRecebimento).toBe('direto');
+    expect(saved?.modoRecebimento).toBe('aguardando_conferencia');
     expect(saved?.itens[0]?.quantidadeConferida).toBe(10);
   });
 });
