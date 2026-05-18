@@ -5,6 +5,7 @@ import {
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { mergeSnapshotRowsById } from '../../../lib/snapshotPatchMerge';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
 import {
   documentosReconciliadosDoPayload,
@@ -215,98 +216,124 @@ async function readSnapshotPayload(): Promise<SnapshotPayload> {
   return await readIsoProSnapshotPayload<SnapshotPayload>();
 }
 
-async function writeSnapshotPayload(update: {
+type SnapshotDocumentoRecord = NonNullable<SnapshotPayload['documentos']>[number];
+type SnapshotAtendimentoRecord = NonNullable<SnapshotPayload['atendimentos']>[number];
+type SnapshotHistoricoRecord = NonNullable<SnapshotPayload['atendimentoHistorico']>[number];
+
+function documentoStoredToSnapshotRecord(doc: DocumentoStored): SnapshotDocumentoRecord {
+  return {
+    id: doc.id,
+    numero: doc.numero,
+    revisao: doc.revisao,
+    descricao: doc.descricao,
+    responsavel: doc.responsavel,
+    status: doc.status,
+    itens: doc.itens.map((item) => ({
+      id: item.id,
+      codigo: item.codigoMaterial,
+      descricao: item.descricaoMaterial,
+      unidade: item.unidade,
+      quantidade: item.quantidadeProjeto,
+      quantidadeAtendida: item.quantidadeAtendida,
+    })),
+  };
+}
+
+function atendimentoToSnapshotRecord(atendimento: Atendimento): SnapshotAtendimentoRecord {
+  return {
+    id: atendimento.id,
+    numero: atendimento.numero,
+    documentoId: atendimento.documentoId,
+    documentoNumero: atendimento.documentoNumero,
+    atendente: atendimento.atendente,
+    atendenteMatricula: atendimento.atendenteMatricula,
+    atendenteFuncao: atendimento.atendenteFuncao,
+    recebedorTipo: atendimento.recebedorTipo,
+    recebedorColaboradorId: atendimento.recebedorColaboradorId,
+    recebedor: atendimento.recebedor,
+    recebedorMatricula: atendimento.recebedorMatricula,
+    recebedorFuncao: atendimento.recebedorFuncao,
+    recebedorEmpresa: atendimento.recebedorEmpresa,
+    recebedorDocumento: atendimento.recebedorDocumento,
+    recebedorTelefone: atendimento.recebedorTelefone,
+    autorizadorInterno: atendimento.autorizadorInterno,
+    motivoRetirada: atendimento.motivoRetirada,
+    origem: atendimento.origem,
+    status: atendimento.status,
+    dataAtendimento: atendimento.dataAtendimento,
+    itens: atendimento.itens.map((item) => ({
+      id: item.id,
+      documentoItemId: item.documentoItemId,
+      materialId: item.materialId,
+      codigoMaterial: item.codigoMaterial,
+      descricaoMaterial: item.descricaoMaterial,
+      unidade: item.unidade,
+      quantidadeAtendida: item.quantidadeAtendida,
+    })),
+  };
+}
+
+function buildAtendimentoHistoricoFromAtendimentos(atendimentos: Atendimento[]): SnapshotHistoricoRecord[] {
+  return atendimentos.flatMap((atendimento) =>
+    atendimento.itens.map((item) => ({
+      id: item.id,
+      loteNumero: atendimento.numero,
+      data: atendimento.dataAtendimento,
+      documentoId: atendimento.documentoId,
+      documento: atendimento.documentoNumero,
+      atendente: atendimento.atendente,
+      atendenteMatricula: atendimento.atendenteMatricula,
+      atendenteFuncao: atendimento.atendenteFuncao,
+      recebedorTipo: atendimento.recebedorTipo,
+      recebedorColaboradorId: atendimento.recebedorColaboradorId,
+      recebedor: atendimento.recebedor,
+      recebedorMatricula: atendimento.recebedorMatricula,
+      recebedorFuncao: atendimento.recebedorFuncao,
+      recebedorEmpresa: atendimento.recebedorEmpresa,
+      recebedorDocumento: atendimento.recebedorDocumento,
+      recebedorTelefone: atendimento.recebedorTelefone,
+      autorizadorInterno: atendimento.autorizadorInterno,
+      motivoRetirada: atendimento.motivoRetirada,
+      codigo: item.codigoMaterial,
+      descricao: item.descricaoMaterial,
+      unidade: item.unidade,
+      quantidade: item.quantidadeAtendida,
+      origem: atendimento.origem,
+    })),
+  );
+}
+
+/** Grava documento(s) e atendimento(s) com merge por `id` sobre o snapshot fresco (concorrência). */
+async function writeSnapshotAtendimentoPatch(patch: {
   documentos?: DocumentoStored[];
-  atendimentoHistorico?: Atendimento[];
+  atendimentos?: Atendimento[];
 }): Promise<void> {
   await commitIsoProSnapshotWrite(async () => {
     const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+    const currentDocumentos = (currentPayload.documentos ?? []) as SnapshotDocumentoRecord[];
+    const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
+
+    const documentos = patch.documentos?.length
+      ? mergeSnapshotRowsById(currentDocumentos, patch.documentos.map(documentoStoredToSnapshotRecord))
+      : currentDocumentos;
+
+    const atendimentosSnapshot = patch.atendimentos?.length
+      ? mergeSnapshotRowsById(currentAtendimentos, patch.atendimentos.map(atendimentoToSnapshotRecord))
+      : currentAtendimentos;
+
+    const atendimentosMerged = mapAtendimentosFromSnapshotArray({
+      ...currentPayload,
+      atendimentos: atendimentosSnapshot,
+    });
+    const atendimentoHistorico = buildAtendimentoHistoricoFromAtendimentos(atendimentosMerged);
+
     return {
       baselineUpdatedAt,
       nextPayload: {
         ...currentPayload,
-        ...(update.documentos
-          ? {
-              documentos: update.documentos.map((doc) => ({
-                id: doc.id,
-                numero: doc.numero,
-                revisao: doc.revisao,
-                descricao: doc.descricao,
-                responsavel: doc.responsavel,
-                status: doc.status,
-                itens: doc.itens.map((item) => ({
-                  id: item.id,
-                  codigo: item.codigoMaterial,
-                  descricao: item.descricaoMaterial,
-                  unidade: item.unidade,
-                  quantidade: item.quantidadeProjeto,
-                  quantidadeAtendida: item.quantidadeAtendida,
-                })),
-              })),
-            }
-          : {}),
-        ...(update.atendimentoHistorico
-          ? {
-              atendimentoHistorico: update.atendimentoHistorico.flatMap((atendimento) =>
-                atendimento.itens.map((item) => ({
-                  id: item.id,
-                  loteNumero: atendimento.numero,
-                  data: atendimento.dataAtendimento,
-                  documentoId: atendimento.documentoId,
-                  documento: atendimento.documentoNumero,
-                  atendente: atendimento.atendente,
-                  atendenteMatricula: atendimento.atendenteMatricula,
-                  atendenteFuncao: atendimento.atendenteFuncao,
-                  recebedorTipo: atendimento.recebedorTipo,
-                  recebedorColaboradorId: atendimento.recebedorColaboradorId,
-                  recebedor: atendimento.recebedor,
-                  recebedorMatricula: atendimento.recebedorMatricula,
-                  recebedorFuncao: atendimento.recebedorFuncao,
-                  recebedorEmpresa: atendimento.recebedorEmpresa,
-                  recebedorDocumento: atendimento.recebedorDocumento,
-                  recebedorTelefone: atendimento.recebedorTelefone,
-                  autorizadorInterno: atendimento.autorizadorInterno,
-                  motivoRetirada: atendimento.motivoRetirada,
-                  codigo: item.codigoMaterial,
-                  descricao: item.descricaoMaterial,
-                  unidade: item.unidade,
-                  quantidade: item.quantidadeAtendida,
-                  origem: atendimento.origem,
-                })),
-              ),
-              atendimentos: update.atendimentoHistorico.map((atendimento) => ({
-                id: atendimento.id,
-                numero: atendimento.numero,
-                documentoId: atendimento.documentoId,
-                documentoNumero: atendimento.documentoNumero,
-                atendente: atendimento.atendente,
-                atendenteMatricula: atendimento.atendenteMatricula,
-                atendenteFuncao: atendimento.atendenteFuncao,
-                recebedorTipo: atendimento.recebedorTipo,
-                recebedorColaboradorId: atendimento.recebedorColaboradorId,
-                recebedor: atendimento.recebedor,
-                recebedorMatricula: atendimento.recebedorMatricula,
-                recebedorFuncao: atendimento.recebedorFuncao,
-                recebedorEmpresa: atendimento.recebedorEmpresa,
-                recebedorDocumento: atendimento.recebedorDocumento,
-                recebedorTelefone: atendimento.recebedorTelefone,
-                autorizadorInterno: atendimento.autorizadorInterno,
-                motivoRetirada: atendimento.motivoRetirada,
-                origem: atendimento.origem,
-                status: atendimento.status,
-                dataAtendimento: atendimento.dataAtendimento,
-                itens: atendimento.itens.map((item) => ({
-                  id: item.id,
-                  documentoItemId: item.documentoItemId,
-                  materialId: item.materialId,
-                  codigoMaterial: item.codigoMaterial,
-                  descricaoMaterial: item.descricaoMaterial,
-                  unidade: item.unidade,
-                  quantidadeAtendida: item.quantidadeAtendida,
-                })),
-              })),
-            }
-          : {}),
+        documentos,
+        atendimentos: atendimentosSnapshot,
+        atendimentoHistorico,
         dataAtualizacao: new Date().toISOString(),
       },
     };
@@ -1192,7 +1219,8 @@ export async function registrarAtendimento(payload: {
     if (bloqueioAtendimento) return { success: false, error: bloqueioAtendimento };
     return executeWrite({
       shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotPayload({ documentos, atendimentoHistorico: atendimentos }),
+      writeRemote: () =>
+        writeSnapshotAtendimentoPatch({ documentos: [documento], atendimentos: [atendimento] }),
       writeLocal: () => {
         writeJson(documentosKeyAtendimento(), documentos);
         writeJson(materiaisKeyAtendimento(), materiais);
@@ -1313,7 +1341,11 @@ export async function estornarAtendimento(
     if (bloqueioEstorno) return { success: false, error: bloqueioEstorno };
     return executeWrite({
       shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotPayload({ documentos, atendimentoHistorico: atendimentos }),
+      writeRemote: () =>
+        writeSnapshotAtendimentoPatch({
+          documentos: [documento],
+          atendimentos: [atendimentos[atendimentoIndex]],
+        }),
       writeLocal: () => {
         writeJson(documentosKeyAtendimento(), documentos);
         writeJson(materiaisKeyAtendimento(), materiais);

@@ -10,6 +10,15 @@ import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { logout as authLogout, verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { RIR_NUMERACAO_LABELS, descricaoModoNumeracaoRir } from '../../qualidade/utils/rirNumeracaoCopy';
+import { ConfiguracaoRelatorioFinalIaPanel } from '../components/ConfiguracaoRelatorioFinalIaPanel';
+import { ConfiguracoesSecaoIntro } from '../components/ConfiguracoesSecaoIntro';
+import { ConfiguracoesSecaoNav } from '../components/ConfiguracoesSecaoNav';
+import {
+  type ConfiguracaoSecaoId,
+  isConfiguracaoSecaoId,
+  listarSecoesConfiguracaoVisiveis,
+  obterSecaoConfiguracao,
+} from '../constants/configuracoesSecoes.constants';
 import { useConfiguracoes } from '../hooks/useConfiguracoes';
 import { LIMPAR_CADASTROS_FRASE_LOCAL, LIMPAR_CADASTROS_FRASE_NUVEM } from '../constants/limparCadastros.constants';
 import {
@@ -24,6 +33,7 @@ import { executarPurgeNuvemIsoPro } from '../services/purgeNuvemIsoPro.service';
 import {
   adicionarAmbienteObra,
   aplicarAmbienteAtivoERecarregar,
+  getScopedIsoProStorageKey,
   readEstadoAmbientes,
   removerAmbienteObra,
 } from '../../../lib/isoProAmbiente';
@@ -67,6 +77,44 @@ export function ConfiguracoesPage() {
     submit,
   } = useConfiguracoes();
   const canAdminister = canAccessAction('configuracoes', 'administrar');
+  const secoesConfigVisiveis = useMemo(() => listarSecoesConfiguracaoVisiveis(canAdminister), [canAdminister]);
+
+  function chaveSecaoConfigStorage(): string {
+    return getScopedIsoProStorageKey('iso-pro-config-secao-ativa-v1');
+  }
+
+  function lerSecaoConfigInicial(): ConfiguracaoSecaoId {
+    if (typeof localStorage === 'undefined') return 'obra';
+    const hash = window.location.hash.replace(/^#config-/, '');
+    if (isConfiguracaoSecaoId(hash) && secoesConfigVisiveis.some((s) => s.id === hash)) {
+      return hash;
+    }
+    const stored = localStorage.getItem(chaveSecaoConfigStorage())?.trim();
+    if (stored && isConfiguracaoSecaoId(stored) && secoesConfigVisiveis.some((s) => s.id === stored)) {
+      return stored;
+    }
+    return secoesConfigVisiveis[0]?.id ?? 'obra';
+  }
+
+  const [secaoAtiva, setSecaoAtiva] = useState<ConfiguracaoSecaoId>(lerSecaoConfigInicial);
+  const secaoConfigMeta = useMemo(() => obterSecaoConfiguracao(secaoAtiva), [secaoAtiva]);
+
+  const mudarSecaoConfig = (id: ConfiguracaoSecaoId) => {
+    setSecaoAtiva(id);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(chaveSecaoConfigStorage(), id);
+    }
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', `#config-${id}`);
+    }
+  };
+
+  useEffect(() => {
+    if (!secoesConfigVisiveis.some((s) => s.id === secaoAtiva)) {
+      mudarSecaoConfig(secoesConfigVisiveis[0]?.id ?? 'obra');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- corrige secao invalida quando permissoes mudam
+  }, [canAdminister, secaoAtiva, secoesConfigVisiveis]);
   /** Força releitura de `readUsuarioTemaPreferido` após gravar ou limpar preferência. */
   const [temaPreferenciaTick, setTemaPreferenciaTick] = useState(0);
   const temaPreferidoUsuario = useMemo(() => {
@@ -367,15 +415,17 @@ export function ConfiguracoesPage() {
 
   return (
     <div className="stack-grid">
-      <div className="panel">
+      <div className="panel config-page">
         <div className="panel-header">
           <div>
-            <p className="panel-kicker">Administracao</p>
-            <h2>Configuracoes do sistema</h2>
+            <p className="panel-kicker">Administração</p>
+            <h2>Configurações do sistema</h2>
           </div>
         </div>
 
-        <p className="panel-copy">Central administrativa para parametros gerais, tema, numeracao e integracao da estrutura do sistema.</p>
+        <p className="config-page__lede panel-copy">
+          Parâmetros organizados por aba. O botão <strong>Salvar configurações</strong> permanece fixo no fundo enquanto navega.
+        </p>
 
         {error ? <div className="error-box">{error}</div> : null}
         {success ? <OperationalNotice>{success}</OperationalNotice> : null}
@@ -388,10 +438,22 @@ export function ConfiguracoesPage() {
             </OperationalNotice>
           ) : null}
         </div>
-        <OperationalNotice tone="warning">
-          Area sensivel: alteracoes aqui impactam autenticacao, integracao em nuvem, numeracao operacional e blindagem do executavel.
-        </OperationalNotice>
+        <div className="config-page__alert">
+          <OperationalNotice tone="warning">
+            Área sensível: alterações aqui impactam autenticação, integração na nuvem, numeração operacional e blindagem do executável.
+          </OperationalNotice>
+        </div>
 
+        <ConfiguracoesSecaoNav secaoAtiva={secaoAtiva} secoes={secoesConfigVisiveis} onSecao={mudarSecaoConfig} />
+        <ConfiguracoesSecaoIntro key={secaoAtiva} secao={secaoConfigMeta} />
+
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'obra'}
+          id="config-secao-obra"
+          role="tabpanel"
+        >
         {canAdminister ? (
           <div className="panel">
             <div className="panel-header">
@@ -550,12 +612,52 @@ export function ConfiguracoesPage() {
             <code>Cliente - obra 55</code>. Para outra obra do mesmo cliente, altere <strong>Projeto / obra</strong>, guarde configuracoes e volte a exportar/enviar o backup.
           </OperationalNotice>
         </div>
-
         <div className="panel">
           <div className="panel-header">
             <div>
-              <p className="panel-kicker">Aparencia</p>
-              <h2>Tema e padroes</h2>
+              <p className="panel-kicker">Relatorios</p>
+              <h2>Rodape nos impressos (HTML)</h2>
+            </div>
+          </div>
+          <p className="panel-copy">
+            Nome da empresa e CNPJ em relatorio fotografico, RIR, RNC e recibos. O titular da solucao (licenciante) esta no codigo —{' '}
+            <code>src/lib/titularSistemaCodigo.ts</code> — e nao aparece nestes rodapes.
+          </p>
+          <div className="form-columns">
+            <Input
+              disabled={!canAdminister}
+              label="Nome da empresa (rodape dos relatorios)"
+              onChange={(event) =>
+                setForm((current) => (current ? { ...current, documentoRodapeNome: event.target.value } : current))
+              }
+              placeholder="Ex.: Empresa XYZ Ltda."
+              value={form.documentoRodapeNome}
+            />
+            <Input
+              disabled={!canAdminister}
+              label="CNPJ da empresa (rodape dos relatorios)"
+              onChange={(event) =>
+                setForm((current) => (current ? { ...current, documentoRodapeCnpj: event.target.value } : current))
+              }
+              placeholder="Ex.: 00.000.000/0001-00"
+              value={form.documentoRodapeCnpj}
+            />
+          </div>
+        </div>
+        </div>
+
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'aparencia'}
+          id="config-secao-aparencia"
+          role="tabpanel"
+        >
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="panel-kicker">Interface</p>
+              <h2>Tema e preferências</h2>
             </div>
           </div>
           <p className="panel-copy" style={{ marginBottom: 12 }}>
@@ -634,6 +736,15 @@ export function ConfiguracoesPage() {
               </span>
             </label>
           </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="panel-kicker">Marca</p>
+              <h2>Logo institucional</h2>
+            </div>
+          </div>
           <p className="panel-copy">
             Logo institucional: aparece em recibos, impressoes de RIR, RNC, etiquetas e demais relatorios gerados em HTML. Exportacoes somente em planilha (Excel/CSV) nao incluem o logo. Padrao de fabrica: chapa I.S.O PRO (mesmo modelo da sidebar); podes substituir por imagem ou URL.
           </p>
@@ -707,33 +818,31 @@ export function ConfiguracoesPage() {
               ) : null}
             </div>
           ) : null}
-          <p className="panel-copy" style={{ marginTop: 18 }}>
-            <strong>Rodape nos impressos (HTML):</strong> nome da empresa e CNPJ que aparecem em relatorio fotografico, RIR, RNC e
-            recibos. O registo do titular da solucao (licenciante) embutido no codigo — ficheiro{' '}
-            <code>src/lib/titularSistemaCodigo.ts</code> — nao e editavel aqui e nao sai nos relatorios.
-          </p>
-          <div className="form-columns">
-            <Input
-              disabled={!canAdminister}
-              label="Nome da empresa (rodape dos relatorios)"
-              onChange={(event) =>
-                setForm((current) => (current ? { ...current, documentoRodapeNome: event.target.value } : current))
-              }
-              placeholder="Ex.: Empresa XYZ Ltda."
-              value={form.documentoRodapeNome}
-            />
-            <Input
-              disabled={!canAdminister}
-              label="CNPJ da empresa (rodape dos relatorios)"
-              onChange={(event) =>
-                setForm((current) => (current ? { ...current, documentoRodapeCnpj: event.target.value } : current))
-              }
-              placeholder="Ex.: 00.000.000/0001-00"
-              value={form.documentoRodapeCnpj}
-            />
-          </div>
+
+        </div>
         </div>
 
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'relatorios'}
+          id="config-secao-relatorios"
+          role="tabpanel"
+        >
+          <ConfiguracaoRelatorioFinalIaPanel
+            canAdminister={canAdminister}
+            form={form}
+            onChange={(next) => setForm(next)}
+          />
+        </div>
+
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'qualidade'}
+          id="config-secao-qualidade"
+          role="tabpanel"
+        >
         <div className="panel">
           <div className="panel-header">
             <div>
@@ -788,7 +897,15 @@ export function ConfiguracoesPage() {
             <strong>Senha RNC:</strong> opcional — quando preenchida, exige a mesma senha ao salvar uma RNC (criar ou editar), como no I.S.O PRO. <strong>Senha RIR:</strong> mantida no perfil para compatibilidade com dados exportados do legado; nesta versão o formulário de RIR não exige essa senha.
           </p>
         </div>
+        </div>
 
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'nuvem'}
+          id="config-secao-nuvem"
+          role="tabpanel"
+        >
         <div className="panel">
           <div className="panel-header">
             <div>
@@ -864,7 +981,15 @@ export function ConfiguracoesPage() {
             (insert/update directo com a chave anon).
           </OperationalNotice>
         </div>
+        </div>
 
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'desktop'}
+          id="config-secao-desktop"
+          role="tabpanel"
+        >
         <div className="panel">
           <div className="panel-header">
             <div>
@@ -1012,7 +1137,15 @@ export function ConfiguracoesPage() {
             </div>
           ) : null}
         </div>
+        </div>
 
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'manutencao'}
+          id="config-secao-manutencao"
+          role="tabpanel"
+        >
         {canAdminister ? (
           <div className="panel">
             <div className="panel-header">
@@ -1123,15 +1256,19 @@ export function ConfiguracoesPage() {
             </div>
           </div>
         ) : null}
+        </div>
 
         {canAdminister ? (
-          <div className="form-actions">
-            <Button onClick={submit}>Salvar configuracoes</Button>
+          <div className="config-salvar-bar">
+            <p className="panel-copy">
+              Grava obra, rodapé, tema, logo, qualidade, nuvem, desktop e IA. Mudar ambiente ou organização recarrega a pagina.
+            </p>
+            <Button onClick={submit}>Salvar configurações</Button>
           </div>
         ) : (
           <OperationalNotice>
             Seu perfil pode visualizar configuracoes, mas nao pode alterar parametros administrativos. Pode, no entanto, ajustar o{' '}
-            <strong>tema visível para mim</strong> na secção Aparência acima — essa escolha é só sua neste navegador.
+            <strong>tema visível para mim</strong> na aba Interface — essa escolha é só sua neste navegador.
           </OperationalNotice>
         )}
       </div>

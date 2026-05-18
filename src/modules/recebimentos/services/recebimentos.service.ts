@@ -14,6 +14,7 @@ import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv
 import { coerceRecebimentoQuantidade, roundPesoKg } from '../../../lib/parseDecimal';
 import { normalizarDataFlexivelParaIso } from '../../../lib/normalizeFlexibleDateToIso';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
+import { mergeSnapshotRowsById, removeSnapshotRowsByIds } from '../../../lib/snapshotPatchMerge';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -415,38 +416,61 @@ async function readSnapshotRecebimentos(): Promise<Recebimento[]> {
   }));
 }
 
-async function writeSnapshotRecebimentos(items: Recebimento[]): Promise<void> {
+type SnapshotRecebimentoRecord = NonNullable<SnapshotPayload['recebimentos']>[number];
+
+function recebimentoToSnapshotRecord(item: Recebimento): SnapshotRecebimentoRecord {
+  return {
+    id: item.id,
+    data: item.dataRecebimento,
+    fornecedorNome: item.fornecedor,
+    nota: item.notaFiscal,
+    romaneio: item.romaneio,
+    conferenteNome: item.conferente,
+    observacoes: item.observacoes,
+    modoRecebimento: item.modoRecebimento,
+    ...(item.dataConferencia?.trim() ? { dataConferencia: item.dataConferencia.trim() } : {}),
+    statusConferencia: item.status === 'conferido' ? 'conferido' : 'pendente',
+    itens: item.itens.map((recItem) => ({
+      codigo: recItem.codigoMaterial,
+      descricao: recItem.descricaoMaterial,
+      unidade: recItem.unidade,
+      disciplina: recItem.disciplina,
+      localizacao: recItem.localizacao,
+      certificado: String(recItem.certificado ?? '').trim(),
+      quantidade: recItem.quantidadeRecebida,
+      quantidadeConferida: recItem.quantidadeConferida,
+      pesoUnitario: recItem.pesoUnitario ?? 0,
+      pesoTotal: recItem.pesoTotal ?? 0,
+      observacaoItem: String(recItem.observacaoItem ?? '').trim(),
+    })),
+  };
+}
+
+export type SnapshotRecebimentosWrite =
+  | { upsert: Recebimento[] }
+  | { replaceAll: Recebimento[] }
+  | { removeIds: string[] };
+
+/** Grava recebimentos no snapshot: merge por `id` (padrão) ou lista completa (importação). */
+async function writeSnapshotRecebimentos(write: SnapshotRecebimentosWrite): Promise<void> {
   await commitIsoProSnapshotWrite(async () => {
     const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+    const current = (currentPayload.recebimentos ?? []) as SnapshotRecebimentoRecord[];
+
+    let recebimentos: SnapshotRecebimentoRecord[];
+    if ('removeIds' in write) {
+      recebimentos = removeSnapshotRowsByIds(current, write.removeIds);
+    } else if ('replaceAll' in write) {
+      recebimentos = write.replaceAll.map(recebimentoToSnapshotRecord);
+    } else {
+      recebimentos = mergeSnapshotRowsById(current, write.upsert.map(recebimentoToSnapshotRecord));
+    }
+
     return {
       baselineUpdatedAt,
       nextPayload: {
         ...currentPayload,
-        recebimentos: items.map((item) => ({
-          id: item.id,
-          data: item.dataRecebimento,
-          fornecedorNome: item.fornecedor,
-          nota: item.notaFiscal,
-          romaneio: item.romaneio,
-          conferenteNome: item.conferente,
-          observacoes: item.observacoes,
-          modoRecebimento: item.modoRecebimento,
-          ...(item.dataConferencia?.trim() ? { dataConferencia: item.dataConferencia.trim() } : {}),
-          statusConferencia: item.status === 'conferido' ? 'conferido' : 'pendente',
-          itens: item.itens.map((recItem) => ({
-            codigo: recItem.codigoMaterial,
-            descricao: recItem.descricaoMaterial,
-            unidade: recItem.unidade,
-            disciplina: recItem.disciplina,
-            localizacao: recItem.localizacao,
-            certificado: String(recItem.certificado ?? '').trim(),
-            quantidade: recItem.quantidadeRecebida,
-            quantidadeConferida: recItem.quantidadeConferida,
-            pesoUnitario: recItem.pesoUnitario ?? 0,
-            pesoTotal: recItem.pesoTotal ?? 0,
-            observacaoItem: String(recItem.observacaoItem ?? '').trim(),
-          })),
-        })),
+        recebimentos,
         dataAtualizacao: new Date().toISOString(),
       },
     };
@@ -492,7 +516,7 @@ function auditarDestravarRecebimentoParaCorrecao(
   appendAuthAuditEvent({
     type: 'recebimento_destravado_correcao',
     actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
-    detail: `Recebimento ${rec.notaFiscal || '-'} / ${rec.romaneio || '-'} (${rec.fornecedor}) destravado para correcao (volta a aguardar conferencia).`,
+    detail: `Recebimento ${rec.notaFiscal || '-'} / ${rec.romaneio || '-'} (${rec.fornecedor}) destravado para correcao (mantem conferencia; volta a aguardar conferencia para edicao).`,
   });
 }
 
@@ -562,6 +586,42 @@ function deriveConferenciaStatus(itens: Recebimento['itens']): Recebimento['stat
   if (totaisConferidos === itens.length) return 'conferido';
   if (algumConferido) return 'parcialmente_conferido';
   return 'aguardando_conferencia';
+}
+
+/** Ao editar recebimento em fluxo de conferencia, recalcula status se ja existem quantidades conferidas. */
+function statusEDataConferenciaAposSalvarEdicao(
+  form: RecebimentoFormData,
+  anterior: Recebimento,
+): Pick<Recebimento, 'status' | 'dataConferencia'> {
+  if (form.modoRecebimento === 'direto') {
+    return { status: 'conferido', dataConferencia: anterior.dataConferencia };
+  }
+  const temQuantidadeConferida = form.itens.some((item) => Number(item.quantidadeConferida) > 0);
+  if (!temQuantidadeConferida) {
+    return { status: 'aguardando_conferencia', dataConferencia: undefined };
+  }
+  const status = deriveConferenciaStatus(form.itens);
+  if (status === 'aguardando_conferencia') {
+    return { status, dataConferencia: undefined };
+  }
+  return {
+    status,
+    dataConferencia: anterior.dataConferencia?.trim() || new Date().toISOString(),
+  };
+}
+
+function montarRecebimentoAposSalvarEdicao(
+  normalized: RecebimentoFormData,
+  currentId: string,
+  anterior: Recebimento,
+): Recebimento {
+  const { dataConferencia: _omitDataConferencia, ...semDataConferencia } = normalized;
+  void _omitDataConferencia;
+  return {
+    ...semDataConferencia,
+    id: currentId,
+    ...statusEDataConferenciaAposSalvarEdicao(normalized, anterior),
+  };
 }
 
 function validateConferenciaPayload(
@@ -718,12 +778,12 @@ export async function salvarRecebimento(
         if (items[index].status !== 'aguardando_conferencia') {
           return { success: false, error: 'Recebimentos com conferencia iniciada nao podem ser editados por este fluxo.' };
         }
-        items[index] = { ...normalized, id: currentId, status: deriveStatus(normalized) };
+        items[index] = montarRecebimentoAposSalvarEdicao(normalized, currentId, items[index]);
         const bloqueioEdit = bloqueioLocalRecebimentos(items.length);
         if (bloqueioEdit) return { success: false, error: bloqueioEdit };
         const writeEdit = await executeWrite({
           shouldWriteRemote: true,
-          writeRemote: () => writeSnapshotRecebimentos(items),
+          writeRemote: () => writeSnapshotRecebimentos({ upsert: [items[index]] }),
           writeLocal: () => writeAll(items),
           successData: items[index],
           fallbackMessage: 'Falha ao salvar recebimento no Supabase.',
@@ -741,7 +801,7 @@ export async function salvarRecebimento(
       if (bloqueioNovo) return { success: false, error: bloqueioNovo };
       const writeNew = await executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotRecebimentos(items),
+        writeRemote: () => writeSnapshotRecebimentos({ upsert: [created] }),
         writeLocal: () => writeAll(items),
         successData: created,
         fallbackMessage: 'Falha ao salvar recebimento no Supabase.',
@@ -781,7 +841,7 @@ export async function salvarRecebimento(
     if (items[index].status !== 'aguardando_conferencia') {
       return { success: false, error: 'Recebimentos com conferencia iniciada nao podem ser editados por este fluxo.' };
     }
-    items[index] = { ...normalized, id: currentId, status: deriveStatus(normalized) };
+    items[index] = montarRecebimentoAposSalvarEdicao(normalized, currentId, items[index]);
     writeAll(items);
     return { success: true, data: items[index] };
   }
@@ -812,7 +872,7 @@ export async function cancelarRecebimento(id: string): Promise<ServiceResult<Rec
       if (bloqueioCancel) return { success: false, error: bloqueioCancel };
       return executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotRecebimentos(items),
+        writeRemote: () => writeSnapshotRecebimentos({ upsert: [items[index]] }),
         writeLocal: () => writeAll(items),
         successData: items[index],
         fallbackMessage: 'Falha ao cancelar recebimento no Supabase.',
@@ -836,8 +896,8 @@ export async function cancelarRecebimento(id: string): Promise<ServiceResult<Rec
 }
 
 /**
- * Volta o recebimento para aguardando conferencia (quantidades conferidas zeradas) para permitir edicao, cancelamento ou exclusao.
- * Senha e permissao administrar ficam na UI.
+ * Volta o recebimento para aguardando conferencia mantendo quantidades e observacoes da conferencia ja feita,
+ * para permitir correcao pontual (desktop/mobile), cancelamento ou exclusao. Senha e permissao administrar ficam na UI.
  */
 export async function destravarRecebimentoParaCorrecaoAdministrativa(
   id: string,
@@ -845,14 +905,13 @@ export async function destravarRecebimentoParaCorrecaoAdministrativa(
 ): Promise<ServiceResult<Recebimento>> {
   const aplicarDestravamento = (items: Recebimento[], idx: number): Recebimento => {
     const atual = items[idx];
+    const { dataConferencia: _omitDataConferenciaDestravar, ...base } = atual;
+    void _omitDataConferenciaDestravar;
     const atualizado: Recebimento = {
-      ...atual,
+      ...base,
       modoRecebimento: 'aguardando_conferencia',
       status: 'aguardando_conferencia',
-      itens: atual.itens.map((it) => ({
-        ...it,
-        quantidadeConferida: 0,
-      })),
+      itens: atual.itens.map((it) => ({ ...it })),
     };
     items[idx] = atualizado;
     return atualizado;
@@ -879,7 +938,7 @@ export async function destravarRecebimentoParaCorrecaoAdministrativa(
       if (bloqueioDestravar) return { success: false, error: bloqueioDestravar };
       const writeResult = await executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotRecebimentos(items),
+        writeRemote: () => writeSnapshotRecebimentos({ upsert: [atualizado] }),
         writeLocal: () => writeAll(items),
         successData: atualizado,
         fallbackMessage: 'Falha ao destravar recebimento no Supabase.',
@@ -945,12 +1004,11 @@ export async function excluirRecebimentosDefinitivamente(
         };
       }
       const next = items.filter((item) => !idSet.has(item.id));
-
       const bloqueioExcluir = bloqueioLocalRecebimentos(next.length);
       if (bloqueioExcluir) return { success: false, error: bloqueioExcluir };
       const writeResult = await executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotRecebimentos(next),
+        writeRemote: () => writeSnapshotRecebimentos({ removeIds: unique }),
         writeLocal: () => writeAll(next),
         successData: { removidos: removidos.length },
         fallbackMessage: 'Falha ao excluir recebimentos no Supabase.',
@@ -1057,7 +1115,7 @@ export async function finalizarConferenciaRecebimento(payload: {
     if (bloqueioConferencia) return { success: false, error: bloqueioConferencia };
     return executeWrite({
       shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotRecebimentos(items),
+      writeRemote: () => writeSnapshotRecebimentos({ upsert: [updated] }),
       writeLocal: () => writeAll(items),
       successData: updated,
       fallbackMessage: 'Falha ao finalizar conferencia no Supabase.',
@@ -1596,7 +1654,7 @@ export async function importarRecebimentosDoArquivoJson(
     }
     const importWrite = await executeWrite({
       shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotRecebimentos(working),
+      writeRemote: () => writeSnapshotRecebimentos({ replaceAll: working }),
       writeLocal: () => writeAll(working),
       successData: resumo,
       fallbackMessage: 'Falha ao importar recebimentos no Supabase.',

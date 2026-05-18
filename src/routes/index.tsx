@@ -26,6 +26,7 @@ import {
   RelatoriosPage,
   RelatorioFotograficoListPage,
   RelatorioFotograficoPage,
+  RelatorioFinalObraPage,
   RirPage,
   RncPage,
   UsuariosPage,
@@ -77,6 +78,14 @@ export const router = createHashRouter([
             element: withSuspense(
               <ModuleAccessRoute modulo="relatorios">
                 <RelatorioFotograficoPage />
+              </ModuleAccessRoute>,
+            ),
+          },
+          {
+            path: '/relatorio-final-obra',
+            element: withSuspense(
+              <ModuleAccessRoute modulo="relatorios">
+                <RelatorioFinalObraPage />
               </ModuleAccessRoute>,
             ),
           },

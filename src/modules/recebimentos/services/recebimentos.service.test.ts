@@ -534,20 +534,22 @@ describe('recebimentos.service / destravarRecebimentoParaCorrecaoAdministrativa 
     });
   });
 
-  it('em sucesso remoto persiste copia local com status aguardando conferencia e quantidades conferidas zeradas', async () => {
+  it('em sucesso remoto mantém quantidades conferidas e remove dataConferencia para permitir correcao', async () => {
     store[STORAGE_KEY] = JSON.stringify([]);
 
     const result = await destravarRecebimentoParaCorrecaoAdministrativa('rec-destravar');
 
     expect(result.success).toBe(true);
     expect(result.data?.status).toBe('aguardando_conferencia');
-    expect(result.data?.itens[0]?.quantidadeConferida).toBe(0);
+    expect(result.data?.itens[0]?.quantidadeConferida).toBe(10);
+    expect(result.data?.dataConferencia).toBeUndefined();
 
     const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as Recebimento[];
     const row = local.find((r) => r.id === 'rec-destravar');
     expect(row?.status).toBe('aguardando_conferencia');
     expect(row?.modoRecebimento).toBe('aguardando_conferencia');
-    expect(row?.itens[0]?.quantidadeConferida).toBe(0);
+    expect(row?.itens[0]?.quantidadeConferida).toBe(10);
+    expect(row?.dataConferencia).toBeUndefined();
   });
 
   it('recusa destravar recebimento que ja esta aguardando conferencia', async () => {

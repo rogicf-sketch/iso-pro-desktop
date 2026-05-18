@@ -32,6 +32,20 @@ export function RelatoriosPage() {
       </ModuleHelp>
 
       <div className="info-card" style={{ marginBottom: 20 }}>
+        <p className="panel-kicker">Encerramento de obra</p>
+        <h3>Relatório Final de Obra</h3>
+        <ModuleHelp>
+          <p className="panel-copy">
+            Consolida todos os registros do projeto (planejamento, recebimentos, RIR, RNC, atendimentos, inventários e relatórios
+            fotográficos) em documento único de encerramento, com exportação PDF, Word e Excel.
+          </p>
+        </ModuleHelp>
+        <Link className="button button-primary" to="/relatorio-final-obra">
+          Gerar relatório final
+        </Link>
+      </div>
+
+      <div className="info-card" style={{ marginBottom: 20 }}>
         <p className="panel-kicker">Evidências</p>
         <h3>Relatório fotográfico</h3>
         <ModuleHelp>

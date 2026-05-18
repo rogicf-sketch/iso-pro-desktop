@@ -362,8 +362,8 @@ export function useRecebimentos() {
     await invalidateRecebimentosLista();
     setSuccess(
       result.meta?.source === 'local'
-        ? 'Recebimento destravado (gravacao local). Pode editar, cancelar ou excluir conforme as permissoes.'
-        : 'Recebimento destravado. Pode editar, cancelar ou excluir conforme as permissoes.',
+        ? 'Recebimento destravado (gravacao local). Conferencia mantida — corrija os itens e grave.'
+        : 'Recebimento destravado. Conferencia mantida — corrija os itens e grave.',
     );
     if (canAccessAction('recebimentos', 'editar')) {
       const carregar = await buscarRecebimentoPorId(id);

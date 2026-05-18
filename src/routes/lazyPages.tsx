@@ -55,6 +55,9 @@ export const RelatorioFotograficoListPage = lazy(() =>
 export const RelatorioFotograficoPage = lazy(() =>
   import('@/modules/relatorios/pages/RelatorioFotograficoPage').then((module) => ({ default: module.RelatorioFotograficoPage })),
 );
+export const RelatorioFinalObraPage = lazy(() =>
+  import('@/modules/relatorios/pages/RelatorioFinalObraPage').then((module) => ({ default: module.RelatorioFinalObraPage })),
+);
 export const MobileDevicesPage = lazy(() =>
   import('@/modules/mobile/pages/MobileDevicesPage').then((module) => ({ default: module.MobileDevicesPage })),
 );

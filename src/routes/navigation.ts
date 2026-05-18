@@ -32,6 +32,12 @@ export const moduleNavigation = [
     modulo: 'relatorios',
     pageTitle: 'Relatório fotográfico',
   },
+  {
+    to: '/relatorio-final-obra',
+    label: 'Rel. final obra',
+    modulo: 'relatorios',
+    pageTitle: 'Relatório Final de Obra',
+  },
   { to: '/mobile', label: 'Dispositivos mobile', modulo: 'mobile' },
   { to: '/usuarios', label: 'Usuários', modulo: 'usuarios' },
   { to: '/licencas-desktop', label: 'Licenças desktop', modulo: 'configuracoes' },

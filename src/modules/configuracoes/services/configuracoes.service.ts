@@ -8,6 +8,7 @@ import { getSupabaseConfigDiagnostics, hasSupabaseConfig, resetSupabaseClient } 
 import type { ServiceResult } from '../../../types/common.types';
 import { parseConfiguracaoJson } from '../schemas/configuracaoPersistido.zod';
 import type { ConfiguracaoSistema, RirProcedimentoCadastroItem } from '../types/configuracao.types';
+import { normalizeIaApiBaseUrl } from '../../../lib/isoProIaApi.service';
 import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
 
 const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
@@ -70,7 +71,15 @@ const defaultConfig: ConfiguracaoSistema = {
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
   documentoRodapeNome: 'I.S.O PRO Gestão de Materiais',
   documentoRodapeCnpj: '66.234.531/0001-57',
+  relatorioFinalIaHabilitado: false,
+  relatorioFinalIaApiKey: '',
+  relatorioFinalIaModelo: 'gpt-4o-mini',
+  relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
 };
+
+function normalizeRelatorioFinalIaBaseUrl(url: unknown): string {
+  return normalizeIaApiBaseUrl(url);
+}
 
 export function aplicarTemaSistema(tema: ConfiguracaoSistema['tema']) {
   if (typeof document === 'undefined') return;
@@ -144,6 +153,10 @@ export function readConfiguracoes(): ConfiguracaoSistema {
       rirModoNumeracao: normalizeRirModoNumeracao(parsedConfig.rirModoNumeracao),
       logoInstitucionalUrl,
       rirProcedimentosCadastro,
+      relatorioFinalIaHabilitado: parsedConfig.relatorioFinalIaHabilitado === true,
+      relatorioFinalIaApiKey: String(parsedConfig.relatorioFinalIaApiKey ?? '').trim(),
+      relatorioFinalIaModelo: String(parsedConfig.relatorioFinalIaModelo ?? '').trim() || defaultConfig.relatorioFinalIaModelo,
+      relatorioFinalIaBaseUrl: normalizeRelatorioFinalIaBaseUrl(parsedConfig.relatorioFinalIaBaseUrl),
     };
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
@@ -207,6 +220,10 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     logoInstitucionalUrl: payload.logoInstitucionalUrl.trim() || LOGO_INSTITUCIONAL_PADRAO_FABRICA,
     documentoRodapeNome: payload.documentoRodapeNome.trim(),
     documentoRodapeCnpj: payload.documentoRodapeCnpj.trim(),
+    relatorioFinalIaHabilitado: payload.relatorioFinalIaHabilitado === true,
+    relatorioFinalIaApiKey: payload.relatorioFinalIaApiKey.trim(),
+    relatorioFinalIaModelo: payload.relatorioFinalIaModelo.trim() || defaultConfig.relatorioFinalIaModelo,
+    relatorioFinalIaBaseUrl: normalizeRelatorioFinalIaBaseUrl(payload.relatorioFinalIaBaseUrl),
   };
 
   if (normalizedBase.desktopVinculoAtivo && !normalizedBase.desktopInstalacaoAutorizadaId.trim()) {

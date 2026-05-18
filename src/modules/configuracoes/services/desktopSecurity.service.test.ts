@@ -54,6 +54,10 @@ const BASE_CONFIG: ConfiguracaoSistema = {
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
   documentoRodapeNome: '',
   documentoRodapeCnpj: '',
+  relatorioFinalIaHabilitado: false,
+  relatorioFinalIaApiKey: '',
+  relatorioFinalIaModelo: 'gpt-4o-mini',
+  relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
 };
 
 function base64UrlJson(obj: DesktopLicensePayload) {

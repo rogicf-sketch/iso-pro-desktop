@@ -1,5 +1,6 @@
 /* Estilos globais: ficheiros em `src/styles/` (ordem dos @import preserva cascata). */
 @import './styles/01-tokens-themes.css';
 @import './styles/02-base-auth-primitives.css';
+@import './styles/03-configuracoes.css';
 @import './styles/03-layout-panels-forms.css';
 @import './styles/04-modals-dashboard-misc.css';

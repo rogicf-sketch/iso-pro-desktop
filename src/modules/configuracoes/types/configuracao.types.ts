@@ -52,4 +52,14 @@ export type ConfiguracaoSistema = {
   documentoRodapeNome: string;
   /** CNPJ da empresa no rodape dos relatórios; pode incluir pontuacao, ex.: 00.000.000/0001-00. */
   documentoRodapeCnpj: string;
+  /**
+   * Relatório Final de Obra: análise assistida por API (OpenAI-compatível).
+   * Dados da obra são enviados ao provedor configurado com a chave do cliente.
+   */
+  relatorioFinalIaHabilitado: boolean;
+  relatorioFinalIaApiKey: string;
+  /** Ex.: gpt-4o-mini, claude-3-5-haiku-20241022 (se o endpoint suportar). */
+  relatorioFinalIaModelo: string;
+  /** Base da API sem barra final, ex.: https://api.openai.com/v1 */
+  relatorioFinalIaBaseUrl: string;
 };

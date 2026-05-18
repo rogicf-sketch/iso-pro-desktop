@@ -145,7 +145,7 @@ export function RecebimentosTable({
               {canAdminister && onDestravar && statusPermiteDestravarRecebimento(item.status) ? (
                 <Button
                   onClick={() => onDestravar(item)}
-                  title="Volta para aguardando conferencia (com senha) para permitir edicao, cancelamento ou exclusao."
+                  title="Volta para aguardando conferencia (com senha), mantendo a conferencia feita, para corrigir itens ou cancelar/excluir."
                   type="button"
                   variant="ghost"
                 >

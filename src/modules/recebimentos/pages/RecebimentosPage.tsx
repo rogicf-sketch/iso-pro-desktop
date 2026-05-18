@@ -177,7 +177,7 @@ export function RecebimentosPage() {
         <ModuleHelp>
           <OperationalNotice tone="warning">
             Regra operacional: recebimentos ja conferidos ou cancelados aparecem travados para cancelamento, preservando a consistencia do estoque e da conferencia.{' '}
-            <strong>Destravar...</strong> (senha) volta o recebimento para <strong>aguardando conferencia</strong> e zera as quantidades conferidas, para permitir edicao, cancelamento ou exclusao.{' '}
+            <strong>Destravar...</strong> (senha) volta o recebimento para <strong>aguardando conferencia</strong> mantendo as quantidades e observacoes ja conferidas, para corrigir linhas pontuais, cancelar ou excluir.{' '}
             <strong>Exclusao definitiva</strong> (com senha) remove a linha do cadastro apenas para recebimentos em{' '}
             <strong>aguardando conferencia</strong>, <strong>cancelados</strong> ou <strong>rascunho</strong>; recebimentos ja conferidos
             nao podem ser apagados sem destravar antes. Pode selecionar varios ou todos do filtro e excluir em massa.
@@ -320,7 +320,7 @@ export function RecebimentosPage() {
             <p>
               O recebimento <strong>{destravarContext.notaFiscal || '-'}</strong> /{' '}
               <strong>{destravarContext.romaneio || '-'}</strong> ({destravarContext.fornecedor}) voltara para{' '}
-              <strong>aguardando conferencia</strong>. As quantidades conferidas serao zeradas. Esta accao e registada na auditoria.
+              <strong>aguardando conferencia</strong>. A conferencia feita (quantidades e observacoes por linha) sera mantida — altere apenas o necessario e grave. Esta accao e registada na auditoria.
             </p>
             <p className="panel-copy" style={{ marginTop: 8 }}>
               Confirme com a sua senha. Com o foco no campo abaixo, pode premir <kbd>Enter</kbd> para confirmar.
