@@ -20,6 +20,8 @@ import { montarApresentacaoRelatorioFinalObra } from './relatorioFinalObraInteli
 
 const esc = escapeHtmlRelatorio;
 
+type SecaoRfo = { id: string; num: string; titulo: string; corpo: string };
+
 function cssRelatorioFinalObra(): string {
   return `
     ${cssBarraPreVisualizacaoImpressaoHtml()}
@@ -30,28 +32,72 @@ function cssRelatorioFinalObra(): string {
       background: #f1f5f9;
     }
     .rfo-page { max-width: 210mm; margin: 0 auto; background: #fff; }
-    .rfo-capa {
-      background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #0c4a6e 100%);
-      color: #f8fafc; padding: 36px 40px 32px; border-radius: 0 0 12px 12px;
+.rfo-capa {
+      background: linear-gradient(160deg, #0f172a 0%, #1e3a5f 50%, #0c4a6e 100%);
+      color: #f8fafc; padding: 28px 32px 24px; border-radius: 0 0 10px 10px;
     }
-    .rfo-capa-kicker { font-size: 9pt; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.85; margin: 0 0 8px; }
-    .rfo-capa h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 8px; border: none; color: #fff; }
-    .rfo-capa-sub { font-size: 11pt; opacity: 0.9; margin: 0 0 20px; max-width: 520px; }
-    .rfo-capa-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; font-size: 10pt; }
-    .rfo-capa-meta dt { font-weight: 600; opacity: 0.75; margin: 0; }
-    .rfo-capa-meta dd { margin: 2px 0 0; font-weight: 500; }
+    .rfo-capa-inner { max-width: 520px; margin: 0 auto; text-align: center; }
+    .rfo-capa-top {
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      padding-bottom: 16px; margin-bottom: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.18);
+    }
+    .rfo-capa-logo { display: flex; justify-content: center; }
+    .rfo-capa-logo .inst-logo-col { flex: none; min-height: 0; margin: 0; }
+    .rfo-capa-logo .inst-logo-img { max-width: 72px; max-height: 40px; width: auto; height: auto; }
+    .rfo-capa-logo .inst-logo-placeholder {
+      width: 72px; min-height: 36px; max-height: 40px; padding: 4px 6px; margin: 0 auto;
+      border-color: rgba(255,255,255,0.3); background: rgba(0,0,0,0.2);
+    }
+    .rfo-capa-logo .inst-logo-hint { font-size: 6.5pt; line-height: 1.2; color: rgba(248,250,252,0.85); }
+    .rfo-capa-logo .inst-logo-sub { font-size: 6pt; color: rgba(248,250,252,0.55); }
+    .rfo-capa-marca {
+      margin: 0; font-size: 8pt; letter-spacing: 0.14em; text-transform: uppercase;
+      font-weight: 600; opacity: 0.82;
+    }
+    .rfo-capa-titulo-wrap { margin-bottom: 14px; }
+    .rfo-capa-eyebrow {
+      margin: 0 0 8px; font-size: 7.5pt; letter-spacing: 0.2em; text-transform: uppercase;
+      font-weight: 600; color: #7dd3fc;
+    }
+    .rfo-capa h1 {
+      margin: 0; padding: 0; border: none; color: #fff;
+      font-size: 1.55rem; font-weight: 700; line-height: 1.2; letter-spacing: 0.02em;
+    }
+    .rfo-capa-titulo-l2 { display: block; font-size: 1.05em; font-weight: 600; color: #e0f2fe; margin-top: 2px; }
+    .rfo-capa-sub {
+      font-size: 9.5pt; opacity: 0.88; margin: 12px auto 0; max-width: 420px; line-height: 1.45;
+    }
+    .rfo-capa-numero-wrap { margin-bottom: 18px; }
     .rfo-capa-numero {
-      display: inline-block; margin-top: 18px; padding: 8px 16px;
-      background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25);
-      border-radius: 8px; font-size: 11pt; font-weight: 600;
+      display: inline-block; padding: 6px 14px;
+      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 6px; font-size: 10pt; font-weight: 600; letter-spacing: 0.03em;
     }
+    .rfo-capa-meta-box {
+      text-align: left; padding: 14px 16px; border-radius: 8px;
+      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.16);
+    }
+    .rfo-capa-meta {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 16px; font-size: 9pt; margin: 0;
+    }
+    .rfo-capa-meta dt {
+      font-weight: 600; opacity: 0.7; margin: 0; font-size: 7pt;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .rfo-capa-meta dd { margin: 3px 0 0; font-weight: 500; font-size: 9.5pt; line-height: 1.3; }
     .rfo-body { padding: 28px 36px 40px; }
     .rfo-sec { margin-bottom: 28px; }
     .rfo-sec-title {
+      display: flex; align-items: center; gap: 10px;
       font-size: 1.05rem; font-weight: 700; color: #0f172a;
-      margin: 0 0 12px; padding-bottom: 8px; border-bottom: 3px solid #0284c7;
+      margin: 0 0 12px; padding: 0 0 8px; border-bottom: 2px solid #0284c7;
     }
-    .rfo-sec-num { color: #0284c7; margin-right: 6px; }
+    .rfo-sec-num {
+      flex: 0 0 auto; min-width: 2rem; text-align: center;
+      font-size: 8.5pt; font-weight: 800; color: #fff; background: #0284c7;
+      padding: 4px 7px; border-radius: 4px; margin-right: 0;
+    }
     .rfo-sintese {
       background: #f8fafc; border-left: 4px solid #0284c7;
       padding: 16px 20px; border-radius: 0 8px 8px 0; margin-bottom: 16px;
@@ -140,11 +186,50 @@ function cssRelatorioFinalObra(): string {
       font-size: 9pt; background: #eff6ff; border: 1px solid #93c5fd;
       padding: 12px 14px; border-radius: 8px; margin-top: 20px;
     }
+.rfo-vazio {
+      padding: 10px 12px; border-radius: 8px; font-size: 9.5pt; color: #475569;
+      background: #f8fafc; border: 1px dashed #cbd5e1; margin: 0;
+    }
+    .rfo-indice {
+      margin-bottom: 22px; padding: 14px 16px;
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+    }
+    .rfo-indice h2 {
+      margin: 0 0 10px; font-size: 10pt; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #64748b;
+    }
+    .rfo-indice ol { margin: 0; padding: 0 0 0 1.25rem; columns: 2; column-gap: 28px; }
+    .rfo-indice li { margin: 4px 0; font-size: 9.5pt; break-inside: avoid; }
+    .rfo-indice a { color: #0c4a6e; text-decoration: none; font-weight: 500; }
+    .rfo-print-chrome { display: none; }
+    .rfo-declaracao-box {
+      padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fafbfc;
+    }
+    .rfo-assinatura { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .rfo-assinatura-linha { border-top: 1px solid #334155; padding-top: 6px; font-size: 9pt; color: #334155; }
     @media print {
-      body { background: #fff; }
+      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .rfo-page { max-width: none; }
-      .rfo-sec { page-break-inside: avoid; }
-      .rfo-sec--quebra { page-break-before: always; }
+      .rfo-capa { page-break-after: always; break-after: page; }
+      .rfo-sec { page-break-inside: auto; break-inside: auto; orphans: 3; widows: 3; }
+      .rfo-sec-title { break-after: avoid; page-break-after: avoid; }
+      .rfo-kpi, .rfo-mod-card, .rfo-rir-panel, .rfo-rf-card, .rfo-modulo-ia, .rfo-indice {
+        break-inside: avoid; page-break-inside: avoid;
+      }
+      .rfo-destaque-table thead { display: table-header-group; }
+      .rfo-destaque-table tr { break-inside: avoid; page-break-inside: avoid; }
+      .rfo-print-chrome {
+        display: block; position: fixed; left: 0; right: 0; z-index: 1000;
+        padding-left: 10mm; padding-right: 10mm; font-size: 7.5pt; color: #64748b; background: #fff;
+      }
+      .rfo-print-chrome--top {
+        top: 0; padding-top: 3mm; padding-bottom: 2mm; border-bottom: 1px solid #e2e8f0;
+        display: flex; justify-content: space-between; align-items: center;
+      }
+      .rfo-print-chrome--bottom {
+        bottom: 0; padding-top: 2mm; padding-bottom: 3mm; border-top: 1px solid #e2e8f0; text-align: center;
+      }
+      .rfo-body { padding-top: 10mm; padding-bottom: 8mm; }
     }
   `;
 }
@@ -206,9 +291,9 @@ function htmlRfDestaques(dados: RelatorioFinalObraDados): string {
   const rf = dados.apresentacao?.rfDestaques ?? [];
   if (rf.length === 0) {
     if (dados.totais.relatoriosFotograficos === 0) {
-      return '<p class="rfo-nota">Nenhum relatório fotográfico registrado neste projeto.</p>';
+      return '<p class="rfo-vazio">Nenhum relatório fotográfico registrado neste projeto.</p>';
     }
-    return '<p class="rfo-nota">Relatórios fotográficos existentes, porém sem evidências classificadas como críticas para esta apresentação. Consulte os RF individuais no sistema.</p>';
+    return '<p class="rfo-vazio">Relatórios fotográficos existentes, porém sem evidências classificadas como críticas para esta apresentação. Consulte os RF individuais no sistema.</p>';
   }
   return rf
     .map((r) => {
@@ -253,7 +338,7 @@ function htmlDestaquesTabela(dados: RelatorioFinalObraDados): string {
   const analise = resolverAnaliseDestaques(dados);
   const dest = analise.destaques;
   if (dest.length === 0) {
-    return '<p class="rfo-nota">Nenhuma ocorrência crítica automática identificada.</p>';
+    return '<p class="rfo-vazio">Nenhuma ocorrência crítica automática identificada no período analisado.</p>';
   }
   const rows = dest
     .map((d) => {
@@ -269,6 +354,23 @@ function htmlDestaquesTabela(dados: RelatorioFinalObraDados): string {
   return `<table class="rfo-destaque-table"><thead><tr>
     <th>Data</th><th>Módulo</th><th>Referência</th><th>Ocorrência</th>
   </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function htmlIndiceRfo(secoes: SecaoRfo[]): string {
+  const itens = secoes.map((x) => `<li><a href="#${x.id}">${esc(x.num)} — ${esc(x.titulo)}</a></li>`).join('');
+  return `<nav class="rfo-indice" aria-label="Índice"><h2>Índice</h2><ol>${itens}</ol></nav>`;
+}
+
+function htmlSecoesRfo(secoes: SecaoRfo[]): string {
+  return secoes
+    .map(
+      (x) => `
+        <section class="rfo-sec" id="${x.id}">
+          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${esc(x.num)}</span>${esc(x.titulo)}</h2>
+          ${x.corpo}
+        </section>`,
+    )
+    .join('');
 }
 
 export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opts?: { incluirBarraPreVisualizacao?: boolean }): string {
@@ -319,6 +421,8 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
     .filter((m) => m.total > 0)
     .map(htmlBarrasResumo)
     .join('');
+  const panoramaHtml =
+    modCards || '<p class="rfo-vazio">Sem registros operacionais para resumo gráfico neste projeto.</p>';
 
   const secoesModulo = ap.secoesModulo ?? [];
   const htmlSecoesModulo = htmlAnalisePorModulo(secoesModulo);
@@ -330,92 +434,122 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
       return String(i).padStart(2, '0');
     };
   })();
-  const nSintese = numSec();
-  const nAnaliseArea = temAnalisePorArea ? numSec() : null;
-  const nKpi = numSec();
-  const nPanorama = numSec();
-  const nRir = numSec();
-  const nDestaques = numSec();
-  const nRf = numSec();
-  const nDeclaracao = numSec();
 
-  const secaoAnalisePorArea = temAnalisePorArea
-    ? `
-        <section class="rfo-sec rfo-sec--quebra">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nAnaliseArea}</span>Análise por área</h2>
-          <p class="rfo-nota">Comentários por módulo elaborados pela análise assistida (recebimentos, RIR, RNC, atendimentos, etc.).</p>
-          ${htmlSecoesModulo}
-        </section>`
-    : '';
+  const secoes: SecaoRfo[] = [
+    {
+      id: 'rfo-sintese',
+      num: numSec(),
+      titulo: 'Síntese executiva',
+      corpo: `
+        <span class="rfo-badge-ia">${esc(badgeIa)}</span>
+        ${ap.ia?.notaAnalise ? `<p class="rfo-nota">${esc(ap.ia.notaAnalise)}</p>` : ''}
+        <div class="rfo-sintese">${sinteseParagrafos}</div>
+        <div class="rfo-alertas">${alertasHtml}</div>`,
+    },
+  ];
+
+  if (temAnalisePorArea) {
+    secoes.push({
+      id: 'rfo-analise-area',
+      num: numSec(),
+      titulo: 'Análise por área',
+      corpo: `<p class="rfo-nota">Comentários por módulo (recebimentos, RIR, RNC, atendimentos, etc.).</p>${htmlSecoesModulo}`,
+    });
+  }
+
+  secoes.push(
+    {
+      id: 'rfo-indicadores',
+      num: numSec(),
+      titulo: 'Indicadores da obra',
+      corpo: `<div class="rfo-kpi-row">${kpiHtml}</div>`,
+    },
+    {
+      id: 'rfo-panorama',
+      num: numSec(),
+      titulo: 'Panorama por módulo',
+      corpo: `<div class="rfo-mod-grid">${panoramaHtml}</div>`,
+    },
+    {
+      id: 'rfo-rir',
+      num: numSec(),
+      titulo: 'RIR — certificados e laudos',
+      corpo: htmlPainelRir(ap.rirCertificados),
+    },
+    {
+      id: 'rfo-destaques',
+      num: numSec(),
+      titulo: 'Ocorrências em destaque',
+      corpo: `<p class="rfo-nota">${esc(notaDestaques)}</p>${htmlDestaquesTabela(dados)}`,
+    },
+    {
+      id: 'rfo-fotos',
+      num: numSec(),
+      titulo: 'Evidências fotográficas prioritárias',
+      corpo: `<p class="rfo-nota">Relatórios fotográficos ranqueados por relevância (RNC, divergências, laudo RIR e termos de ocorrência).</p>${htmlRfDestaques(dados)}`,
+    },
+    {
+      id: 'rfo-declaracao',
+      num: numSec(),
+      titulo: 'Declaração de encerramento',
+      corpo: `
+        <div class="rfo-declaracao-box">
+          <p>Este relatório certifica o encerramento documental do projeto com base nos dados do I.S.O PRO. O documento tem caráter <strong>executivo</strong>, elaborado para apresentação ao cliente. A trilha completa permanece no sistema e no export <strong>Excel (ZIP)</strong>.</p>
+          <p class="rfo-aviso-excel">Listagem integral de todas as linhas: exporte o pacote Excel na tela do Relatório Final de Obra.</p>
+          <div class="rfo-assinatura">
+            <div><div class="rfo-assinatura-linha">Responsável técnico / empresa</div></div>
+            <div><div class="rfo-assinatura-linha">Cliente / fiscalização — data: ___/___/______</div></div>
+          </div>
+        </div>`,
+    },
+  );
+
+  const chromeCliente = esc(contexto.cliente || contexto.projeto || '—');
+  const printChrome = `
+    <div class="rfo-print-chrome rfo-print-chrome--top" aria-hidden="true">
+      <span><strong>${esc(rotuloNumero)}</strong> · Relatório Final de Obra</span>
+      <span>${chromeCliente}</span>
+    </div>
+    <div class="rfo-print-chrome rfo-print-chrome--bottom" aria-hidden="true">
+      I.S.O PRO · ${esc(geradoFmt)}${segRodape}
+    </div>`;
 
   const corpo = `
     ${barra}
+    ${printChrome}
     <div class="rfo-page">
       <header class="rfo-capa">
-        <div style="display:flex;gap:24px;align-items:flex-start;justify-content:space-between">
-          ${logo ? `<div style="flex:0 0 140px">${htmlBlocoLogoInstitucional(logo)}</div>` : ''}
-          <div style="flex:1">
-            <p class="rfo-capa-kicker">I.S.O PRO · Gestão de materiais</p>
-            <h1>Relatório Final de Obra</h1>
-            <p class="rfo-capa-sub">Documento executivo para apresentação ao cliente — síntese inteligente da operação e evidências relevantes</p>
+        <div class="rfo-capa-inner">
+          <div class="rfo-capa-top">
+            ${logo ? `<div class="rfo-capa-logo">${htmlBlocoLogoInstitucional(logo, true)}</div>` : ''}
+            <p class="rfo-capa-marca">I.S.O PRO · Gestão de Materiais</p>
+          </div>
+          <div class="rfo-capa-titulo-wrap">
+            <p class="rfo-capa-eyebrow">Documento executivo</p>
+            <h1><span class="rfo-capa-titulo-l1">Relatório Final</span><span class="rfo-capa-titulo-l2">de Obra</span></h1>
+            <p class="rfo-capa-sub">Apresentação ao cliente — síntese da operação e evidências relevantes do projeto</p>
+          </div>
+          <div class="rfo-capa-numero-wrap">
             <span class="rfo-capa-numero">${esc(numeroCapa)}</span>
           </div>
+          <div class="rfo-capa-meta-box">
+            <dl class="rfo-capa-meta">
+              <div><dt>Cliente / UO</dt><dd>${esc(contexto.cliente || '—')}</dd></div>
+              <div><dt>Projeto</dt><dd>${esc(contexto.projeto || '—')}</dd></div>
+              <div><dt>Contrato / CNPJ</dt><dd>${esc(contexto.contrato || '—')}</dd></div>
+              <div><dt>Local</dt><dd>${esc(contexto.local || '—')}</dd></div>
+              <div><dt>Emitido em</dt><dd>${esc(geradoFmt)}</dd></div>
+              <div><dt>Modo</dt><dd>${analise.usarModoResumido ? 'Executivo (alto volume)' : 'Completo'}</dd></div>
+            </dl>
+          </div>
         </div>
-        <dl class="rfo-capa-meta" style="margin-top:24px">
-          <div><dt>Cliente / UO</dt><dd>${esc(contexto.cliente || '—')}</dd></div>
-          <div><dt>Projeto</dt><dd>${esc(contexto.projeto || '—')}</dd></div>
-          <div><dt>Contrato</dt><dd>${esc(contexto.contrato || '—')}</dd></div>
-          <div><dt>Local</dt><dd>${esc(contexto.local || '—')}</dd></div>
-          <div><dt>Emitido em</dt><dd>${esc(geradoFmt)}</dd></div>
-          <div><dt>Modo</dt><dd>${analise.usarModoResumido ? 'Executivo (alto volume)' : 'Completo'}</dd></div>
-        </dl>
       </header>
 
       <main class="rfo-body">
-        <section class="rfo-sec">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nSintese}</span>Síntese executiva</h2>
-          <span class="rfo-badge-ia">${esc(badgeIa)}</span>
-          ${ap.ia?.notaAnalise ? `<p class="rfo-nota">${esc(ap.ia.notaAnalise)}</p>` : ''}
-          <div class="rfo-sintese">${sinteseParagrafos}</div>
-          <div class="rfo-alertas">${alertasHtml}</div>
-        </section>
-        ${secaoAnalisePorArea}
-
-        <section class="rfo-sec">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nKpi}</span>Indicadores da obra</h2>
-          <div class="rfo-kpi-row">${kpiHtml}</div>
-        </section>
-
-        <section class="rfo-sec rfo-sec--quebra">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nPanorama}</span>Panorama por módulo</h2>
-          <div class="rfo-mod-grid">${modCards}</div>
-        </section>
-
-        <section class="rfo-sec">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nRir}</span>RIR — certificados e laudos</h2>
-          ${htmlPainelRir(ap.rirCertificados)}
-        </section>
-
-        <section class="rfo-sec rfo-sec--quebra">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nDestaques}</span>Ocorrências em destaque</h2>
-          <p class="rfo-nota">${esc(notaDestaques)}</p>
-          ${htmlDestaquesTabela(dados)}
-        </section>
-
-        <section class="rfo-sec rfo-sec--quebra">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nRf}</span>Evidências fotográficas prioritárias</h2>
-          <p class="rfo-nota">Relatórios fotográficos ranqueados por relevância (vínculo a RNC, divergências, laudo RIR e termos de ocorrência).</p>
-          ${htmlRfDestaques(dados)}
-        </section>
-
-        <section class="rfo-sec">
-          <h2 class="rfo-sec-title"><span class="rfo-sec-num">${nDeclaracao}</span>Declaração de encerramento</h2>
-          <p>Este relatório certifica o encerramento documental do projeto com base nos dados do I.S.O PRO Desktop. O presente documento tem caráter <strong>executivo</strong>, elaborado para apresentação. A trilha completa de registros permanece no sistema e no export <strong>Excel (ZIP)</strong>.</p>
-          <p class="rfo-aviso-excel">Listagem integral de todas as linhas (milhares de registros, se aplicável): exporte o pacote Excel na tela do Relatório Final de Obra.</p>
-        </section>
-
+        ${htmlIndiceRfo(secoes)}
+        ${htmlSecoesRfo(secoes)}
         <footer class="rfo-rodape">
-          <p>I.S.O PRO Desktop · Relatório Final de Obra · ${esc(rotuloNumero)} · ${esc(geradoFmt)}${segRodape}</p>
+          <p>I.S.O PRO · Relatório Final de Obra · ${esc(rotuloNumero)} · ${esc(geradoFmt)}${segRodape}</p>
         </footer>
       </main>
     </div>

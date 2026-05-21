@@ -88,13 +88,16 @@ describe('numeracao RFO', () => {
 });
 
 describe('montarHtmlRelatorioFinalObra', () => {
-  it('inclui numero e secoes principais', () => {
+  it('inclui numero, indice e secoes principais sem quebras forcadas', () => {
     const html = montarHtmlRelatorioFinalObra(dadosVazios, { incluirBarraPreVisualizacao: false });
     expect(html).toContain('RFO-2026-00001');
     expect(html).toContain('Relatório Final de Obra');
+    expect(html).toContain('rfo-indice');
     expect(html).toContain('Síntese executiva');
     expect(html).toContain('RIR — certificados');
     expect(html).toContain('Ocorrências em destaque');
     expect(html).toContain('Declaração de encerramento');
+    expect(html).not.toContain('rfo-sec--quebra');
+    expect(html).toContain('rfo-print-chrome');
   });
 });
