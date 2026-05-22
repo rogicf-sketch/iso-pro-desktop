@@ -1,6 +1,7 @@
 import { Button } from '../../../components/ui/Button';
 import { formatBytesPtBr, type StorageHealthSnapshot } from '../../../lib/storageHealth';
-import { IconDatabaseStack, IconLocalStorage, IconMemoryChip, IconSaudePulse } from './dashboardEnvIcons';
+import { DashboardRingGauge } from './DashboardRingGauge';
+import { IconDatabaseStack, IconLocalStorage, IconMemoryChip } from './dashboardEnvIcons';
 
 type Props = {
   snapshot: StorageHealthSnapshot | null;
@@ -49,10 +50,22 @@ export function DashboardSistemaAmbiente({ snapshot, loading, onRefresh }: Props
 
       {snapshot ? (
         <div className="dashboard-env-grid">
-          <article className="dashboard-env-card">
+          <article className="dashboard-env-card dashboard-env-card--gauge">
             <span className="dashboard-env-card-title">Saude do armazenamento</span>
-            <div className="dashboard-env-icon-ring">
-              <IconSaudePulse className="dashboard-env-svg" />
+            <div className="dashboard-env-gauge-wrap">
+              {showBar ? (
+                <DashboardRingGauge
+                  label={`${pct}%`}
+                  percent={pct ?? 0}
+                  sublabel="cota app"
+                  tone={snapshot.saudeTone}
+                  size={96}
+                />
+              ) : (
+                <div className="dashboard-env-icon-ring">
+                  <span className="dashboard-env-card-value dashboard-env-card-value--compact">—</span>
+                </div>
+              )}
             </div>
             <div className="dashboard-env-card-body">
               <strong className="dashboard-env-card-value">{snapshot.saudeLabel}</strong>
@@ -64,7 +77,7 @@ export function DashboardSistemaAmbiente({ snapshot, loading, onRefresh }: Props
               {showBar ? (
                 <div className="dashboard-env-mini-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
                   <div
-                    className={`dashboard-env-mini-fill dashboard-env-mini-fill--${snapshot.saudeTone}`}
+                    className={`dashboard-env-mini-fill dashboard-env-mini-fill--animated dashboard-env-mini-fill--${snapshot.saudeTone}`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>

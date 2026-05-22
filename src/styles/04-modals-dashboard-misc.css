@@ -1484,3 +1484,323 @@ body.theme-claro .dashboard-env-footer--slate {
   background: linear-gradient(180deg, #e2e8f0 0%, #cbd5e1 100%);
   color: #334155;
 }
+
+/* Dashboard evoluido — nuvem, KPIs, alertas, anel */
+.dashboard-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dashboard-section-lead {
+  margin-top: 6px;
+  max-width: 70ch;
+}
+
+.dashboard-nuvem {
+  border-radius: 16px;
+  border: 1px solid var(--surface-border);
+  padding: 18px 20px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.55) 0%, var(--surface-bg) 55%);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.dashboard-nuvem--ok {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.dashboard-nuvem--warning {
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.dashboard-nuvem--danger {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.dashboard-nuvem--pulse {
+  animation: dashboard-nuvem-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes dashboard-nuvem-pulse {
+  0%,
+  100% {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  }
+  50% {
+    box-shadow: 0 12px 36px rgba(248, 113, 113, 0.25);
+  }
+}
+
+.dashboard-nuvem__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dashboard-nuvem__body {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.dashboard-nuvem__title {
+  display: block;
+  font-size: 1.15rem;
+  margin-bottom: 6px;
+}
+
+.dashboard-nuvem__meta {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+}
+
+.dashboard-nuvem__meta--muted {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.dashboard-ring {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.dashboard-ring__svg {
+  display: block;
+}
+
+.dashboard-ring__track {
+  stroke: rgba(148, 163, 184, 0.25);
+}
+
+.dashboard-ring__fill--animated {
+  transition: stroke-dashoffset 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dashboard-ring__center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.dashboard-ring__value {
+  font-size: 1.1rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.dashboard-ring__sub {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.dashboard-kpi-grid .metric-card {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.dashboard-kpi--clickable {
+  cursor: pointer;
+}
+
+.dashboard-kpi--clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+}
+
+.dashboard-kpi--clickable:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.8);
+  outline-offset: 2px;
+}
+
+.dashboard-kpi__value {
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
+}
+
+.dashboard-kpi--ok {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.dashboard-kpi--warning {
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+.dashboard-kpi--warning .dashboard-kpi__value {
+  color: #fbbf24;
+}
+
+.dashboard-kpi--danger {
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.dashboard-kpi--danger .dashboard-kpi__value {
+  color: #f87171;
+}
+
+.dashboard-kpi__cta {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(147, 197, 253, 0.95);
+}
+
+.dashboard-alert-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.dashboard-alert {
+  border-radius: 12px;
+  border: 1px solid var(--surface-border);
+  padding: 14px 16px;
+  animation: dashboard-alert-in 0.45s ease both;
+}
+
+@keyframes dashboard-alert-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dashboard-alert--critical {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: linear-gradient(160deg, rgba(127, 29, 29, 0.35) 0%, var(--surface-bg) 70%);
+}
+
+.dashboard-alert--critical.dashboard-alert--clickable:hover {
+  animation: dashboard-alert-in 0.45s ease both, dashboard-alert-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dashboard-alert-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.2);
+  }
+}
+
+.dashboard-alert--warning {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: linear-gradient(160deg, rgba(120, 53, 15, 0.28) 0%, var(--surface-bg) 70%);
+}
+
+.dashboard-alert--info {
+  border-color: rgba(96, 165, 250, 0.35);
+}
+
+.dashboard-alert--clickable {
+  cursor: pointer;
+}
+
+.dashboard-alert--clickable:hover {
+  transform: translateY(-1px);
+}
+
+.dashboard-alert__badge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dashboard-alert--critical .dashboard-alert__badge {
+  background: rgba(248, 113, 113, 0.25);
+  color: #fecaca;
+}
+
+.dashboard-alert--warning .dashboard-alert__badge {
+  background: rgba(251, 191, 36, 0.22);
+  color: #fef3c7;
+}
+
+.dashboard-alert--info .dashboard-alert__badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #bfdbfe;
+}
+
+.dashboard-alert-empty {
+  padding: 28px 20px;
+  border-radius: 12px;
+  border: 1px dashed rgba(52, 211, 153, 0.45);
+  text-align: center;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.dashboard-alert-empty strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #6ee7b7;
+}
+
+.dashboard-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 14px 0 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-top: 1px solid var(--surface-border);
+}
+
+.dashboard-env-gauge-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 8px auto 4px;
+}
+
+.dashboard-env-mini-fill--animated {
+  transition: width 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dashboard-env-card-value--compact {
+  font-size: 1.5rem;
+}
+
+body.theme-claro .dashboard-nuvem {
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 72%);
+}
+
+body.theme-claro .dashboard-alert--critical {
+  background: linear-gradient(160deg, #fef2f2 0%, #ffffff 72%);
+}
+
+body.theme-claro .dashboard-alert--warning {
+  background: linear-gradient(160deg, #fffbeb 0%, #ffffff 72%);
+}
+
+body.theme-claro .dashboard-alert-empty {
+  background: #ecfdf5;
+}
+
+body.theme-claro .dashboard-alert-empty strong {
+  color: #047857;
+}
