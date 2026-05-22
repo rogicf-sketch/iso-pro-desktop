@@ -207,7 +207,7 @@ export function useEtiquetas() {
       setError('Selecione ao menos uma etiqueta.');
       return;
     }
-    const etiquetas = listarEtiquetasPorIds(ids);
+    const etiquetas = await listarEtiquetasPorIds(ids);
     const elegiveis = etiquetas.filter((e) => podeAtualizarStatusEtiqueta(e, status) === null);
     if (!elegiveis.length) {
       setError('Nenhuma etiqueta selecionada pode receber este status.');
