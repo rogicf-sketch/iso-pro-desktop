@@ -1,5 +1,13 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import {
+  commitIsoProSnapshotWrite,
+  readIsoProSnapshotPayload,
+  readIsoProSnapshotPayloadForWrite,
+} from '../../../lib/isoProSnapshot';
+import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
+import { hasSupabaseConfig } from '../../../lib/supabase';
+import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
@@ -8,6 +16,12 @@ import { parseEtiquetasPersistidas } from '../schemas/etiquetaPersistido.zod';
 
 function etiquetasStorageKey(): string {
   return getScopedIsoProStorageKey('iso-pro-desktop-etiquetas');
+}
+
+function bloqueioLocalEtiquetas(tamanhoListaGravacao: number): string | null {
+  return mensagemSeSubstituirLocalPerderiaCadastros([
+    { storageKey: etiquetasStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'etiqueta(s)' },
+  ]);
 }
 
 const seedData: Etiqueta[] = [
@@ -72,15 +86,60 @@ function writeAll(items: Etiqueta[]) {
   localStorage.setItem(etiquetasStorageKey(), JSON.stringify(items));
 }
 
-function loadEtiquetas() {
-  return readAll();
+function parseSnapshotEtiquetasRaw(raw: unknown): Etiqueta[] {
+  if (!raw) return [];
+  const validated = parseEtiquetasPersistidas(raw);
+  return validated ?? [];
+}
+
+type SnapshotPayload = {
+  etiquetas?: unknown;
+};
+
+async function writeSnapshotEtiquetas(items: Etiqueta[]): Promise<void> {
+  await commitIsoProSnapshotWrite(async () => {
+    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+    return {
+      baselineUpdatedAt,
+      nextPayload: {
+        ...currentPayload,
+        etiquetas: items,
+        dataAtualizacao: new Date().toISOString(),
+      },
+    };
+  });
+}
+
+/**
+ * Se a nuvem nao tem etiquetas e este PC tem lista local, promove uma vez para o snapshot (nao perde cadastro antigo).
+ */
+async function garantirMigracaoLocalParaNuvemSeNecessario(): Promise<void> {
+  if (!hasSupabaseConfig()) return;
+  const local = readAll();
+  if (local.length === 0) return;
+
+  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const nuvem = parseSnapshotEtiquetasRaw(payload.etiquetas);
+  if (nuvem.length > 0) return;
+
+  await writeSnapshotEtiquetas(local);
+}
+
+async function readSnapshotEtiquetas(): Promise<Etiqueta[]> {
+  await garantirMigracaoLocalParaNuvemSeNecessario();
+  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  return parseSnapshotEtiquetasRaw(payload.etiquetas);
+}
+
+async function loadEtiquetas(): Promise<Etiqueta[]> {
+  return hasSupabaseConfig() ? await readSnapshotEtiquetas().catch(() => readAll()) : readAll();
 }
 
 /** Retorna etiquetas completas para os ids informados (ordem nao garantida). */
-export function listarEtiquetasPorIds(ids: string[]): Etiqueta[] {
+export async function listarEtiquetasPorIds(ids: string[]): Promise<Etiqueta[]> {
   if (!ids.length) return [];
   const set = new Set(ids);
-  return loadEtiquetas().filter((e) => set.has(e.id));
+  return (await loadEtiquetas()).filter((e) => set.has(e.id));
 }
 
 function normalizeText(value: string) {
@@ -155,7 +214,7 @@ function itemMatchesTokens(item: Etiqueta, tokens: string[], textoPorRecebimento
 export type EtiquetaFiltroSemPagina = Omit<EtiquetaFiltro, 'page' | 'pageSize'>;
 
 async function aplicarFiltrosEtiquetas(filtro: EtiquetaFiltroSemPagina): Promise<Etiqueta[]> {
-  let items = [...loadEtiquetas()];
+  let items = [...(await loadEtiquetas())];
 
   if (filtro.modelo !== 'todos') items = items.filter((item) => item.modelo === filtro.modelo);
   if (filtro.formato !== 'todos') items = items.filter((item) => item.formato === filtro.formato);
@@ -211,12 +270,32 @@ export function validateEtiqueta(data: EtiquetaFormData): string | null {
 }
 
 export async function listarEtiquetas(filtro: EtiquetaFiltro): Promise<ServiceResult<PaginatedResult<EtiquetaListItem>>> {
-  const items = await aplicarFiltrosEtiquetas({
-    busca: filtro.busca,
-    modelo: filtro.modelo,
-    formato: filtro.formato,
-    status: filtro.status,
+  const fallbackResult = await withLocalFallback({
+    shouldTryRemote: hasSupabaseConfig(),
+    loadRemote: () => readSnapshotEtiquetas(),
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar etiquetas no Supabase.',
   });
+
+  let items = [...fallbackResult.data];
+  if (filtro.modelo !== 'todos') items = items.filter((item) => item.modelo === filtro.modelo);
+  if (filtro.formato !== 'todos') items = items.filter((item) => item.formato === filtro.formato);
+  if (filtro.status !== 'todos') items = items.filter((item) => item.status === filtro.status);
+
+  const buscaRaw = filtro.busca.trim();
+  if (buscaRaw) {
+    const tokens = buscaRaw.toLowerCase().split(/\s+/).filter(Boolean);
+    const textoPorRecebimentoId = new Map<string, string>();
+    if (items.length) {
+      const recebimentos = await carregarRecebimentosCompletos();
+      for (const r of recebimentos) {
+        textoPorRecebimentoId.set(r.id, textoRecebimentoExpandidoParaBusca(r));
+      }
+    }
+    items = items.filter((item) => itemMatchesTokens(item, tokens, textoPorRecebimentoId));
+  }
+
+  items = items.sort((a, b) => b.dataCriacao.localeCompare(a.dataCriacao));
 
   const start = (filtro.page - 1) * filtro.pageSize;
   const end = start + filtro.pageSize;
@@ -229,17 +308,21 @@ export async function listarEtiquetas(filtro: EtiquetaFiltro): Promise<ServiceRe
       page: filtro.page,
       pageSize: filtro.pageSize,
     },
+    meta: fallbackResult.meta,
   };
 }
 
 export async function buscarEtiquetaPorId(id: string): Promise<ServiceResult<Etiqueta>> {
-  const item = loadEtiquetas().find((etiqueta) => etiqueta.id === id);
+  const item = (await loadEtiquetas()).find((etiqueta) => etiqueta.id === id);
   if (!item) return { success: false, error: 'Etiqueta nao encontrada.' };
   return { success: true, data: item };
 }
 
 export async function salvarEtiqueta(payload: EtiquetaFormData, currentId?: string): Promise<ServiceResult<Etiqueta>> {
-  const items = loadEtiquetas();
+  const blockedEtq = whenBusinessWriteBlockedResult<Etiqueta>();
+  if (blockedEtq) return blockedEtq;
+
+  const items = await loadEtiquetas();
   const normalized: EtiquetaFormData = {
     ...payload,
     titulo: normalizeText(payload.titulo),
@@ -250,15 +333,21 @@ export async function salvarEtiqueta(payload: EtiquetaFormData, currentId?: stri
     observacoes: normalizeText(payload.observacoes),
   };
 
-  const blockedEtq = whenBusinessWriteBlockedResult<Etiqueta>();
-  if (blockedEtq) return blockedEtq;
-
   if (currentId) {
     const index = items.findIndex((item) => item.id === currentId);
     if (index === -1) return { success: false, error: 'Etiqueta nao encontrada.' };
     items[index] = { ...items[index], ...normalized };
-    writeAll(items);
-    return { success: true, data: items[index] };
+    if (hasSupabaseConfig()) {
+      const bloqueio = bloqueioLocalEtiquetas(items.length);
+      if (bloqueio) return { success: false, error: bloqueio };
+    }
+    return executeWrite({
+      shouldWriteRemote: hasSupabaseConfig(),
+      writeRemote: () => writeSnapshotEtiquetas(items),
+      writeLocal: () => writeAll(items),
+      successData: items[index],
+      fallbackMessage: 'Falha ao salvar etiqueta no Supabase.',
+    });
   }
 
   const created: Etiqueta = {
@@ -268,17 +357,36 @@ export async function salvarEtiqueta(payload: EtiquetaFormData, currentId?: stri
     dataCriacao: new Date().toISOString(),
   };
   items.push(created);
-  writeAll(items);
-  return { success: true, data: created };
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalEtiquetas(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
+  return executeWrite({
+    shouldWriteRemote: hasSupabaseConfig(),
+    writeRemote: () => writeSnapshotEtiquetas(items),
+    writeLocal: () => writeAll(items),
+    successData: created,
+    fallbackMessage: 'Falha ao salvar etiqueta no Supabase.',
+  });
 }
 
 export async function atualizarStatusEtiqueta(id: string, status: Etiqueta['status']): Promise<ServiceResult<Etiqueta>> {
   const blockedStatus = whenBusinessWriteBlockedResult<Etiqueta>();
   if (blockedStatus) return blockedStatus;
-  const items = loadEtiquetas();
+
+  const items = await loadEtiquetas();
   const index = items.findIndex((item) => item.id === id);
   if (index === -1) return { success: false, error: 'Etiqueta nao encontrada.' };
   items[index] = { ...items[index], status };
-  writeAll(items);
-  return { success: true, data: items[index] };
+  if (hasSupabaseConfig()) {
+    const bloqueio = bloqueioLocalEtiquetas(items.length);
+    if (bloqueio) return { success: false, error: bloqueio };
+  }
+  return executeWrite({
+    shouldWriteRemote: hasSupabaseConfig(),
+    writeRemote: () => writeSnapshotEtiquetas(items),
+    writeLocal: () => writeAll(items),
+    successData: items[index],
+    fallbackMessage: 'Falha ao atualizar etiqueta no Supabase.',
+  });
 }

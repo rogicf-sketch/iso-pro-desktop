@@ -8,7 +8,7 @@
 |-------|--------|
 | Obra / ambiente | |
 | URL produção | https://isoprogestaodemateriais.com.br |
-| Versão testada | 0.1.10 |
+| Versão testada | 0.1.11 |
 | Data | |
 | Responsável | |
 
@@ -44,13 +44,13 @@ Marque **OK** só se: (1) mensagem de sucesso ao salvar; (2) registo visível no
 | **RNC** | RNC teste | Salvar | [ ] | [ ] | [ ] |
 | **Utilizadores** | Utilizador teste (perfil limitado) | Salvar | [ ] | [ ] | [ ] |
 | **Relatório fotográfico** | RF teste com 1 foto | Salvar | [ ] | [ ] | [ ] |
+| **Etiquetas** | Etiqueta teste `GO-LIVE-05` | Salvar | [ ] | [ ] | [ ] |
 | **Relatório Final de Obra** | Pré-visualizar / gerar número | OK sem erro | [ ] | — | [ ] |
 
-**Exceções (não usam snapshot principal):**
+**Outros (fora do snapshot operacional principal):**
 
 | Módulo | Referência | Teste mínimo | OK? |
 |--------|------------|--------------|-----|
-| **Etiquetas** | Só neste PC | Criar etiqueta teste; anotar que **não** replica na nuvem | [ ] |
 | **Configurações** | Local + invalida cache nuvem ao salvar Supabase | Alterar texto de obra → Salvar configurações | [ ] |
 | **Mobile (dispositivos)** | Nuvem | Registar dispositivo teste | [ ] |
 
@@ -82,7 +82,7 @@ Marque **OK** só se: (1) mensagem de sucesso ao salvar; (2) registo visível no
 - [ ] Não usar **Limpar cadastros** / fábrica sem backup e sem alinhamento da equipa  
 - [ ] Não trabalhar longamente **sem** Supabase em produção (build bloqueia gravação local só)  
 - [ ] Não ignorar aviso de **conflito** — sempre atualizar lista e gravar de novo  
-- [ ] Não assumir que **Etiquetas** no PC A aparecem no PC B (só local)
+- [ ] Não ignorar primeira abertura de **Etiquetas** após upgrade (migração automática PC → nuvem se snapshot vazio)
 
 ---
 
