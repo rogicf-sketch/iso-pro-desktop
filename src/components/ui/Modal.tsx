@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { IconFullscreenEnter, IconFullscreenExit } from './FullscreenIcons';
+import { ModalFormGuardProvider, useModalBeforeUnloadGuard, useModalRequestClose } from './modalFormGuard';
 
 export type ModalSize = 'default' | 'wide' | 'fullscreen';
 
@@ -20,6 +21,8 @@ type Props = {
   browserFullscreen?: boolean;
   /** Fecha ao clicar no fundo escurecido. Padrao `false` para nao perder dados de formulario. */
   closeOnBackdropClick?: boolean;
+  /** Formulario com alteracoes (quando nao usa `useModalFormDirty` nos filhos). */
+  dirty?: boolean;
 };
 
 function resolveModalSize(wide: boolean | undefined, size: ModalSize | undefined): ModalSize {
@@ -34,18 +37,28 @@ function modalCardClassName(resolved: ModalSize): string {
   return 'modal-card';
 }
 
-export function Modal({
+function ModalChrome({
   title,
-  open,
   onClose,
   children,
-  wide = false,
-  size,
-  browserFullscreen = false,
-  closeOnBackdropClick = false,
-}: Props) {
+  browserFullscreen,
+  closeOnBackdropClick,
+  resolved,
+  backdropClass,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  browserFullscreen: boolean;
+  closeOnBackdropClick: boolean;
+  resolved: ModalSize;
+  backdropClass: string;
+}) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [browserFs, setBrowserFs] = useState(false);
+  const requestClose = useModalRequestClose(onClose);
+
+  useModalBeforeUnloadGuard(true);
 
   useEffect(() => {
     function sync() {
@@ -55,13 +68,15 @@ export function Modal({
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
-  useLayoutEffect(() => {
-    if (open) return;
-    const fs = document.fullscreenElement;
-    if (fs instanceof HTMLElement && fs.dataset.modalFsHost === '1') {
-      void document.exitFullscreen().catch(() => undefined);
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      requestClose();
     }
-  }, [open]);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [requestClose]);
 
   async function toggleBrowserFullscreen() {
     const el = cardRef.current;
@@ -77,14 +92,8 @@ export function Modal({
     }
   }
 
-  if (!open) return null;
-
-  const resolved = resolveModalSize(wide, size);
-  const backdropClass =
-    resolved === 'fullscreen' ? 'modal-backdrop modal-backdrop--fullscreen' : 'modal-backdrop';
-
   function handleBackdropClick() {
-    if (closeOnBackdropClick) onClose();
+    if (closeOnBackdropClick) requestClose();
   }
 
   return (
@@ -111,7 +120,7 @@ export function Modal({
                 <span className="modal-fs-icon">{browserFs ? <IconFullscreenExit /> : <IconFullscreenEnter />}</span>
               </button>
             ) : null}
-            <button className="icon-button" onClick={onClose} type="button">
+            <button className="icon-button" onClick={requestClose} type="button">
               Fechar
             </button>
           </div>
@@ -119,5 +128,46 @@ export function Modal({
         <div className="modal-body">{children}</div>
       </div>
     </div>
+  );
+}
+
+export function Modal({
+  title,
+  open,
+  onClose,
+  children,
+  wide = false,
+  size,
+  browserFullscreen = false,
+  closeOnBackdropClick = false,
+  dirty = false,
+}: Props) {
+  useLayoutEffect(() => {
+    if (open) return;
+    const fs = document.fullscreenElement;
+    if (fs instanceof HTMLElement && fs.dataset.modalFsHost === '1') {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const resolved = resolveModalSize(wide, size);
+  const backdropClass =
+    resolved === 'fullscreen' ? 'modal-backdrop modal-backdrop--fullscreen' : 'modal-backdrop';
+
+  return (
+    <ModalFormGuardProvider externalDirty={dirty}>
+      <ModalChrome
+        backdropClass={backdropClass}
+        browserFullscreen={browserFullscreen}
+        closeOnBackdropClick={closeOnBackdropClick}
+        onClose={onClose}
+        resolved={resolved}
+        title={title}
+      >
+        {children}
+      </ModalChrome>
+    </ModalFormGuardProvider>
   );
 }

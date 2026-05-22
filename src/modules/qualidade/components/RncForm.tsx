@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { compressImageFileToJpeg } from '../../../lib/imageCompress';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
@@ -64,6 +66,8 @@ export function RncForm({
   const [form, setForm] = useState<RncFormData>(initialValue);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   const [colabAssinaturaNomes, setColabAssinaturaNomes] = useState<string[]>([]);
   const [recSearch, setRecSearch] = useState(() => textoBuscaRecebimentoInicial(initialValue));
   const [recOpen, setRecOpen] = useState(false);
@@ -1001,7 +1005,7 @@ export function RncForm({
       <SnapshotConflictHint show={snapshotConflict} onReload={onReloadAfterConflict} />
       {error ? <div className="error-box">{error}</div> : null}
       <div className="form-actions">
-        <Button onClick={onCancel} variant="ghost">
+        <Button onClick={guardedCancel} variant="ghost">
           Cancelar
         </Button>
         <Button onClick={visualizarRelatorio} type="button" variant="ghost">

@@ -7,12 +7,15 @@ Aplica-se ao **iso-pro-desktop** e ao **iso_pro_mobile** no mesmo projecto Supab
 
 ## 1. Modo produção (uma verdade só)
 
+**Regra:** a **nuvem (Supabase) é sempre a referência**. O `localStorage` neste PC é cópia; gravação de negócio em produção vai **primeiro** para a nuvem (`executeWrite`); só depois espelha local.
+
 | Item | Feito? | Notas / data |
 |------|--------|----------------|
 | URL + chave Supabase **sempre** configurados em produção (PC e builds mobile) | [ ] | |
 | **Mesmo** projecto Supabase no PC e no telemóvel (sem misturar ambientes por engano) | [ ] | |
 | **Materiais em nuvem**: decisão fixa (Ativado **ou** Desativado) alinhada com a equipa — **não** alternar no meio do trabalho | [ ] | |
-| Regra escrita para utilizadores: *sem credenciais = dados só neste PC; com credenciais = dados no servidor* | [ ] | |
+| Regra escrita para utilizadores: *com credenciais = servidor é a verdade; este PC só acelera a leitura* | [ ] | |
+| Checklist de testes por módulo na obra (`CHECKLIST-GO-LIVE.md`) preenchido antes de “fechado” | [ ] | |
 | Exportação manual ocasional (CSV/backup dos módulos que permitirem) como rede extra | [ ] | |
 
 ---

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { listarColaboradores } from '../../colaboradores/services/colaboradores.service';
 import type { Colaborador } from '../../colaboradores/types/colaborador.types';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
@@ -68,6 +70,8 @@ export function UsuarioForm({
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   const [authLinkDraft, setAuthLinkDraft] = useState('');
   const [authLinkBusy, setAuthLinkBusy] = useState(false);
   const [authLinkError, setAuthLinkError] = useState('');
@@ -401,7 +405,7 @@ export function UsuarioForm({
         <Button disabled={submitting} type="submit">
           {submitting ? 'Salvando...' : 'Salvar usuario'}
         </Button>
-        <Button onClick={onCancel} variant="ghost">
+        <Button onClick={guardedCancel} variant="ghost">
           Cancelar
         </Button>
       </div>

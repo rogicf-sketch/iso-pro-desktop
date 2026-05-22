@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { Button } from '../../../components/ui/Button';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
@@ -18,6 +20,8 @@ export function FornecedorForm({ initialValue, onCancel, onSubmit, onReloadAfter
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,7 +62,7 @@ export function FornecedorForm({ initialValue, onCancel, onSubmit, onReloadAfter
         <Button disabled={submitting} type="submit">
           {submitting ? 'Salvando...' : 'Salvar fornecedor'}
         </Button>
-        <Button onClick={onCancel} variant="ghost">
+        <Button onClick={guardedCancel} variant="ghost">
           Cancelar
         </Button>
       </div>

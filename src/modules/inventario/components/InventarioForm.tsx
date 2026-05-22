@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { Button } from '../../../components/ui/Button';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
@@ -26,6 +28,8 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
   const [form, setForm] = useState<InventarioFormData>(initialValue);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   const hasDivergence = form.itens.some((item) => item.quantidadeContada !== item.saldoSistema);
 
   function updateItem(index: number, patch: Partial<InventarioItem>) {
@@ -178,7 +182,7 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
       {error ? <div className="error-box">{error}</div> : null}
 
       <div className="form-actions">
-        <Button onClick={onCancel} variant="ghost">
+        <Button onClick={guardedCancel} variant="ghost">
           Cancelar
         </Button>
         <Button type="submit">Salvar inventario</Button>

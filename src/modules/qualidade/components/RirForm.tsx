@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
@@ -76,6 +78,8 @@ export function RirForm({
   const [form, setForm] = useState<RirFormData>(initialValue);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   /** Por defeito ligado em novo RIR: esconde NFs que já têm RIR ativo. */
   const [somenteSemRir, setSomenteSemRir] = useState(() => !editId);
   const [recSearch, setRecSearch] = useState(() => textoBuscaRecebimentoInicialRir(initialValue));
@@ -818,7 +822,7 @@ export function RirForm({
       <SnapshotConflictHint onReload={onReloadAfterConflict} show={snapshotConflict} />
       {error ? <div className="error-box">{error}</div> : null}
       <div className="form-actions">
-        <Button onClick={onCancel} type="button" variant="ghost">
+        <Button onClick={guardedCancel} type="button" variant="ghost">
           Cancelar
         </Button>
         <Button onClick={() => preview()} type="button" variant="ghost">

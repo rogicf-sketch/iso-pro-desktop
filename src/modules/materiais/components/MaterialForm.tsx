@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { Button } from '../../../components/ui/Button';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
 import type { MaterialFormData } from '../types/material.types';
@@ -24,6 +26,8 @@ export function MaterialForm({ initialValue, disciplinas, unidades, onCancel, on
   const [form, setForm] = useState<MaterialFormData>(initialValue);
   const [error, setError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
 
   const opcoesDisciplina = useMemo(() => opcoesSelectComValorAtual(disciplinas, form.disciplina), [disciplinas, form.disciplina]);
   const opcoesUnidade = useMemo(() => opcoesSelectComValorAtual(unidades, form.unidade), [unidades, form.unidade]);
@@ -149,7 +153,7 @@ export function MaterialForm({ initialValue, disciplinas, unidades, onCancel, on
       {error ? <div className="error-box">{error}</div> : null}
 
       <div className="form-actions">
-        <Button onClick={onCancel} variant="ghost">
+        <Button onClick={guardedCancel} variant="ghost">
           Cancelar
         </Button>
         <Button disabled={isSaving} type="submit">

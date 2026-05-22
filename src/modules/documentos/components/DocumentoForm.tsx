@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { Button } from '../../../components/ui/Button';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
@@ -21,6 +23,8 @@ export function DocumentoForm({ initialValue, onCancel, onSubmit, onReloadAfterC
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   const [metricasPorCodigo, setMetricasPorCodigo] = useState<Map<string, MetricasPorCodigoMaterial>>(new Map());
   const errorBoxRef = useRef<HTMLDivElement>(null);
   const isEditing = Boolean(initialValue.numero || initialValue.descricao || initialValue.itens.length);
@@ -121,7 +125,7 @@ export function DocumentoForm({ initialValue, onCancel, onSubmit, onReloadAfterC
       ) : null}
 
       <div className="form-actions">
-        <Button onClick={onCancel} variant="ghost">
+        <Button onClick={guardedCancel} variant="ghost">
           Cancelar
         </Button>
         <Button disabled={isSaving} type="submit">

@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { Button } from '../../../components/ui/Button';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
@@ -17,6 +19,8 @@ type Props = {
 export function EtiquetaForm({ initialValue, onCancel, onApplyPreset, onSubmit }: Props) {
   const [form, setForm] = useState<EtiquetaFormData>(initialValue);
   const [error, setError] = useState('');
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   const isThermal = form.formato === 'termica_58' || form.formato === 'termica_80';
 
   function handlePreset(modelo: EtiquetaFormData['modelo'], formato: EtiquetaFormData['formato']) {
@@ -93,7 +97,7 @@ export function EtiquetaForm({ initialValue, onCancel, onApplyPreset, onSubmit }
         {error ? <div className="error-box">{error}</div> : null}
 
         <div className="form-actions">
-          <Button onClick={onCancel} variant="ghost">
+          <Button onClick={guardedCancel} variant="ghost">
             Cancelar
           </Button>
           <Button

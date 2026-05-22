@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { AutocompleteField } from '../../../components/ui/AutocompleteField';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
@@ -49,6 +51,8 @@ export function RecebimentoForm({
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
   const [importStaging, setImportStaging] = useState<{
     fileName: string;
     text: string;
@@ -451,7 +455,7 @@ export function RecebimentoForm({
       ) : null}
 
       <div className="form-actions">
-        <Button onClick={onCancel} type="button" variant="ghost">
+        <Button onClick={guardedCancel} type="button" variant="ghost">
           {readOnly ? 'Fechar' : 'Cancelar'}
         </Button>
         {readOnly && podeCorrigirItensNaVisualizacao && !editandoItensNf ? (

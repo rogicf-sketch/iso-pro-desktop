@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { Button } from '../../../components/ui/Button';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
@@ -18,6 +20,8 @@ export function ColaboradorForm({ initialValue, onSubmit, onCancel, onReloadAfte
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [saving, setSaving] = useState(false);
+  const guardedCancel = useModalGuardedClose(onCancel);
+  useModalFormDirty(isPlainFormDirty(initialValue, form));
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,7 +62,7 @@ export function ColaboradorForm({ initialValue, onSubmit, onCancel, onReloadAfte
       {error ? <div className="error-box">{error}</div> : null}
 
       <div className="form-actions">
-        <Button onClick={onCancel} type="button" variant="ghost">
+        <Button onClick={guardedCancel} type="button" variant="ghost">
           Cancelar
         </Button>
         <Button disabled={saving} type="submit">
