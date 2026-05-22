@@ -84,7 +84,7 @@ export function DashboardPage() {
             Valores consolidados da fonte actual (nuvem quando configurada). Clique num cartao para abrir o modulo.
           </p>
         </div>
-        <DashboardCards items={indicators} />
+        <DashboardCards items={indicators} loading={refreshing && indicators.length === 0} replayKey={lastRefresh.getTime()} />
       </div>
 
       <DashboardSistemaAmbiente loading={sistemaLoading} onRefresh={() => void loadAll()} snapshot={sistemaSnapshot} />

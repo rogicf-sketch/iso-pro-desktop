@@ -1801,6 +1801,62 @@ body.theme-claro .dashboard-alert-empty {
   background: #ecfdf5;
 }
 
-body.theme-claro .dashboard-alert-empty strong {
-  color: #047857;
+.dashboard-kpi__value--animating {
+  color: #93c5fd;
+  transform: scale(1.04);
+  transition:
+    transform 0.15s ease,
+    color 0.15s ease;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-kpi__value--animating {
+    transform: none;
+  }
+
+  .dashboard-ring__fill--animated,
+  .dashboard-env-mini-fill--animated {
+    transition: none;
+  }
+}
+
+.dashboard-kpi--skeleton {
+  pointer-events: none;
+  min-height: 140px;
+}
+
+.dashboard-kpi-skeleton-line {
+  display: block;
+  height: 10px;
+  margin: 10px 0;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0.15) 0%, rgba(148, 163, 184, 0.35) 50%, rgba(148, 163, 184, 0.15) 100%);
+  background-size: 200% 100%;
+  animation: dashboard-kpi-shimmer 1.2s ease-in-out infinite;
+}
+
+.dashboard-kpi-skeleton-line--short {
+  width: 45%;
+  margin-top: 4px;
+}
+
+.dashboard-kpi-skeleton-line--tall {
+  height: 36px;
+  width: 35%;
+  margin: 16px 0;
+}
+
+@keyframes dashboard-kpi-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+body.theme-claro .dashboard-kpi-skeleton-line {
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background-size: 200% 100%;
+}
+

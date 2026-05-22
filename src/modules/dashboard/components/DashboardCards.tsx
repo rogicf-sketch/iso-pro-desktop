@@ -4,6 +4,9 @@ import type { DashboardIndicator } from '../types/dashboard.types';
 
 type Props = {
   items: DashboardIndicator[];
+  /** Muda a cada refresh do painel para repetir a animacao dos numeros. */
+  replayKey: number;
+  loading?: boolean;
 };
 
 function toneClass(tone: DashboardIndicator['tone']): string {
@@ -13,10 +16,10 @@ function toneClass(tone: DashboardIndicator['tone']): string {
   return '';
 }
 
-function DashboardKpiCard({ item }: { item: DashboardIndicator }) {
+function DashboardKpiCard({ item, replayKey }: { item: DashboardIndicator; replayKey: number }) {
   const navigate = useNavigate();
   const hasNumeric = typeof item.numericValue === 'number';
-  const animated = useAnimatedNumber(item.numericValue ?? 0);
+  const { value: animated, animating } = useAnimatedNumber(item.numericValue ?? 0, 1100, replayKey);
   const displayValue = hasNumeric ? String(animated) : item.value;
   const clickable = Boolean(item.route);
 
@@ -40,18 +43,32 @@ function DashboardKpiCard({ item }: { item: DashboardIndicator }) {
       title={clickable ? `Abrir ${item.label}` : undefined}
     >
       <span className="metric-label">{item.label}</span>
-      <strong className="dashboard-kpi__value">{displayValue}</strong>
+      <strong className={`dashboard-kpi__value ${animating ? 'dashboard-kpi__value--animating' : ''}`}>{displayValue}</strong>
       <p className="panel-copy">{item.helper}</p>
       {clickable ? <span className="dashboard-kpi__cta">Abrir modulo</span> : null}
     </article>
   );
 }
 
-export function DashboardCards({ items }: Props) {
+export function DashboardCards({ items, replayKey, loading }: Props) {
+  if (loading && items.length === 0) {
+    return (
+      <div className="cards-grid dashboard-kpi-grid">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <article className="metric-card dashboard-kpi dashboard-kpi--skeleton" key={i}>
+            <span className="dashboard-kpi-skeleton-line dashboard-kpi-skeleton-line--short" />
+            <span className="dashboard-kpi-skeleton-line dashboard-kpi-skeleton-line--tall" />
+            <span className="dashboard-kpi-skeleton-line" />
+          </article>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="cards-grid dashboard-kpi-grid">
       {items.map((item) => (
-        <DashboardKpiCard item={item} key={item.label} />
+        <DashboardKpiCard item={item} key={item.label} replayKey={replayKey} />
       ))}
     </div>
   );
