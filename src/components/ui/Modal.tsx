@@ -18,6 +18,8 @@ type Props = {
    * como na pre-visualizacao de etiquetas.
    */
   browserFullscreen?: boolean;
+  /** Fecha ao clicar no fundo escurecido. Padrao `false` para nao perder dados de formulario. */
+  closeOnBackdropClick?: boolean;
 };
 
 function resolveModalSize(wide: boolean | undefined, size: ModalSize | undefined): ModalSize {
@@ -40,6 +42,7 @@ export function Modal({
   wide = false,
   size,
   browserFullscreen = false,
+  closeOnBackdropClick = false,
 }: Props) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [browserFs, setBrowserFs] = useState(false);
@@ -80,8 +83,12 @@ export function Modal({
   const backdropClass =
     resolved === 'fullscreen' ? 'modal-backdrop modal-backdrop--fullscreen' : 'modal-backdrop';
 
+  function handleBackdropClick() {
+    if (closeOnBackdropClick) onClose();
+  }
+
   return (
-    <div className={backdropClass} onClick={onClose} role="presentation">
+    <div className={backdropClass} onClick={handleBackdropClick} role="presentation">
       <div
         ref={cardRef}
         aria-modal="true"
