@@ -19,6 +19,11 @@ import type {
 } from '../types/consultaMaterial.types';
 import type { Material } from '../types/material.types';
 import { buscarMaterialPorLeituraCodigo, carregarMateriaisDoCadastro } from './materiais.service';
+import {
+  calcularLimiteAlertaEstoque,
+  materialEmAlertaEstoquePlanejamento,
+  normalizarPercentualAlertaEstoque,
+} from './materiaisEstoqueCritico.service';
 
 const MAX_DOCUMENTOS_LINHAS = 80;
 const MAX_LOTES = 20;
@@ -164,6 +169,17 @@ export async function consultarMaterialPorCodigo(raw: string): Promise<ServiceRe
   }
 
   const statusGlobal = metricaGlobal ? calcularStatusMaterialPorMetricas(metricaGlobal) : null;
+  const quantidadePlanejada = metricaGlobal?.prevista ?? 0;
+  const percentualAlerta = material ? normalizarPercentualAlertaEstoque(material.estoqueMinimo) : 0;
+  const limiteAlerta =
+    percentualAlerta > 0 && quantidadePlanejada > 0
+      ? calcularLimiteAlertaEstoque(quantidadePlanejada, percentualAlerta)
+      : null;
+  const saldoParaAlerta = saldoMaterial ?? 0;
+  const emAlertaEstoque =
+    percentualAlerta > 0 &&
+    quantidadePlanejada > 0 &&
+    materialEmAlertaEstoquePlanejamento(saldoParaAlerta, quantidadePlanejada, percentualAlerta);
 
   return {
     success: true,
@@ -174,6 +190,10 @@ export async function consultarMaterialPorCodigo(raw: string): Promise<ServiceRe
       saldoAtual: saldoMaterial,
       statusGlobal,
       statusGlobalLabel: statusGlobal ? labelStatusPlanejamento(statusGlobal) : null,
+      quantidadePlanejada,
+      percentualAlerta,
+      limiteAlerta,
+      emAlertaEstoque,
       documentos: linhasDocumentos,
       lotes,
     },

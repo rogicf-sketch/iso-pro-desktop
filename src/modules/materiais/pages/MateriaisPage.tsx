@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { carregarMetricasPlanejamentoPorCodigo } from '../../documentos/services/documentos.service';
+import type { MetricasPorCodigoMaterial } from '../../documentos/services/documentoPlanejamento';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
@@ -8,6 +10,7 @@ import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { MaterialConsultaPanel } from '../components/MaterialConsultaPanel';
+import { MaterialEstoqueCriticoPanel } from '../components/MaterialEstoqueCriticoPanel';
 import { MaterialFilters } from '../components/MaterialFilters';
 import { MaterialForm } from '../components/MaterialForm';
 import { MateriaisListasDominioModal } from '../components/MateriaisListasDominioModal';
@@ -22,14 +25,19 @@ function encurtarCodigoParaLista(codigo: string) {
   return `${codigo.slice(0, MAX_CARACTERES_POR_CODIGO - 3)}...`;
 }
 
-type MateriaisTab = 'cadastro' | 'consulta';
+type MateriaisTab = 'cadastro' | 'consulta' | 'criticos';
 
 export function MateriaisPage() {
   const { canAccessAction } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab: MateriaisTab = searchParams.get('tab') === 'consulta' ? 'consulta' : 'cadastro';
+  const tabParam = searchParams.get('tab');
+  const tab: MateriaisTab =
+    tabParam === 'consulta' ? 'consulta' : tabParam === 'criticos' ? 'criticos' : 'cadastro';
   const consultaQuery = searchParams.get('q') ?? '';
+  const [metricasPlanejamento, setMetricasPlanejamento] = useState<Map<string, MetricasPorCodigoMaterial>>(
+    () => new Map(),
+  );
 
   function setTab(next: MateriaisTab) {
     const nextParams = new URLSearchParams(searchParams);
@@ -37,10 +45,12 @@ export function MateriaisPage() {
       nextParams.delete('tab');
       nextParams.delete('q');
     } else {
-      nextParams.set('tab', 'consulta');
+      nextParams.set('tab', next);
+      if (next !== 'consulta') nextParams.delete('q');
     }
     setSearchParams(nextParams, { replace: true });
   }
+
   const cloudStatus = getSupabaseOperationalStatus();
   const {
     items,
@@ -131,6 +141,11 @@ export function MateriaisPage() {
     resumoUsoExclusao.comUso.length,
   ]);
 
+  useEffect(() => {
+    if (tab !== 'cadastro') return;
+    void carregarMetricasPlanejamentoPorCodigo().then(setMetricasPlanejamento);
+  }, [tab, loading, success]);
+
   return (
     <div className="panel">
       <div className="panel-header panel-header--toolbar">
@@ -202,10 +217,21 @@ export function MateriaisPage() {
         >
           Consulta por codigo
         </button>
+        <button
+          aria-selected={tab === 'criticos'}
+          className={`panel-tab${tab === 'criticos' ? ' panel-tab--active' : ''}`}
+          onClick={() => setTab('criticos')}
+          role="tab"
+          type="button"
+        >
+          Estoque critico
+        </button>
       </div>
 
       {tab === 'consulta' ? (
         <MaterialConsultaPanel autoSearch initialQuery={consultaQuery} />
+      ) : tab === 'criticos' ? (
+        <MaterialEstoqueCriticoPanel />
       ) : (
         <>
       <ModuleHelp>
@@ -322,6 +348,7 @@ export function MateriaisPage() {
             canAdminister={canAdminister}
             canEdit={canEdit}
             items={items}
+            metricasPlanejamento={metricasPlanejamento}
             onEdit={openEditModal}
             onToggleSelect={canAdminister ? toggleSelectMaterialId : undefined}
             onToggleSelectPagina={canAdminister ? toggleSelectMateriaisPaginaAtual : undefined}

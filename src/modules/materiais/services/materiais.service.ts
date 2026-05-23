@@ -18,6 +18,7 @@ import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import type { Material, MaterialFiltro, MaterialFormData, MaterialListItem } from '../types/material.types';
 import { parseMateriaisPersistidos } from '../schemas/materialPersistido.zod';
 import { backfillCodigosBarrasMateriais } from '../utils/backfillCodigosBarrasMateriais';
+import { backfillPercentualAlertaEstoqueMateriais } from '../utils/backfillPercentualAlertaEstoqueMateriais';
 import { gerarProximoCodigoBarrasEan13 } from '../utils/gerarCodigoBarrasEan13';
 import {
   construirDocumentoStagingImportacaoMateriais,
@@ -104,9 +105,13 @@ function readAll(): Material[] {
   const raw = localStorage.getItem(materiaisStorageKey());
   if (!raw) {
     let initial = seedData.map(normalizarMaterialLeitura);
-    const bf = backfillCodigosBarrasMateriais(initial);
-    if (bf.alterou) {
-      initial = bf.next;
+    const bfCb = backfillCodigosBarrasMateriais(initial);
+    if (bfCb.alterou) {
+      initial = bfCb.next;
+    }
+    const bfPct = backfillPercentualAlertaEstoqueMateriais(initial);
+    if (bfPct.alterou) {
+      initial = bfPct.next;
     }
     localStorage.setItem(materiaisStorageKey(), JSON.stringify(initial));
     return initial;
@@ -120,7 +125,21 @@ function readAll(): Material[] {
       return [];
     }
     const withNorm = validated.map(normalizarMaterialLeitura);
-    const { next, alterou } = backfillCodigosBarrasMateriais(withNorm);
+    let next = withNorm;
+    let alterou = false;
+
+    const bfCb = backfillCodigosBarrasMateriais(next);
+    if (bfCb.alterou) {
+      next = bfCb.next;
+      alterou = true;
+    }
+
+    const bfPct = backfillPercentualAlertaEstoqueMateriais(next);
+    if (bfPct.alterou) {
+      next = bfPct.next;
+      alterou = true;
+    }
+
     if (alterou) {
       writeAll(next);
     }
@@ -208,7 +227,21 @@ async function listRemoteMaterials(): Promise<Material[]> {
   }
 
   const items = (data ?? []).map((row) => mapRemoteMaterial(row as RemoteMaterialRow));
-  const { next, alterou } = backfillCodigosBarrasMateriais(items);
+  let next = items;
+  let alterou = false;
+
+  const bfCb = backfillCodigosBarrasMateriais(next);
+  if (bfCb.alterou) {
+    next = bfCb.next;
+    alterou = true;
+  }
+
+  const bfPct = backfillPercentualAlertaEstoqueMateriais(next);
+  if (bfPct.alterou) {
+    next = bfPct.next;
+    alterou = true;
+  }
+
   if (!alterou) {
     return next;
   }
@@ -216,15 +249,24 @@ async function listRemoteMaterials(): Promise<Material[]> {
   const porId = new Map(items.map((m) => [m.id, m]));
   for (const m of next) {
     const antigo = porId.get(m.id);
-    if (antigo && antigo.codigoBarras !== m.codigoBarras) {
-      const { error: upErr } = await supabase
-        .from('materiais')
-        .update({ codigo_barras: m.codigoBarras })
-        .eq('id', Number(m.id))
-        .eq('tenant_id', getActiveTenantId());
-      if (upErr) {
-        throw new Error(upErr.message);
-      }
+    if (!antigo) continue;
+
+    const updates: { codigo_barras?: string; estoque_minimo?: number } = {};
+    if (antigo.codigoBarras !== m.codigoBarras) {
+      updates.codigo_barras = m.codigoBarras;
+    }
+    if (antigo.estoqueMinimo !== m.estoqueMinimo) {
+      updates.estoque_minimo = m.estoqueMinimo;
+    }
+    if (Object.keys(updates).length === 0) continue;
+
+    const { error: upErr } = await supabase
+      .from('materiais')
+      .update(updates)
+      .eq('id', Number(m.id))
+      .eq('tenant_id', getActiveTenantId());
+    if (upErr) {
+      throw new Error(upErr.message);
     }
   }
 

@@ -21,6 +21,22 @@ declare global {
       writeOciUploadContext?: (payload: { cliente: string; projeto: string }) => Promise<
         { ok: true; path: string } | { ok: false; error: string }
       >;
+      verifySmtpMail?: (payload: {
+        smtp: { host: string; port: number; secure: boolean; user: string; pass: string };
+        from: string;
+        to: string[];
+        subject: string;
+        text: string;
+        html: string;
+      }) => Promise<{ ok: true } | { ok: false; error: string }>;
+      sendMail?: (payload: {
+        smtp: { host: string; port: number; secure: boolean; user: string; pass: string };
+        from: string;
+        to: string[];
+        subject: string;
+        text: string;
+        html: string;
+      }) => Promise<{ ok: true } | { ok: false; error: string }>;
     };
   }
 }

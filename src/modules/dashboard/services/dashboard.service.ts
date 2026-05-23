@@ -6,6 +6,7 @@ import { getMobileDeviceIndicators } from '../../mobile/services/mobileDevices.s
 import { listarRecebimentos } from '../../recebimentos/services/recebimentos.service';
 import { listarRir, listarRnc } from '../../qualidade/services/qualidade.service';
 import { getRuntimeSupabaseConfig, getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { listarMateriaisCriticosEstoque } from '../../materiais/services/materiaisEstoqueCritico.service';
 import type {
   DashboardAlert,
   DashboardAlertSeverity,
@@ -130,7 +131,8 @@ export async function getDashboardIndicators(): Promise<DashboardIndicator[]> {
 }
 
 export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
-  const [documentos, recebimentos, inventarios, mobile, rir, rnc, desktopLicenses] = await Promise.all([
+  const [documentos, recebimentos, inventarios, mobile, rir, rnc, desktopLicenses, estoqueCriticos] =
+    await Promise.all([
     collectAllPages((page, pageSize) => listarDocumentos({ busca: '', status: 'todos', page, pageSize })),
     collectAllPages((page, pageSize) => listarRecebimentos({ busca: '', status: 'todos', modo: 'todos', page, pageSize })),
     collectAllPages((page, pageSize) => listarInventarios({ busca: '', status: 'todos', page, pageSize })),
@@ -138,6 +140,7 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
     collectAllPages((page, pageSize) => listarRir({ busca: '', status: 'todos', page, pageSize })),
     collectAllPages((page, pageSize) => listarRnc({ busca: '', status: 'todos', page, pageSize })),
     getDesktopLicenseRegistrySummary(),
+    listarMateriaisCriticosEstoque().catch(() => [] as Awaited<ReturnType<typeof listarMateriaisCriticosEstoque>>),
   ]);
 
   const docsPendentes = documentos.filter((item) => item.status === 'pendente' || item.status === 'parcial').length;
@@ -180,6 +183,16 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
       title: 'Inventario com divergencia',
       detail: `${inventariosComDivergencia} inventario(s) com diferenca entre saldo do sistema e contagem.`,
       route: '/inventario',
+    });
+  }
+
+  if (estoqueCriticos.length > 0) {
+    const qtdCriticos = estoqueCriticos.filter((i) => i.severidade === 'critical').length;
+    alerts.push({
+      severity: qtdCriticos > 0 ? 'critical' : 'warning',
+      title: 'Estoque abaixo do alerta',
+      detail: `${estoqueCriticos.length} material(is) com saldo abaixo do percentual configurado sobre o planejamento.${qtdCriticos > 0 ? ` ${qtdCriticos} critico(s).` : ''}`,
+      route: '/materiais?tab=criticos',
     });
   }
 

@@ -10,6 +10,7 @@ import { parseConfiguracaoJson } from '../schemas/configuracaoPersistido.zod';
 import type { ConfiguracaoSistema, RirProcedimentoCadastroItem } from '../types/configuracao.types';
 import { normalizeIaApiBaseUrl } from '../../../lib/isoProIaApi.service';
 import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
+import { sincronizarConfigAlertaEstoqueParaNuvem } from './syncAlertaEstoqueConfigNuvem.service';
 
 const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
 
@@ -75,6 +76,14 @@ const defaultConfig: ConfiguracaoSistema = {
   relatorioFinalIaApiKey: '',
   relatorioFinalIaModelo: 'gpt-4o-mini',
   relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
+  alertaEstoqueEmailHabilitado: false,
+  alertaEstoqueEmailDestinatarios: '',
+  smtpHost: '',
+  smtpPort: 587,
+  smtpSecure: false,
+  smtpUsuario: '',
+  smtpSenha: '',
+  smtpRemetente: '',
 };
 
 function normalizeRelatorioFinalIaBaseUrl(url: unknown): string {
@@ -157,6 +166,16 @@ export function readConfiguracoes(): ConfiguracaoSistema {
       relatorioFinalIaApiKey: String(parsedConfig.relatorioFinalIaApiKey ?? '').trim(),
       relatorioFinalIaModelo: String(parsedConfig.relatorioFinalIaModelo ?? '').trim() || defaultConfig.relatorioFinalIaModelo,
       relatorioFinalIaBaseUrl: normalizeRelatorioFinalIaBaseUrl(parsedConfig.relatorioFinalIaBaseUrl),
+      alertaEstoqueEmailHabilitado: parsedConfig.alertaEstoqueEmailHabilitado === true,
+      alertaEstoqueEmailDestinatarios: String(parsedConfig.alertaEstoqueEmailDestinatarios ?? '').trim(),
+      smtpHost: String(parsedConfig.smtpHost ?? '').trim(),
+      smtpPort: Number.isFinite(Number(parsedConfig.smtpPort)) && Number(parsedConfig.smtpPort) > 0
+        ? Number(parsedConfig.smtpPort)
+        : defaultConfig.smtpPort,
+      smtpSecure: parsedConfig.smtpSecure === true,
+      smtpUsuario: String(parsedConfig.smtpUsuario ?? '').trim(),
+      smtpSenha: String(parsedConfig.smtpSenha ?? ''),
+      smtpRemetente: String(parsedConfig.smtpRemetente ?? '').trim(),
     };
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
@@ -224,6 +243,14 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     relatorioFinalIaApiKey: payload.relatorioFinalIaApiKey.trim(),
     relatorioFinalIaModelo: payload.relatorioFinalIaModelo.trim() || defaultConfig.relatorioFinalIaModelo,
     relatorioFinalIaBaseUrl: normalizeRelatorioFinalIaBaseUrl(payload.relatorioFinalIaBaseUrl),
+    alertaEstoqueEmailHabilitado: payload.alertaEstoqueEmailHabilitado === true,
+    alertaEstoqueEmailDestinatarios: payload.alertaEstoqueEmailDestinatarios.trim(),
+    smtpHost: payload.smtpHost.trim(),
+    smtpPort: payload.smtpPort > 0 ? payload.smtpPort : defaultConfig.smtpPort,
+    smtpSecure: payload.smtpSecure === true,
+    smtpUsuario: payload.smtpUsuario.trim(),
+    smtpSenha: payload.smtpSenha,
+    smtpRemetente: payload.smtpRemetente.trim(),
   };
 
   if (normalizedBase.desktopVinculoAtivo && !normalizedBase.desktopInstalacaoAutorizadaId.trim()) {
@@ -304,6 +331,10 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     cliente: normalized.cliente,
     projeto: normalized.projeto,
   });
+
+  if (hasSupabaseConfig()) {
+    void sincronizarConfigAlertaEstoqueParaNuvem(normalized);
+  }
 
   return { success: true, data: normalized };
 }

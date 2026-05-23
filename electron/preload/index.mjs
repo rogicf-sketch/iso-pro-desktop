@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('isoProDesktop', {
   platform: 'desktop',
-  version: '0.1.14',
+  version: '0.1.15',
   /** Grava cliente/projeto para o script `upload-backup-to-oci.ps1` ler (userData/oci-upload-context.json). */
   writeOciUploadContext: (payload) => ipcRenderer.invoke('desktop-backup:write-oci-context', payload),
   getSecurityContext: () => ipcRenderer.invoke('desktop-security:get-context'),
@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   saveHtmlAsPdf: (html) => ipcRenderer.invoke('desktop-pdf:html', html),
   /** Relatórios HTML — pré-visualização (evita `window.open` bloqueado no Electron). */
   previewHtml: (html) => ipcRenderer.invoke('desktop-preview:html', html),
+  verifySmtpMail: (payload) => ipcRenderer.invoke('desktop-mail:verify-smtp', payload),
+  sendMail: (payload) => ipcRenderer.invoke('desktop-mail:send', payload),
 });

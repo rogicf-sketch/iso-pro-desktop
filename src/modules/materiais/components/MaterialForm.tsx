@@ -120,12 +120,14 @@ export function MaterialForm({ initialValue, disciplinas, unidades, onCancel, on
 
       <div className="form-columns">
         <Input
-          label="Estoque minimo"
+          label="Alerta estoque (% do planejamento)"
+          max="100"
           min="0"
           onChange={(event) =>
             setForm((current) => ({ ...current, estoqueMinimo: Number(event.target.value || 0) }))
           }
-          step="0.001"
+          step="1"
+          title="Percentual da quantidade total planejada nos documentos. Ex.: 20 = alerta quando saldo <= 20% do planejado. 0 = desligado."
           type="number"
           value={String(form.estoqueMinimo)}
         />

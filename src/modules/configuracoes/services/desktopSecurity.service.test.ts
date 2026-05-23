@@ -58,6 +58,14 @@ const BASE_CONFIG: ConfiguracaoSistema = {
   relatorioFinalIaApiKey: '',
   relatorioFinalIaModelo: 'gpt-4o-mini',
   relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
+  alertaEstoqueEmailHabilitado: false,
+  alertaEstoqueEmailDestinatarios: '',
+  smtpHost: '',
+  smtpPort: 587,
+  smtpSecure: false,
+  smtpUsuario: '',
+  smtpSenha: '',
+  smtpRemetente: '',
 };
 
 function base64UrlJson(obj: DesktopLicensePayload) {

@@ -189,3 +189,46 @@ npm run test:integration:edge
 ```
 
 Os testes ficam em `src/test/edgeFunctions.integration.test.ts` e **não** entram no `npm test` (exclusão no `vite.config.ts`). Cobrem sobretudo **401** e **400** em `iso_pro_link_auth_user`, `iso_pro_admin_user` e a validação de `tenantId` em `purge_cloud_data`, sem depender de dados concretos na base.
+
+---
+
+## `alerta_estoque_critico`
+
+Envia e-mail SMTP quando materiais entram em estoque **CRITICO** (saldo zero ou muito abaixo do limite sobre o planejamento). Configuracao vem de `iso_pro_snapshot.payload.configuracoesSistema` (sincronizada ao **Salvar configuracoes** no desktop com Supabase activo).
+
+### Modos
+
+**Cron (24h, PC desligado):**
+
+```bash
+supabase secrets set ISO_PRO_ALERTA_ESTOQUE_CRON_SECRET="valor-aleatorio-longo"
+supabase functions deploy alerta_estoque_critico --no-verify-jwt
+```
+
+No Dashboard Supabase → Edge Functions → `alerta_estoque_critico` → **Schedules**: POST com corpo `{"modo":"cron"}` e cabecalho `x-iso-pro-cron-secret` = mesmo secret. Sugestao: a cada **15–60 minutos**.
+
+**Manual (desktop):** Configuracoes → Alertas → **Verificar e enviar na nuvem** (login+senha de administrador de configuracoes).
+
+Corpo JSON (POST):
+
+```json
+{
+  "tenantId": "00000000-0000-0000-0000-000000000001",
+  "login": "admin",
+  "senha": "********",
+  "forcar": false
+}
+```
+
+`forcar: true` ignora deduplicacao (teste).
+
+### Pre-requisitos
+
+1. Supabase configurado no desktop; materiais e planejamento sincronizados na nuvem.
+2. Aba Alertas preenchida (SMTP, destinatarios, alerta activo) e **Salvar configuracoes** (copia para o snapshot).
+3. Funcao publicada (comando acima).
+
+### Seguranca
+
+- SMTP e destinatarios ficam no JSON do snapshot (mesmo nivel de sensibilidade que localStorage no PC). Restrinja RLS/`iso_pro_snapshot` a utilizadores autenticados.
+- Cron exige secret dedicado; nao coloque em cliente publico.

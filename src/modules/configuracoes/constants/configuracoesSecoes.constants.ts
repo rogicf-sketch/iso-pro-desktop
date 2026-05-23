@@ -1,4 +1,4 @@
-export type ConfiguracaoSecaoId = 'obra' | 'aparencia' | 'relatorios' | 'qualidade' | 'nuvem' | 'desktop' | 'manutencao';
+export type ConfiguracaoSecaoId = 'obra' | 'aparencia' | 'relatorios' | 'alertas' | 'qualidade' | 'nuvem' | 'desktop' | 'manutencao';
 
 export type ConfiguracaoSecaoMeta = {
   id: ConfiguracaoSecaoId;
@@ -28,6 +28,13 @@ export const CONFIGURACOES_SECOES: ConfiguracaoSecaoMeta[] = [
     rotulo: 'IA · relatórios',
     resumo: 'Análise assistida no relatório final (opcional)',
     intro: 'Credenciais OpenAI-compatíveis para síntese no Relatório Final de Obra. Opcional — o relatório funciona sem IA.',
+    adminOnly: true,
+  },
+  {
+    id: 'alertas',
+    rotulo: 'Alertas',
+    resumo: 'E-mail de estoque crítico (desktop)',
+    intro: 'SMTP e destinatários para aviso automático quando materiais entram em estoque crítico. Disponível no aplicativo desktop.',
     adminOnly: true,
   },
   {

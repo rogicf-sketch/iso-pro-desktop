@@ -11,6 +11,7 @@ import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { logout as authLogout, verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { RIR_NUMERACAO_LABELS, descricaoModoNumeracaoRir } from '../../qualidade/utils/rirNumeracaoCopy';
 import { ConfiguracaoRelatorioFinalIaPanel } from '../components/ConfiguracaoRelatorioFinalIaPanel';
+import { ConfiguracaoAlertaEstoqueEmailPanel } from '../components/ConfiguracaoAlertaEstoqueEmailPanel';
 import { ConfiguracoesSecaoIntro } from '../components/ConfiguracoesSecaoIntro';
 import { ConfiguracoesSecaoNav } from '../components/ConfiguracoesSecaoNav';
 import {
@@ -830,6 +831,20 @@ export function ConfiguracoesPage() {
           role="tabpanel"
         >
           <ConfiguracaoRelatorioFinalIaPanel
+            canAdminister={canAdminister}
+            form={form}
+            onChange={(next) => setForm(next)}
+          />
+        </div>
+
+        <div
+          aria-labelledby={`config-tab-${secaoAtiva}`}
+          className="config-secao-stack"
+          hidden={secaoAtiva !== 'alertas'}
+          id="config-secao-alertas"
+          role="tabpanel"
+        >
+          <ConfiguracaoAlertaEstoqueEmailPanel
             canAdminister={canAdminister}
             form={form}
             onChange={(next) => setForm(next)}

@@ -14,7 +14,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const common = {
   bundle: true,
   platform: 'node',
-  external: ['electron'],
+  external: ['electron', 'nodemailer'],
   format: 'esm',
   target: 'es2022',
   sourcemap: true,

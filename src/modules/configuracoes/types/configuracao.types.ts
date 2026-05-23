@@ -62,4 +62,16 @@ export type ConfiguracaoSistema = {
   relatorioFinalIaModelo: string;
   /** Base da API sem barra final, ex.: https://api.openai.com/v1 */
   relatorioFinalIaBaseUrl: string;
+  /** E-mail automatico quando materiais entram em estoque CRITICO (app desktop). */
+  alertaEstoqueEmailHabilitado: boolean;
+  /** Destinatarios separados por virgula ou ponto-e-virgula. */
+  alertaEstoqueEmailDestinatarios: string;
+  smtpHost: string;
+  smtpPort: number;
+  /** true = TLS directo (ex. porta 465); false = STARTTLS (ex. 587). */
+  smtpSecure: boolean;
+  smtpUsuario: string;
+  smtpSenha: string;
+  /** Remetente, ex.: ISO PRO Alertas <alertas@empresa.com> */
+  smtpRemetente: string;
 };

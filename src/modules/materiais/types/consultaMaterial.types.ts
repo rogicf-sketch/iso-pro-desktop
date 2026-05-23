@@ -32,6 +32,10 @@ export type ConsultaMaterialResult = {
   saldoAtual: number | null;
   statusGlobal: StatusPlanejamentoMaterial | null;
   statusGlobalLabel: string | null;
+  quantidadePlanejada: number;
+  percentualAlerta: number;
+  limiteAlerta: number | null;
+  emAlertaEstoque: boolean;
   documentos: ConsultaMaterialDocumentoLinha[];
   lotes: ConsultaMaterialLote[];
 };

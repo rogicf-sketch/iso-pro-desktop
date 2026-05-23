@@ -4,10 +4,14 @@ import { getTableRowClassName } from '../../../components/tables/tableRowState';
 import { ActionButton } from '../../../components/ui/ActionButton';
 import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import type { MetricasPorCodigoMaterial } from '../../documentos/services/documentoPlanejamento';
 import type { MaterialListItem } from '../types/material.types';
+import { codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
+import { materialEmAlertaEstoquePlanejamento } from '../services/materiaisEstoqueCritico.service';
 
 type Props = {
   items: MaterialListItem[];
+  metricasPlanejamento?: Map<string, MetricasPorCodigoMaterial>;
   onEdit: (item: MaterialListItem) => void;
   onToggleStatus: (item: MaterialListItem) => void;
   canEdit: boolean;
@@ -19,6 +23,7 @@ type Props = {
 
 export function MateriaisTable({
   items,
+  metricasPlanejamento,
   onEdit,
   onToggleStatus,
   canEdit,
@@ -38,10 +43,16 @@ export function MateriaisTable({
     }
   }, [somePageSelected, allPageSelected]);
 
+  function itemEmAlerta(item: MaterialListItem): boolean {
+    if (!item.ativo || item.estoqueMinimo <= 0) return false;
+    const prevista = metricasPlanejamento?.get(codigoMaterialKey(item.codigo))?.prevista ?? 0;
+    return materialEmAlertaEstoquePlanejamento(item.saldoAtual, prevista, item.estoqueMinimo);
+  }
+
   return (
     <DataTable
       getRowClassName={(item) =>
-        getTableRowClassName(!item.ativo ? 'critical' : item.saldoAtual <= item.estoqueMinimo ? 'warning' : 'normal')
+        getTableRowClassName(!item.ativo ? 'critical' : itemEmAlerta(item) ? 'warning' : 'normal')
       }
       getRowKey={(item) => item.id}
       columns={[
@@ -78,13 +89,18 @@ export function MateriaisTable({
         { key: 'descricao', header: 'Descricao', render: (item) => item.descricao },
         { key: 'disciplina', header: 'Disciplina', render: (item) => item.disciplina },
         { key: 'unidade', header: 'Unidade', render: (item) => item.unidade },
+        {
+          key: 'alertaPct',
+          header: 'Alerta %',
+          render: (item) => (item.estoqueMinimo > 0 ? `${item.estoqueMinimo}%` : '—'),
+        },
         { key: 'saldo', header: 'Saldo', render: (item) => item.saldoAtual.toFixed(3).replace(/\.?0+$/, '') },
         {
           key: 'status',
           header: 'Status',
           render: (item) =>
             item.ativo ? (
-              <StatusBadge text={item.saldoAtual <= item.estoqueMinimo ? 'Ativo / alerta' : 'Ativo'} tone={item.saldoAtual <= item.estoqueMinimo ? 'warning' : 'ok'} />
+              <StatusBadge text={itemEmAlerta(item) ? 'Ativo / alerta' : 'Ativo'} tone={itemEmAlerta(item) ? 'warning' : 'ok'} />
             ) : (
               <StatusBadge text="Inativo" tone="neutral" />
             ),

@@ -49,6 +49,14 @@ const configBase: ConfiguracaoSistema = {
   relatorioFinalIaApiKey: '',
   relatorioFinalIaModelo: 'gpt-4o-mini',
   relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
+  alertaEstoqueEmailHabilitado: false,
+  alertaEstoqueEmailDestinatarios: '',
+  smtpHost: '',
+  smtpPort: 587,
+  smtpSecure: false,
+  smtpUsuario: '',
+  smtpSenha: '',
+  smtpRemetente: '',
 };
 
 const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({

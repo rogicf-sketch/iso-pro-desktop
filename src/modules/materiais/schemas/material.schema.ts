@@ -6,7 +6,8 @@ export function validateMaterial(data: MaterialFormData) {
   if (!data.disciplina.trim()) return 'Informe a disciplina.';
   if (!data.unidade.trim()) return 'Informe a unidade.';
   if (data.peso < 0) return 'Peso nao pode ser negativo.';
-  if (data.estoqueMinimo < 0) return 'Estoque minimo nao pode ser negativo.';
+  if (data.estoqueMinimo < 0) return 'Percentual de alerta nao pode ser negativo.';
+  if (data.estoqueMinimo > 100) return 'Percentual de alerta deve ser entre 0 e 100.';
 
   const cb = data.codigoBarras?.trim() ?? '';
   if (cb && !/^\d{8,14}$/.test(cb)) {

@@ -151,8 +151,26 @@ export function MaterialConsultaPanel({ initialQuery = '', autoSearch = false }:
                     </dd>
                   </div>
                   <div>
-                    <dt>Estoque minimo</dt>
-                    <dd>{formatDecimalExcelPtBr(result.material.estoqueMinimo)}</dd>
+                    <dt>Alerta estoque (% planej.)</dt>
+                    <dd>
+                      {result.percentualAlerta > 0 ? (
+                        <>
+                          <strong>{result.percentualAlerta}%</strong>
+                          {result.limiteAlerta != null ? (
+                            <span className="materiais-consulta-table-sub">
+                              {' '}
+                              — limite {formatDecimalExcelPtBr(result.limiteAlerta)} {result.material.unidade} (planejado{' '}
+                              {formatDecimalExcelPtBr(result.quantidadePlanejada)})
+                            </span>
+                          ) : null}
+                          {result.emAlertaEstoque ? (
+                            <StatusBadge text="Em alerta" tone="warning" />
+                          ) : null}
+                        </>
+                      ) : (
+                        'Desligado (0%)'
+                      )}
+                    </dd>
                   </div>
                   {result.statusGlobalLabel ? (
                     <div>

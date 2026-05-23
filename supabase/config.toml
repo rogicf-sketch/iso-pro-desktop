@@ -15,3 +15,7 @@ verify_jwt = false
 [functions.iso_pro_admin_user]
 # Actor login+senha + RPC iso_pro_usuario_administra_utilizadores; segredo ISO_PRO_ADMIN_USER_SECRET.
 verify_jwt = false
+
+[functions.alerta_estoque_critico]
+# Cron (ISO_PRO_ALERTA_ESTOQUE_CRON_SECRET) ou login+senha admin configuracoes.
+verify_jwt = false

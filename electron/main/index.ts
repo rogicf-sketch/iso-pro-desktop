@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron';
 import { registerBackupContextHandlers } from './backupContext';
+import { registerMailHandlers } from './mail';
 import { registerPrintHandlers } from './print';
 import { registerSecurityHandlers } from './security';
 import { createMainWindow } from './window';
@@ -15,6 +16,7 @@ app.commandLine.appendSwitch('lang', 'pt-BR');
 function bootstrap() {
   registerSecurityHandlers();
   registerBackupContextHandlers();
+  registerMailHandlers();
   registerPrintHandlers();
   createMainWindow();
 

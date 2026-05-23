@@ -34,6 +34,14 @@ function cfgMinima(overrides: Partial<ConfiguracaoSistema> = {}): ConfiguracaoSi
     relatorioFinalIaApiKey: 'sk-test-12345678',
     relatorioFinalIaModelo: 'gpt-4o-mini',
     relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
+    alertaEstoqueEmailHabilitado: false,
+    alertaEstoqueEmailDestinatarios: '',
+    smtpHost: '',
+    smtpPort: 587,
+    smtpSecure: false,
+    smtpUsuario: '',
+    smtpSenha: '',
+    smtpRemetente: '',
     ...overrides,
   };
 }

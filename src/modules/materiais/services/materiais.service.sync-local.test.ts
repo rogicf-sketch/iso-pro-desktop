@@ -1,7 +1,9 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 
-const STORAGE_KEY = 'iso-pro-desktop-materiais';
+const STORAGE_KEY = getScopedIsoProStorageKey('iso-pro-desktop-materiais');
+const BACKFILL_PCT_KEY = getScopedIsoProStorageKey('iso-pro-materiais-backfill-percentual-alerta-v1');
 
 const supabaseMock = vi.hoisted(() => {
   const remoteRows = [
@@ -14,21 +16,28 @@ const supabaseMock = vi.hoisted(() => {
       disciplina: 'Tubulacao',
       unidade: 'UN',
       peso: 1,
-      estoque_minimo: 0,
+      estoque_minimo: 20,
       ativo: true,
     },
   ];
   const order = vi.fn().mockResolvedValue({ data: remoteRows, error: null });
+  const eqTenantUpdate = vi.fn().mockResolvedValue({ error: null });
+  const eqIdUpdate = vi.fn().mockReturnValue({ eq: eqTenantUpdate });
+  const update = vi.fn().mockReturnValue({ eq: eqIdUpdate });
   const eqTenant = vi.fn().mockReturnValue({ order });
   const select = vi.fn().mockReturnValue({ eq: eqTenant });
-  const from = vi.fn().mockReturnValue({ select });
-  return { from, select, eqTenant, order };
+  const from = vi.fn().mockReturnValue({ select, update });
+  return { from, select, eqTenant, order, update };
 });
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: () => true,
   shouldUseCloudMaterials: () => true,
   getSupabase: () => ({ from: supabaseMock.from }),
+}));
+
+vi.mock('../../../lib/isoProTenant', () => ({
+  getActiveTenantId: () => '00000000-0000-0000-0000-000000000001',
 }));
 
 vi.mock('../../../lib/isoProSnapshot', () => ({
@@ -71,6 +80,7 @@ describe('sincronizarMateriaisNuvemParaArmazenamentoLocal', () => {
         },
       } as Storage,
     );
+    store[BACKFILL_PCT_KEY] = '1';
   });
 
   afterEach(() => {
