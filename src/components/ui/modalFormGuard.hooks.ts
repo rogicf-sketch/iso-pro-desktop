@@ -1,44 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-
-export const MODAL_DISCARD_CONFIRM_MESSAGE =
-  'Ha alteracoes nao salvas. Fechar mesmo assim? O que foi preenchido sera perdido.';
-
-type ModalFormGuardApi = {
-  registerDirty: (dirty: boolean) => void;
-  requestClose: (close: () => void) => void;
-  isDirty: boolean;
-};
-
-const ModalFormGuardContext = createContext<ModalFormGuardApi | null>(null);
-
-type ProviderProps = {
-  children: ReactNode;
-  externalDirty?: boolean;
-};
-
-export function ModalFormGuardProvider({ children, externalDirty = false }: ProviderProps) {
-  const [childDirty, setChildDirty] = useState(false);
-  const isDirty = externalDirty || childDirty;
-
-  const registerDirty = useCallback((dirty: boolean) => {
-    setChildDirty(dirty);
-  }, []);
-
-  const requestClose = useCallback(
-    (close: () => void) => {
-      if (isDirty && !window.confirm(MODAL_DISCARD_CONFIRM_MESSAGE)) return;
-      close();
-    },
-    [isDirty],
-  );
-
-  const api = useMemo(
-    () => ({ registerDirty, requestClose, isDirty }),
-    [registerDirty, requestClose, isDirty],
-  );
-
-  return <ModalFormGuardContext.Provider value={api}>{children}</ModalFormGuardContext.Provider>;
-}
+import { useCallback, useContext, useEffect, useRef } from 'react';
+import { ModalFormGuardContext } from './modalFormGuardContext';
 
 function useModalFormGuard() {
   return useContext(ModalFormGuardContext);
@@ -83,7 +44,10 @@ export function useModalIsDirty(): boolean {
 export function useModalBeforeUnloadGuard(open: boolean) {
   const isDirty = useModalIsDirty();
   const isDirtyRef = useRef(isDirty);
-  isDirtyRef.current = isDirty;
+
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
 
   useEffect(() => {
     if (!open) return;
