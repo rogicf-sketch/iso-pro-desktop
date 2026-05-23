@@ -1107,3 +1107,135 @@ body.theme-claro .recebimento-badge-divergencia {
     0 1px 0 rgba(255, 255, 255, 0.04) inset,
     0 28px 70px rgba(0, 0, 0, 0.45);
 }
+
+/* Abas de modulo (Materiais: cadastro / consulta) */
+.panel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.panel-tab {
+  border: 1px solid transparent;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 650;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.panel-tab:hover {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.panel-tab--active {
+  color: var(--text);
+  background: rgba(96, 165, 250, 0.12);
+  border-color: var(--surface-border);
+  border-bottom-color: transparent;
+  box-shadow: 0 -1px 0 rgba(96, 165, 250, 0.35) inset;
+}
+
+body.theme-claro .panel-tab--active {
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--claro-texto-fosco);
+}
+
+/* Materiais — consulta por codigo */
+.materiais-consulta__search {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 720px) {
+  .materiais-consulta__search {
+    grid-template-columns: 1fr;
+  }
+}
+
+.materiais-consulta__search-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.materiais-consulta__result {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.materiais-consulta-card {
+  border: 1px solid var(--surface-border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  background: var(--surface-bg);
+}
+
+.materiais-consulta-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.materiais-consulta-card__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 8px;
+  font-size: 1.15rem;
+}
+
+.materiais-consulta-dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 18px;
+  margin: 14px 0 0;
+}
+
+.materiais-consulta-dl dt {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.materiais-consulta-dl dd {
+  margin: 4px 0 0;
+  font-size: 0.95rem;
+}
+
+.materiais-consulta-table-sub {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--surface-border);
+  background: rgba(148, 163, 184, 0.12);
+  font-family: ui-monospace, monospace;
+  font-size: 0.82em;
+}

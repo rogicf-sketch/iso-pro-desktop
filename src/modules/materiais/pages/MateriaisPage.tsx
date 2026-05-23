@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
@@ -7,6 +7,7 @@ import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { MaterialConsultaPanel } from '../components/MaterialConsultaPanel';
 import { MaterialFilters } from '../components/MaterialFilters';
 import { MaterialForm } from '../components/MaterialForm';
 import { MateriaisListasDominioModal } from '../components/MateriaisListasDominioModal';
@@ -21,9 +22,25 @@ function encurtarCodigoParaLista(codigo: string) {
   return `${codigo.slice(0, MAX_CARACTERES_POR_CODIGO - 3)}...`;
 }
 
+type MateriaisTab = 'cadastro' | 'consulta';
+
 export function MateriaisPage() {
   const { canAccessAction } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: MateriaisTab = searchParams.get('tab') === 'consulta' ? 'consulta' : 'cadastro';
+  const consultaQuery = searchParams.get('q') ?? '';
+
+  function setTab(next: MateriaisTab) {
+    const nextParams = new URLSearchParams(searchParams);
+    if (next === 'cadastro') {
+      nextParams.delete('tab');
+      nextParams.delete('q');
+    } else {
+      nextParams.set('tab', 'consulta');
+    }
+    setSearchParams(nextParams, { replace: true });
+  }
   const cloudStatus = getSupabaseOperationalStatus();
   const {
     items,
@@ -119,9 +136,9 @@ export function MateriaisPage() {
       <div className="panel-header panel-header--toolbar">
         <div>
           <p className="panel-kicker">Módulo</p>
-          <h2>Cadastro de Materiais</h2>
+          <h2>Materiais</h2>
         </div>
-        {canEdit ? (
+        {tab === 'cadastro' && canEdit ? (
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Cadastro e listas">
               <span className="panel-toolbar__label">Cadastro</span>
@@ -166,6 +183,31 @@ export function MateriaisPage() {
         ) : null}
       </div>
 
+      <div className="panel-tabs" role="tablist" aria-label="Secoes de materiais">
+        <button
+          aria-selected={tab === 'cadastro'}
+          className={`panel-tab${tab === 'cadastro' ? ' panel-tab--active' : ''}`}
+          onClick={() => setTab('cadastro')}
+          role="tab"
+          type="button"
+        >
+          Cadastro
+        </button>
+        <button
+          aria-selected={tab === 'consulta'}
+          className={`panel-tab${tab === 'consulta' ? ' panel-tab--active' : ''}`}
+          onClick={() => setTab('consulta')}
+          role="tab"
+          type="button"
+        >
+          Consulta por codigo
+        </button>
+      </div>
+
+      {tab === 'consulta' ? (
+        <MaterialConsultaPanel autoSearch initialQuery={consultaQuery} />
+      ) : (
+        <>
       <ModuleHelp>
         <p className="panel-copy">
           Cadastro de materiais preparado para operar localmente ou em nuvem, mantendo filtros, listagem paginada e edicao no mesmo padrao robusto. Use os botoes{' '}
@@ -567,6 +609,8 @@ export function MateriaisPage() {
           </div>
         ) : null}
       </Modal>
+        </>
+      )}
     </div>
   );
 }

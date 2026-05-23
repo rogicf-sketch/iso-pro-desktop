@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { LocalStorageCorruptoBanner } from '@/components/LocalStorageCorruptoBanner';
+import { GlobalConsultaRapida } from '@/components/GlobalConsultaRapida';
 import { getTitularSistemaLinhaResumo } from '../lib/titularSistemaCodigo';
 import { useAuth } from '../modules/auth/hooks/useAuth';
 import { getModuleTitleForPath, moduleNavigation } from '../routes/navigation';
@@ -69,6 +70,7 @@ export function MainLayout() {
 
         <section className="page-content">
           <LocalStorageCorruptoBanner />
+          <GlobalConsultaRapida />
           <Outlet />
         </section>
       </main>
