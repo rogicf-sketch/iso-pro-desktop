@@ -205,7 +205,11 @@ supabase secrets set ISO_PRO_ALERTA_ESTOQUE_CRON_SECRET="valor-aleatorio-longo"
 supabase functions deploy alerta_estoque_critico --no-verify-jwt
 ```
 
-No Dashboard Supabase → Edge Functions → `alerta_estoque_critico` → **Schedules**: POST com corpo `{"modo":"cron"}` e cabecalho `x-iso-pro-cron-secret` = mesmo secret. Sugestao: a cada **15–60 minutos**.
+**Agendamento (escolha um):**
+
+1. **Dashboard** → Edge Functions → `alerta_estoque_critico` → **Schedules**: POST, body `{"modo":"cron"}`, header `x-iso-pro-cron-secret` = mesmo secret; intervalo **15–60 min**.
+
+2. **`pg_cron` + `pg_net`** (SQL): ver snippet `supabase/snippets/schedule_alerta_estoque_critico_cron.sql` — grava URL/anon/cron secret no Vault e agenda (ex.: `*/30 * * * *`).
 
 **Manual (desktop):** Configuracoes → Alertas → **Verificar e enviar na nuvem** (login+senha de administrador de configuracoes).
 
