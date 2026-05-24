@@ -85,7 +85,7 @@ export function AtendimentoFormHeader({
       {recebedorTipo === 'interno' ? (
         <>
           <SearchableSelect
-            label="Colaborador cadastrado"
+            label="Colaborador atendido (quem retirou)"
             onChange={onRecebedorColaboradorIdChange}
             options={colaboradores
               .filter((item) => item.tipo === 'interno')
@@ -93,7 +93,7 @@ export function AtendimentoFormHeader({
                 value: item.id,
                 label: `${item.nome}${item.matricula ? ` - ${item.matricula}` : ''}`,
               }))}
-            placeholder="Digite nome ou matricula — ou cole o colaborador"
+            placeholder="Digite nome ou matricula de quem retirou — ou cole o colaborador"
             value={recebedorColaboradorId}
           />
           {!colaboradores.some((item) => item.tipo === 'interno') ? (

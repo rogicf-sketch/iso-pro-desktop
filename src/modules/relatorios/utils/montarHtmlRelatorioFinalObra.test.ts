@@ -75,8 +75,8 @@ describe('montarHtmlRelatorioFinalObra', () => {
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
     expect(html).toContain('RFO-2026-00042');
     expect(html).toContain('rfo-indice');
-    expect(html).toContain('rfo-print-chrome--top');
-    expect(html).toContain('rfo-print-chrome--bottom');
+    expect(html).toContain('rfo-tabela');
+    expect(html).not.toContain('rfo-print-chrome');
     expect(html).not.toContain('rfo-sec--quebra');
     expect(html).toContain('page-break-inside: auto');
     expect(html).not.toContain('page-break-before: always');
@@ -172,6 +172,7 @@ describe('montarHtmlRelatorioFinalObra', () => {
   it('capa usa classe rfo-capa para quebra apos primeira pagina na impressao', () => {
     const html = montarHtmlRelatorioFinalObra(dadosBase(), { incluirBarraPreVisualizacao: false });
     expect(html).toContain('<header class="rfo-capa">');
-    expect(html).toContain('.rfo-capa { page-break-after: always');
+    expect(html).toContain('rfo-capa-head');
+    expect(html).toContain('page-break-after: always');
   });
 });

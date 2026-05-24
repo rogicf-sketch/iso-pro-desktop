@@ -13,6 +13,12 @@ export const IA_API_PRESETS = [
     modeloSugerido: 'openai/gpt-4o-mini',
   },
   {
+    id: 'groq',
+    label: 'Groq',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    modeloSugerido: 'llama-3.3-70b-versatile',
+  },
+  {
     id: 'freetheai',
     label: 'Free The AI',
     baseUrl: 'https://api.freetheai.xyz/v1',

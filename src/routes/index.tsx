@@ -66,6 +66,15 @@ export const router = createHashRouter([
           { path: '/rnc', element: withSuspense(<ModuleAccessRoute modulo="rnc"><RncPage /></ModuleAccessRoute>) },
           { path: '/relatorios', element: withSuspense(<ModuleAccessRoute modulo="relatorios"><RelatoriosPage /></ModuleAccessRoute>) },
           {
+            path: '/relatorios/final-obra',
+            element: withSuspense(
+              <ModuleAccessRoute modulo="relatorios">
+                <RelatorioFinalObraPage />
+              </ModuleAccessRoute>,
+            ),
+          },
+          { path: '/relatorio-final-obra', element: <Navigate replace to="/relatorios/final-obra" /> },
+          {
             path: '/relatorio-fotografico',
             element: withSuspense(
               <ModuleAccessRoute modulo="relatorios">
@@ -78,14 +87,6 @@ export const router = createHashRouter([
             element: withSuspense(
               <ModuleAccessRoute modulo="relatorios">
                 <RelatorioFotograficoPage />
-              </ModuleAccessRoute>,
-            ),
-          },
-          {
-            path: '/relatorio-final-obra',
-            element: withSuspense(
-              <ModuleAccessRoute modulo="relatorios">
-                <RelatorioFinalObraPage />
               </ModuleAccessRoute>,
             ),
           },

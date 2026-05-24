@@ -33,10 +33,11 @@ export const moduleNavigation = [
     pageTitle: 'Relatório fotográfico',
   },
   {
-    to: '/relatorio-final-obra',
-    label: 'Rel. final obra',
+    to: '/relatorios/final-obra',
+    label: 'Relatórios',
     modulo: 'relatorios',
     pageTitle: 'Relatório Final de Obra',
+    hideInSidebar: true,
   },
   { to: '/mobile', label: 'Dispositivos mobile', modulo: 'mobile' },
   { to: '/usuarios', label: 'Usuários', modulo: 'usuarios' },
@@ -48,6 +49,7 @@ export const moduleNavigation = [
   modulo: AppModule;
   /** Se definido, substitui `label` na topbar (titulo longo do contexto). */
   pageTitle?: string;
+  hideInSidebar?: boolean;
 }>;
 
 /** Titulo do modulo para a topbar, a partir do pathname (hash router). */

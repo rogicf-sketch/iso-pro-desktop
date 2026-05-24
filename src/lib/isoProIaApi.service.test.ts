@@ -51,8 +51,9 @@ describe('isoProIaApi.service', () => {
     vi.unstubAllGlobals();
   });
 
-  it('normalizeIaApiBaseUrl corrige OpenRouter e Free The AI sem path /v1', () => {
+  it('normalizeIaApiBaseUrl corrige OpenRouter, Groq e Free The AI sem path /v1', () => {
     expect(normalizeIaApiBaseUrl('https://openrouter.ai')).toBe('https://openrouter.ai/api/v1');
+    expect(normalizeIaApiBaseUrl('https://api.groq.com')).toBe('https://api.groq.com/openai/v1');
     expect(normalizeIaApiBaseUrl('https://freetheai.xyz')).toBe('https://api.freetheai.xyz/v1');
   });
 

@@ -7,6 +7,7 @@ import {
   listarHistoricoAtendimentos,
   montarExportacaoAtendimentosCsvItens,
   registrarAtendimento,
+  registrarAtendimentosSessao,
 } from './atendimento.service';
 
 const DOCUMENTOS_KEY = 'iso-pro-desktop-documentos';
@@ -185,6 +186,55 @@ function snapshotAtendimentoBase() {
         unidade: 'UN',
         saldoAtual: 100,
       },
+    ],
+    atendimentos: [],
+    atendimentoHistorico: [],
+  };
+}
+
+function snapshotDoisDocumentosAtendimento() {
+  return {
+    documentos: [
+      {
+        id: 'doc-atd',
+        numero: 'D1',
+        revisao: 'A',
+        descricao: 'Doc 1',
+        responsavel: 'Resp',
+        status: 'pendente',
+        itens: [
+          {
+            id: 'doc-atd-item-1',
+            codigo: 'M1',
+            descricao: 'Material 1',
+            unidade: 'UN',
+            quantidade: 10,
+            quantidadeAtendida: 0,
+          },
+        ],
+      },
+      {
+        id: 'doc-atd-2',
+        numero: 'D2',
+        revisao: 'B',
+        descricao: 'Doc 2',
+        responsavel: 'Resp 2',
+        status: 'pendente',
+        itens: [
+          {
+            id: 'doc-atd-item-2',
+            codigo: 'M2',
+            descricao: 'Material 2',
+            unidade: 'UN',
+            quantidade: 5,
+            quantidadeAtendida: 0,
+          },
+        ],
+      },
+    ],
+    materiais: [
+      { id: 'mat-1', codigo: 'M1', descricao: 'Material 1', unidade: 'UN', saldoAtual: 100 },
+      { id: 'mat-2', codigo: 'M2', descricao: 'Material 2', unidade: 'UN', saldoAtual: 50 },
     ],
     atendimentos: [],
     atendimentoHistorico: [],
@@ -412,6 +462,39 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
 
     const atendimentos = JSON.parse(store[ATENDIMENTOS_KEY] ?? '[]') as Array<{ documentoId: string }>;
     expect(atendimentos.some((a) => a.documentoId === 'doc-atd')).toBe(true);
+  });
+
+  it('registrarAtendimentosSessao grava varios lotes em uma unica operacao', async () => {
+    mockReadPayload.mockResolvedValue(snapshotDoisDocumentosAtendimento());
+    mockReadForWrite.mockResolvedValue({
+      payload: {},
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await registrarAtendimentosSessao({
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: '',
+      documentos: [
+        { documentoId: 'doc-atd', itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }] },
+        { documentoId: 'doc-atd-2', itens: [{ documentoItemId: 'doc-atd-item-2', quantidade: 4 }] },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(2);
+    expect(new Set(result.data?.map((a) => a.documentoId))).toEqual(new Set(['doc-atd', 'doc-atd-2']));
+
+    const atendimentos = JSON.parse(store[ATENDIMENTOS_KEY] ?? '[]') as Array<{ documentoId: string }>;
+    expect(atendimentos).toHaveLength(2);
   });
 
   it('nao registra atendimento quando nao ha quantidade pendente nas linhas do documento', async () => {

@@ -83,6 +83,51 @@ export type DadosReciboAtendimento = {
   };
 };
 
+/** Linha acumulada na sessao de retirada (leitor multi-desenho antes de confirmar). */
+export type SessaoRetiradaLinha = {
+  documentoId: string;
+  documentoNumero: string;
+  documentoRevisao: string;
+  documentoDescricao: string;
+  documentoResponsavel: string;
+  documentoItemId: string;
+  codigoMaterial: string;
+  descricaoMaterial: string;
+  unidade: string;
+  quantidade: number;
+};
+
+/** Secao de um documento no recibo consolidado de retirada multi-desenho. */
+export type ReciboSessaoSecaoDocumento = {
+  atendimento: Atendimento;
+  documentoDescricao: string;
+  documentoRevisao: string;
+  documentoResponsavel: string;
+};
+
+/** Recibo unico apos confirmar sessao com varios desenhos (N lotes no historico). */
+export type DadosReciboSessaoConsolidada = {
+  referencia: string;
+  dataAtendimento: string;
+  atendente: string;
+  atendenteMatricula?: string;
+  atendenteFuncao?: string;
+  recebedorTipo: AtendimentoRecebedorTipo;
+  recebedor: string;
+  recebedorMatricula?: string;
+  recebedorFuncao?: string;
+  nomeAtendido: string;
+  numerosLotes: string[];
+  secoes: ReciboSessaoSecaoDocumento[];
+  logoUrl?: string | null;
+  detalhesRetiradaExterna?: {
+    documentoIdentificacao: string;
+    telefone: string;
+    autorizadorInterno: string;
+    motivoRetirada: string;
+  };
+};
+
 /** Linha enviada ao estornar parcialmente (por id do item do lote de atendimento). */
 export type EstornoAtendimentoLinha = {
   atendimentoItemId: string;

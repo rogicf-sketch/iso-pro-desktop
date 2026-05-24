@@ -98,6 +98,7 @@ describe('montarHtmlRelatorioFinalObra', () => {
     expect(html).toContain('Ocorrências em destaque');
     expect(html).toContain('Declaração de encerramento');
     expect(html).not.toContain('rfo-sec--quebra');
-    expect(html).toContain('rfo-print-chrome');
+    expect(html).not.toContain('rfo-print-chrome');
+    expect(html).toContain('rfo-page');
   });
 });

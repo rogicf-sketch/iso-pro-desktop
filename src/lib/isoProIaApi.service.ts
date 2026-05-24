@@ -29,6 +29,9 @@ export function normalizeIaApiBaseUrl(url: unknown): string {
   if (lower === 'https://freetheai.xyz' || lower === 'https://www.freetheai.xyz') {
     return 'https://api.freetheai.xyz/v1';
   }
+  if (lower === 'https://api.groq.com' || lower === 'http://api.groq.com') {
+    return 'https://api.groq.com/openai/v1';
+  }
   return t;
 }
 

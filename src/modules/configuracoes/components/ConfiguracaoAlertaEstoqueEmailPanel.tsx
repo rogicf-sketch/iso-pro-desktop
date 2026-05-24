@@ -8,11 +8,13 @@ import {
   enviarEmailDesktop,
   isDesktopMailDisponivel,
   montarSmtpDeConfig,
+  motivoDesktopMailIndisponivel,
   parseDestinatariosEmail,
   verificarSmtpDesktop,
 } from '../../../lib/desktopMail';
 import { verifyCurrentUserPassword, getCurrentUser } from '../../auth/services/auth.service';
 import { executarAlertaEstoqueCriticoNuvem } from '../services/executarAlertaEstoqueNuvem.service';
+import { sincronizarConfigAlertaEstoqueParaNuvem } from '../services/syncAlertaEstoqueConfigNuvem.service';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 
 type Props = {
@@ -28,6 +30,7 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
   const [nuvemSenha, setNuvemSenha] = useState('');
 
   const desktopOk = isDesktopMailDisponivel();
+  const desktopMotivo = desktopOk ? '' : motivoDesktopMailIndisponivel();
   const nuvemOk = hasSupabaseConfig();
   const destinatarios = parseDestinatariosEmail(form.alertaEstoqueEmailDestinatarios);
 
@@ -117,6 +120,13 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
         setTesteErro('Sessao sem utilizador.');
         return;
       }
+      if (nuvemOk) {
+        const sync = await sincronizarConfigAlertaEstoqueParaNuvem(form);
+        if (!sync.success) {
+          setTesteErro(sync.error ?? 'Falha ao copiar SMTP para a nuvem. Salve configuracoes e tente de novo.');
+          return;
+        }
+      }
       const r = await executarAlertaEstoqueCriticoNuvem({
         login: u.login,
         senha: nuvemSenha,
@@ -126,7 +136,12 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
         setTesteErro(r.error ?? 'Falha na nuvem.');
         return;
       }
-      setTesteOk(r.data.message);
+      const msg = r.data.message;
+      setTesteOk(
+        /inalterada/i.test(msg) && !forcar
+          ? `${msg} Para receber um e-mail de teste agora, use «E-mail de teste (nuvem)».`
+          : msg,
+      );
     } catch (e) {
       setTesteErro(e instanceof Error ? e.message : 'Falha ao executar na nuvem.');
     } finally {
@@ -156,6 +171,11 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
         <OperationalNotice tone="warning">
           <strong>No desktop:</strong> o painel de controle tambem verifica a cada 60s enquanto o app estiver aberto (complementar a
           nuvem).
+        </OperationalNotice>
+      ) : canAdminister ? (
+        <OperationalNotice tone="warning">
+          <strong>Teste pelo PC (.exe) indisponivel nesta janela.</strong> {desktopMotivo} Use o teste pela nuvem abaixo (nao precisa
+          do instalador). Para activar os botoes desktop, abra pelo icone do Menu Iniciar (Setup 0.1.15+) — nao pelo navegador.
         </OperationalNotice>
       ) : null}
       {!nuvemOk ? (
@@ -228,18 +248,22 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
           <strong>TLS directo (porta 465)</strong> — desligado usa STARTTLS (comum na porta 587).
         </span>
       </label>
-      {canAdminister ? (
+      {canAdminister && desktopOk ? (
         <div className="inline-actions" style={{ marginTop: 12, flexWrap: 'wrap', gap: 8 }}>
-          <Button disabled={testando || !desktopOk} onClick={() => void testarSmtp()} type="button" variant="ghost">
+          <Button disabled={testando} onClick={() => void testarSmtp()} type="button" variant="ghost">
             {testando ? 'Testando...' : 'Testar conexao SMTP (desktop)'}
           </Button>
-          <Button disabled={testando || !desktopOk} onClick={() => void enviarTeste()} type="button" variant="ghost">
+          <Button disabled={testando} onClick={() => void enviarTeste()} type="button" variant="ghost">
             E-mail de teste (desktop)
           </Button>
         </div>
       ) : null}
       {canAdminister && nuvemOk ? (
         <div className="form-columns" style={{ marginTop: 16 }}>
+          <p className="panel-copy" style={{ gridColumn: '1 / -1', margin: 0 }}>
+            Gmail: use a <strong>senha de app</strong> de 16 letras (sem espacos) em Senha SMTP — nao a senha normal da conta. Ao
+            testar na nuvem, os dados deste formulario sao copiados para o snapshot antes do envio.
+          </p>
           <Input
             autoComplete="current-password"
             disabled={!canAdminister}
@@ -249,11 +273,11 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
             value={nuvemSenha}
           />
           <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
-            <Button disabled={testando} onClick={() => void executarNaNuvem(false)} type="button" variant="ghost">
-              Verificar e enviar na nuvem
-            </Button>
             <Button disabled={testando} onClick={() => void executarNaNuvem(true)} type="button" variant="ghost">
-              Forcar envio na nuvem
+              E-mail de teste (nuvem)
+            </Button>
+            <Button disabled={testando} onClick={() => void executarNaNuvem(false)} type="button" variant="ghost">
+              Verificar alertas na nuvem
             </Button>
           </div>
         </div>

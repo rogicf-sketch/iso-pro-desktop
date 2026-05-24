@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { AutocompleteField } from '../../../components/ui/AutocompleteField';
 import { Modal } from '../../../components/ui/Modal';
@@ -12,9 +12,11 @@ import { AtendimentoBuscaDocumento } from '../components/AtendimentoBuscaDocumen
 import { AtendimentoFormHeader } from '../components/AtendimentoFormHeader';
 import { AtendimentoHistoricoTable } from '../components/AtendimentoHistoricoTable';
 import { AtendimentoItensTable } from '../components/AtendimentoItensTable';
+import { AtendimentoLeitorModal } from '../components/AtendimentoLeitorModal';
+import { AtendimentoSessaoRetiradaPanel } from '../components/AtendimentoSessaoRetiradaPanel';
 import { totalizarLinhas, useAtendimento } from '../hooks/useAtendimento';
 import type { Atendimento } from '../types/atendimento.types';
-import { montarHtmlRecibo } from '../utils/imprimirReciboAtendimento';
+import { montarHtmlRecibo, montarHtmlReciboConsolidado } from '../utils/imprimirReciboAtendimento';
 import { montarDadosReciboParaAtendimento } from '../utils/montarDadosReciboParaAtendimento';
 
 export function AtendimentoPage() {
@@ -84,20 +86,84 @@ export function AtendimentoPage() {
     toggleMarcaItem,
     marcarTodosItens,
     exportarAtendimentosMateriaisExcel,
-    leitorEscolhaDocumento,
+    leitorPainel,
     processarLeituraCodigoBarras,
-    confirmarLeitorDocumento,
-    cancelarLeitorEscolhaDocumento,
+    confirmarLeitorComQuantidade,
+    continuarLeitorBipando,
+    fecharLeitorPainel,
+    sessaoRetirada,
+    removerLinhaSessaoRetirada,
+    limparSessaoRetirada,
+    podeConfirmarSessaoRetirada,
+    pedirConfirmacaoSessaoRetirada,
+    confirmacaoSessaoRetirada,
+    cancelarConfirmacaoSessaoRetirada,
+    confirmarSessaoRetiradaNoModal,
+    reciboSessaoOpcional,
+    dispensarImpressaoReciboSessao,
+    imprimirReciboSessaoEfechar,
   } = useAtendimento();
   const canEdit = canAccessAction('atendimento', 'editar');
   const canAdminister = canAccessAction('atendimento', 'administrar');
   const canExportAtendimentos = canAccessAction('atendimento', 'visualizar');
 
   const leitorCodigoRef = useRef<HTMLInputElement>(null);
+  const leitorDebounceRef = useRef<number | undefined>(undefined);
+  const leitorProcessandoRef = useRef(false);
   const estornoQtdRefs = useRef<(HTMLInputElement | null)[]>([]);
   const estornoConfirmarRef = useRef<HTMLButtonElement | null>(null);
   const [leitorCodigoBuffer, setLeitorCodigoBuffer] = useState('');
   const [reciboHistoricoLoadingId, setReciboHistoricoLoadingId] = useState<string | null>(null);
+  const [reciboSessaoPreviewLoading, setReciboSessaoPreviewLoading] = useState(false);
+
+  const avisoRetiranteLeitor = useMemo(() => {
+    if (!atendente.trim()) return 'Informe o atendente antes de confirmar o lote final.';
+    if (recebedorTipo === 'interno' && !recebedorColaboradorId.trim()) {
+      return 'Selecione o colaborador atendido (quem retirou) antes de confirmar a retirada.';
+    }
+    if (recebedorTipo === 'externo' && !recebedor.trim()) {
+      return 'Informe o retirante externo antes de confirmar o lote final.';
+    }
+    return undefined;
+  }, [atendente, recebedorTipo, recebedorColaboradorId, recebedor]);
+
+  const focarLeitor = useCallback(() => {
+    window.setTimeout(() => leitorCodigoRef.current?.focus(), 0);
+  }, []);
+
+  const enviarLeitura = useCallback(
+    (raw: string) => {
+      const scan = raw.trim();
+      if (!scan || leitorProcessandoRef.current) return;
+      window.clearTimeout(leitorDebounceRef.current);
+      leitorProcessandoRef.current = true;
+      setLeitorCodigoBuffer('');
+      void processarLeituraCodigoBarras(scan).finally(() => {
+        leitorProcessandoRef.current = false;
+        focarLeitor();
+      });
+    },
+    [processarLeituraCodigoBarras, focarLeitor],
+  );
+
+  const onLeitorChange = useCallback(
+    (value: string) => {
+      setLeitorCodigoBuffer(value);
+      window.clearTimeout(leitorDebounceRef.current);
+      if (value.trim().length < 3) return;
+      leitorDebounceRef.current = window.setTimeout(() => enviarLeitura(value), 150);
+    },
+    [enviarLeitura],
+  );
+
+  const onLeitorKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key !== 'Enter' && e.key !== 'Tab') return;
+      e.preventDefault();
+      enviarLeitura(e.currentTarget.value);
+    },
+    [enviarLeitura],
+  );
 
   /** Sugestoes: atendente/recebedor do lote + colaboradores ativos; filtra ao digitar; aceita texto livre e colar. */
   useEffect(() => {
@@ -105,11 +171,11 @@ export function AtendimentoPage() {
   }, [estornoAlvo?.id]);
 
   useEffect(() => {
-    if (!loading && canEdit && !leitorEscolhaDocumento) {
+    if (!loading && canEdit) {
       const t = window.setTimeout(() => leitorCodigoRef.current?.focus(), 0);
       return () => window.clearTimeout(t);
     }
-  }, [loading, canEdit, leitorEscolhaDocumento]);
+  }, [loading, canEdit]);
 
   const focarProximaQtdEstorno = useCallback(
     (fromIndex: number) => {
@@ -183,6 +249,23 @@ export function AtendimentoPage() {
     }
   }
 
+  async function handleVisualizarReciboSessaoConsolidada() {
+    if (!reciboSessaoOpcional) return;
+    setReciboSessaoPreviewLoading(true);
+    try {
+      const html = montarHtmlReciboConsolidado(reciboSessaoOpcional);
+      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      if (!res.ok) {
+        window.alert(
+          res.error ??
+            'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir / PDF na janela de visualizacao.',
+        );
+      }
+    } finally {
+      setReciboSessaoPreviewLoading(false);
+    }
+  }
+
   return (
     <div className="stack-grid">
       <div className="panel">
@@ -217,8 +300,6 @@ export function AtendimentoPage() {
           </OperationalNotice>
         ) : null}
 
-        <AtendimentoBuscaDocumento documentos={documentos} onSelect={setSelectedDocumentoId} selectedDocumentoId={selectedDocumentoId} />
-
         {canEdit ? (
           <div className="section-block">
             <label className="field" htmlFor="atendimento-leitor-codigo">
@@ -227,16 +308,9 @@ export function AtendimentoPage() {
                 autoComplete="off"
                 className="input-control"
                 id="atendimento-leitor-codigo"
-                onChange={(e) => setLeitorCodigoBuffer(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return;
-                  e.preventDefault();
-                  const raw = e.currentTarget.value;
-                  setLeitorCodigoBuffer('');
-                  void processarLeituraCodigoBarras(raw);
-                  window.setTimeout(() => leitorCodigoRef.current?.focus(), 0);
-                }}
-                placeholder="Bipe o material; Enter confirma a leitura"
+                onChange={(e) => onLeitorChange(e.target.value)}
+                onKeyDown={onLeitorKeyDown}
+                placeholder="Bipe o material — Enter ou Tab confirma; leitura automatica apos pausa"
                 ref={leitorCodigoRef}
                 spellCheck={false}
                 type="text"
@@ -245,11 +319,14 @@ export function AtendimentoPage() {
             </label>
             <ModuleHelp>
               <p className="panel-copy" style={{ marginTop: 8 }}>
-                Busca o material no cadastro (codigo ou codigo de barras) e marca a linha somente em documentos pendentes que contenham esse codigo. Se houver mais de um documento, escolha na lista.
+                Fluxo: preencha atendente e retirante, bipe os materiais de varios desenhos e confirme a sessao — um recibo consolidado e um lote por desenho no historico.
               </p>
             </ModuleHelp>
           </div>
         ) : null}
+        <AtendimentoBuscaDocumento documentos={documentos} onSelect={setSelectedDocumentoId} selectedDocumentoId={selectedDocumentoId} />
+
+
 
         <AtendimentoFormHeader
           atendente={atendente}
@@ -272,6 +349,17 @@ export function AtendimentoPage() {
           recebedorTelefone={recebedorTelefone}
           recebedorTipo={recebedorTipo}
         />
+
+        {canEdit ? (
+          <AtendimentoSessaoRetiradaPanel
+            linhas={sessaoRetirada}
+            loading={loading}
+            onConfirmar={pedirConfirmacaoSessaoRetirada}
+            onLimpar={limparSessaoRetirada}
+            onRemoverLinha={removerLinhaSessaoRetirada}
+            podeConfirmar={podeConfirmarSessaoRetirada}
+          />
+        ) : null}
 
         {loading ? <OperationalNotice>Carregando dados de atendimento...</OperationalNotice> : null}
 
@@ -384,35 +472,6 @@ export function AtendimentoPage() {
       </div>
 
       <Modal
-        onClose={cancelarLeitorEscolhaDocumento}
-        open={Boolean(leitorEscolhaDocumento)}
-        title="Escolher documento"
-        wide
-      >
-        {leitorEscolhaDocumento ? (
-          <div className="editor-block stack-grid">
-            <p>
-              O material <strong>{leitorEscolhaDocumento.material.codigo}</strong> consta em mais de um documento pendente. Indique qual deseja atender nesta operacao.
-            </p>
-            <ul className="stack-grid" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-              {leitorEscolhaDocumento.candidatos.map((d) => (
-                <li key={d.id}>
-                  <Button onClick={() => confirmarLeitorDocumento(d.id)} type="button">
-                    {d.numero} Rev. {d.revisao} — {d.descricao}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-            <div className="form-actions">
-              <Button onClick={cancelarLeitorEscolhaDocumento} type="button" variant="ghost">
-                Cancelar
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </Modal>
-
-      <Modal
         onClose={cancelarConfirmacaoAtendimento}
         open={Boolean(confirmacaoAtendimento)}
         title="Confirmar atendimento"
@@ -431,6 +490,71 @@ export function AtendimentoPage() {
               </Button>
               <Button onClick={() => void confirmarAtendimentoNoModal()} type="button">
                 Confirmar
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        onClose={cancelarConfirmacaoSessaoRetirada}
+        open={Boolean(confirmacaoSessaoRetirada)}
+        title="Confirmar retirada (varios desenhos)"
+        wide
+      >
+        {confirmacaoSessaoRetirada ? (
+          <div className="editor-block">
+            <p>
+              Confirmar retirada com <strong>{confirmacaoSessaoRetirada.documentoCount}</strong> desenho(s),{' '}
+              <strong>{confirmacaoSessaoRetirada.itemCount}</strong> item(ns) e total de{' '}
+              <strong>{confirmacaoSessaoRetirada.totalUnidades}</strong> unidade(s)?
+            </p>
+            <p className="panel-copy">
+              O sistema registrara um lote por desenho (rastreio e estorno) e emitira um recibo consolidado para
+              assinatura unica.
+            </p>
+            <div className="form-actions" style={{ marginTop: 16 }}>
+              <Button onClick={cancelarConfirmacaoSessaoRetirada} type="button" variant="ghost">
+                Cancelar
+              </Button>
+              <Button onClick={() => void confirmarSessaoRetiradaNoModal()} type="button">
+                Confirmar retirada
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        onClose={dispensarImpressaoReciboSessao}
+        open={Boolean(reciboSessaoOpcional)}
+        title="Recibo consolidado de retirada"
+        wide
+      >
+        {reciboSessaoOpcional ? (
+          <div className="editor-block">
+            <p>
+              Retirada registrada em <strong>{reciboSessaoOpcional.secoes.length}</strong> desenho(s). Lotes:{' '}
+              <strong>{reciboSessaoOpcional.numerosLotes.join(', ')}</strong>. Deseja imprimir o recibo consolidado?
+            </p>
+            <p className="panel-copy">
+              Revise o recibo na pre-visualizacao antes de imprimir. O documento lista todos os desenhos e materiais desta
+              retirada.
+            </p>
+            <div className="form-actions" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
+              <Button onClick={dispensarImpressaoReciboSessao} type="button" variant="ghost">
+                Nao
+              </Button>
+              <Button
+                disabled={reciboSessaoPreviewLoading}
+                onClick={() => void handleVisualizarReciboSessaoConsolidada()}
+                type="button"
+                variant="ghost"
+              >
+                {reciboSessaoPreviewLoading ? 'Abrindo...' : 'Visualizar recibo'}
+              </Button>
+              <Button onClick={imprimirReciboSessaoEfechar} type="button">
+                Sim, imprimir recibo unico
               </Button>
             </div>
           </div>
@@ -654,6 +778,26 @@ export function AtendimentoPage() {
           </div>
         ) : null}
       </Modal>
+
+      <AtendimentoLeitorModal
+        atendente={atendente}
+        avisoRetirante={avisoRetiranteLeitor}
+        colaboradores={colaboradores}
+        onCancelar={() => {
+          fecharLeitorPainel();
+          focarLeitor();
+        }}
+        onConfirmar={confirmarLeitorComQuantidade}
+        onContinuarBipando={() => {
+          continuarLeitorBipando();
+          focarLeitor();
+        }}
+        open={Boolean(leitorPainel)}
+        painel={leitorPainel}
+        recebedor={recebedor}
+        recebedorColaboradorId={recebedorColaboradorId}
+        recebedorTipo={recebedorTipo}
+      />
     </div>
   );
 }

@@ -1238,6 +1238,248 @@ export async function registrarAtendimento(payload: {
   return { success: true, data: atendimento, meta: { source: 'local' } };
 }
 
+export type RegistrarAtendimentosSessaoPayload = {
+  atendente: string;
+  recebedorTipo: AtendimentoRecebedorTipo;
+  recebedorColaboradorId?: string | null;
+  recebedor: string;
+  recebedorEmpresa?: string;
+  recebedorDocumento?: string;
+  recebedorTelefone?: string;
+  autorizadorInterno?: string;
+  motivoRetirada?: string;
+  origem?: 'windows' | 'mobile';
+  documentos: Array<{
+    documentoId: string;
+    itens: Array<{ documentoItemId: string; quantidade: number }>;
+  }>;
+};
+
+/**
+ * Registra varios lotes (um por documento) em uma unica operacao atomica.
+ * Valida tudo antes de gravar; no Supabase usa um unico patch de snapshot.
+ */
+export async function registrarAtendimentosSessao(
+  payload: RegistrarAtendimentosSessaoPayload,
+): Promise<ServiceResult<Atendimento[]>> {
+  if (!payload.atendente.trim()) return { success: false, error: 'Informe o atendente.' };
+  const grupos = payload.documentos.filter((g) => g.itens.some((i) => i.quantidade > 0));
+  if (!grupos.length) {
+    return { success: false, error: 'Informe ao menos um item para atender.' };
+  }
+
+  const gruposValidados: Array<{ documentoId: string; itens: Array<{ documentoItemId: string; quantidade: number }> }> =
+    [];
+  for (const grupo of grupos) {
+    const validated = validateRequestedItems(grupo.itens);
+    if (!validated.valid) {
+      return { success: false, error: validated.error };
+    }
+    gruposValidados.push({ documentoId: grupo.documentoId, itens: validated.items ?? [] });
+  }
+
+  let recebedorNome = payload.recebedor.trim();
+  let recebedorColaboradorId: string | null = payload.recebedorColaboradorId?.trim() || null;
+  let recebedorEmpresa = payload.recebedorEmpresa?.trim() ?? '';
+  let recebedorDocumento = payload.recebedorDocumento?.trim() ?? '';
+  let recebedorTelefone = payload.recebedorTelefone?.trim() ?? '';
+  let recebedorMatricula = '';
+  let recebedorFuncao = '';
+  const autorizadorInterno = payload.autorizadorInterno?.trim() ?? '';
+  const motivoRetirada = payload.motivoRetirada?.trim() ?? '';
+
+  if (payload.recebedorTipo === 'interno') {
+    if (!recebedorColaboradorId) return { success: false, error: 'Selecione um colaborador interno cadastrado.' };
+    const colaboradorResult = await buscarColaboradorPorId(recebedorColaboradorId);
+    if (!colaboradorResult.success || !colaboradorResult.data || !colaboradorResult.data.ativo) {
+      return { success: false, error: 'Colaborador interno nao encontrado ou inativo.' };
+    }
+    if (colaboradorResult.data.tipo !== 'interno') {
+      return { success: false, error: 'Selecione um colaborador interno valido para o atendimento.' };
+    }
+    recebedorNome = colaboradorResult.data.nome;
+    recebedorEmpresa = colaboradorResult.data.empresa;
+    recebedorDocumento = colaboradorResult.data.documento;
+    recebedorTelefone = colaboradorResult.data.telefone;
+    recebedorMatricula = String(colaboradorResult.data.matricula ?? '').trim();
+    recebedorFuncao = String(colaboradorResult.data.funcao ?? '').trim();
+  } else {
+    if (!recebedorNome) return { success: false, error: 'Informe o nome de quem esta retirando.' };
+    if (!recebedorEmpresa) return { success: false, error: 'Informe a empresa do retirante externo.' };
+    if (!recebedorDocumento) return { success: false, error: 'Informe o documento do retirante externo.' };
+    if (!recebedorTelefone) return { success: false, error: 'Informe o telefone do retirante externo.' };
+    if (recebedorTelefone.replace(/\D/g, '').length < 8) {
+      return { success: false, error: 'Informe um telefone valido para o retirante externo.' };
+    }
+    if (!autorizadorInterno) return { success: false, error: 'Informe quem autorizou internamente a retirada.' };
+    if (!motivoRetirada) return { success: false, error: 'Informe o motivo da retirada externa.' };
+
+    const externalResult = await registrarRetiranteExterno({
+      nome: recebedorNome,
+      empresa: recebedorEmpresa,
+      documento: recebedorDocumento,
+      telefone: recebedorTelefone,
+      observacao: `${motivoRetirada}${autorizadorInterno ? ` | Autorizado por: ${autorizadorInterno}` : ''}`,
+    });
+    if (!externalResult.success || !externalResult.data) {
+      return { success: false, error: externalResult.error ?? 'Nao foi possivel registrar o retirante externo.' };
+    }
+    recebedorColaboradorId = externalResult.data.id;
+    recebedorMatricula = String(externalResult.data.matricula ?? '').trim();
+    recebedorFuncao = String(externalResult.data.funcao ?? '').trim();
+  }
+
+  const colaboradoresAtivos = await listarColaboradoresAtivos();
+  const colabAtendente = resolverColaboradorPorTextoAtendente(payload.atendente, colaboradoresAtivos);
+  const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
+  const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
+
+  const remoteState = hasSupabaseConfig() ? await readRemoteState().catch(() => null) : null;
+  const localState = loadLocalState();
+  const documentos = remoteState?.documentos ?? localState.documentos;
+  const materiais =
+    remoteState != null && remoteState.materiais.length > 0
+      ? remoteState.materiais
+      : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
+  const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
+
+  const materialByCode = new Map(materiais.map((material, index) => [codigoMaterialKey(material.codigo), { material, index }]));
+  const saldoRestantePorCodigo = new Map<string, number>();
+  for (const material of materiais) {
+    saldoRestantePorCodigo.set(codigoMaterialKey(material.codigo), material.saldoAtual ?? 0);
+  }
+
+  const documentosMutados = new Map<string, DocumentoStored>();
+  const novosAtendimentos: Atendimento[] = [];
+  const dataAtendimento = new Date().toISOString();
+
+  for (const grupo of gruposValidados) {
+    const documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
+    if (documentoIndex === -1) {
+      return { success: false, error: 'Documento nao encontrado.' };
+    }
+
+    const documento = documentosMutados.get(grupo.documentoId) ?? { ...documentos[documentoIndex] };
+    if (documento.status === 'cancelado') {
+      return { success: false, error: 'Nao e possivel registrar atendimento para um documento cancelado.' };
+    }
+    if (documentoSemSaldoParaAtendimento(documento)) {
+      return {
+        success: false,
+        error: `O documento ${documento.numero} rev. ${documento.revisao} nao aceita novo atendimento: toda a quantidade planejada deste documento ja foi atendida.`,
+      };
+    }
+
+    const documentoItemById = new Map(documento.itens.map((item) => [item.id, item]));
+    const itensAtendidos: AtendimentoItem[] = [];
+
+    for (const requestItem of grupo.itens) {
+      const documentoItem = documentoItemById.get(requestItem.documentoItemId);
+      if (!documentoItem) {
+        return { success: false, error: 'Item do documento nao encontrado.' };
+      }
+
+      const pendente = documentoItem.quantidadeProjeto - documentoItem.quantidadeAtendida;
+      if (requestItem.quantidade > pendente) {
+        return {
+          success: false,
+          error: `Quantidade maior que o pendente do item ${documentoItem.codigoMaterial} no documento ${documento.numero}.`,
+        };
+      }
+
+      const materialEntry = materialByCode.get(codigoMaterialKey(documentoItem.codigoMaterial));
+      if (!materialEntry) {
+        return { success: false, error: `Material ${documentoItem.codigoMaterial} nao encontrado.` };
+      }
+
+      const codigoKey = codigoMaterialKey(documentoItem.codigoMaterial);
+      const saldoRestante = saldoRestantePorCodigo.get(codigoKey) ?? 0;
+      if (requestItem.quantidade > saldoRestante) {
+        return {
+          success: false,
+          error: `Saldo insuficiente para o material ${documentoItem.codigoMaterial} (considerando todos os desenhos desta retirada).`,
+        };
+      }
+
+      documentoItem.quantidadeAtendida += requestItem.quantidade;
+      materialEntry.material.saldoAtual = (materialEntry.material.saldoAtual ?? 0) - requestItem.quantidade;
+      saldoRestantePorCodigo.set(codigoKey, saldoRestante - requestItem.quantidade);
+
+      itensAtendidos.push({
+        id: crypto.randomUUID(),
+        documentoItemId: documentoItem.id,
+        materialId: materialEntry.material.id,
+        codigoMaterial: documentoItem.codigoMaterial,
+        descricaoMaterial: documentoItem.descricaoMaterial,
+        unidade: documentoItem.unidade,
+        quantidadeAtendida: requestItem.quantidade,
+      });
+    }
+
+    documento.status = deriveDocumentoStatus(documento);
+    documentosMutados.set(grupo.documentoId, documento);
+    documentos[documentoIndex] = documento;
+
+    const atendimento: Atendimento = {
+      id: crypto.randomUUID(),
+      numero: buildNumeroAtendimento(consumirSequenciaAtendimento()),
+      documentoId: documento.id,
+      documentoNumero: documento.numero,
+      atendente: payload.atendente.trim(),
+      atendenteMatricula,
+      atendenteFuncao,
+      recebedorTipo: payload.recebedorTipo,
+      recebedorColaboradorId,
+      recebedor: recebedorNome,
+      recebedorMatricula,
+      recebedorFuncao,
+      recebedorEmpresa,
+      recebedorDocumento,
+      recebedorTelefone,
+      autorizadorInterno,
+      motivoRetirada,
+      origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
+      status: 'concluido',
+      dataAtendimento,
+      itens: itensAtendidos,
+    };
+    novosAtendimentos.push(atendimento);
+    atendimentos.push(atendimento);
+  }
+
+  const documentosPatch = [...documentosMutados.values()];
+
+  if (remoteState) {
+    const bloqueioAtendimento = bloqueioLocalChavesAtendimento({
+      documentosLength: documentos.length,
+      materiaisLength: materiais.length,
+      atendimentosLength: atendimentos.length,
+    });
+    if (bloqueioAtendimento) return { success: false, error: bloqueioAtendimento };
+    return executeWrite({
+      shouldWriteRemote: true,
+      writeRemote: () =>
+        writeSnapshotAtendimentoPatch({
+          documentos: documentosPatch,
+          atendimentos: novosAtendimentos,
+        }),
+      writeLocal: () => {
+        writeJson(documentosKeyAtendimento(), documentos);
+        writeJson(materiaisKeyAtendimento(), materiais);
+        writeJson(atendimentosStorageKey(), atendimentos);
+      },
+      successData: novosAtendimentos,
+      fallbackMessage: 'Falha ao salvar sessao de atendimento no Supabase.',
+    });
+  }
+  const blockedSalvar = whenBusinessWriteBlockedResult<Atendimento[]>();
+  if (blockedSalvar) return blockedSalvar;
+  writeJson(documentosKeyAtendimento(), documentos);
+  writeJson(materiaisKeyAtendimento(), materiais);
+  writeJson(atendimentosStorageKey(), atendimentos);
+  return { success: true, data: novosAtendimentos, meta: { source: 'local' } };
+}
+
 /**
  * Estorna quantidades do atendimento no documento e no saldo de materiais.
  * Se `linhasEstorno` for omitido ou vazio, estorna todo o lote (comportamento anterior).

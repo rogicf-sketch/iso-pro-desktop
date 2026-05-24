@@ -9,7 +9,9 @@ export function MainLayout() {
   const { user, logout, canAccessModule } = useAuth();
   const location = useLocation();
   const moduleTitle = getModuleTitleForPath(location.pathname);
-  const visibleMenuItems = moduleNavigation.filter((item) => canAccessModule(item.modulo));
+  const visibleMenuItems = moduleNavigation.filter(
+    (item) => canAccessModule(item.modulo) && !('hideInSidebar' in item && item.hideInSidebar),
+  );
   const titularLinha = getTitularSistemaLinhaResumo();
 
   return (

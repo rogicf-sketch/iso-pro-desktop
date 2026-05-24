@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { normalizarUrlAssetPublicParaAmbiente } from '../../../lib/logoInstitucional';
 import { Button } from '../../../components/ui/Button';
@@ -425,7 +425,7 @@ export function ConfiguracoesPage() {
         </div>
 
         <p className="config-page__lede panel-copy">
-          Parâmetros organizados por aba. O botão <strong>Salvar configurações</strong> permanece fixo no fundo enquanto navega.
+          Parâmetros organizados por seção. Use a lista à esquerda para alternar; o botão <strong>Salvar configurações</strong> fica no topo.
         </p>
 
         {error ? <div className="error-box">{error}</div> : null}
@@ -445,8 +445,24 @@ export function ConfiguracoesPage() {
           </OperationalNotice>
         </div>
 
-        <ConfiguracoesSecaoNav secaoAtiva={secaoAtiva} secoes={secoesConfigVisiveis} onSecao={mudarSecaoConfig} />
-        <ConfiguracoesSecaoIntro key={secaoAtiva} secao={secaoConfigMeta} />
+        {canAdminister ? (
+          <div className="config-salvar-bar config-salvar-bar--top">
+            <p className="panel-copy">
+              Grava obra, rodapé, tema, logo, qualidade, nuvem, desktop, alertas e IA. Mudar ambiente ou organização recarrega a pagina.
+            </p>
+            <Button onClick={submit}>Salvar configurações</Button>
+          </div>
+        ) : (
+          <OperationalNotice>
+            Seu perfil pode visualizar configuracoes, mas nao pode alterar parametros administrativos. Pode, no entanto, ajustar o{' '}
+            <strong>tema visível para mim</strong> na seção Interface — essa escolha é só sua neste navegador.
+          </OperationalNotice>
+        )}
+
+        <div className="config-page__layout">
+          <ConfiguracoesSecaoNav secaoAtiva={secaoAtiva} secoes={secoesConfigVisiveis} onSecao={mudarSecaoConfig} />
+          <div className="config-page__main">
+            <ConfiguracoesSecaoIntro key={secaoAtiva} secao={secaoConfigMeta} />
 
         <div
           aria-labelledby={`config-tab-${secaoAtiva}`}
@@ -1273,19 +1289,8 @@ export function ConfiguracoesPage() {
         ) : null}
         </div>
 
-        {canAdminister ? (
-          <div className="config-salvar-bar">
-            <p className="panel-copy">
-              Grava obra, rodapé, tema, logo, qualidade, nuvem, desktop e IA. Mudar ambiente ou organização recarrega a pagina.
-            </p>
-            <Button onClick={submit}>Salvar configurações</Button>
           </div>
-        ) : (
-          <OperationalNotice>
-            Seu perfil pode visualizar configuracoes, mas nao pode alterar parametros administrativos. Pode, no entanto, ajustar o{' '}
-            <strong>tema visível para mim</strong> na aba Interface — essa escolha é só sua neste navegador.
-          </OperationalNotice>
-        )}
+        </div>
       </div>
 
       <Modal onClose={fecharCadastroLocalModal} open={cadastroLocalModalOpen && canAdminister} title="Limpar cadastros neste PC" wide>

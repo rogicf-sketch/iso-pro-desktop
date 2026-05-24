@@ -19,6 +19,21 @@ export function isDesktopMailDisponivel(): boolean {
   return typeof window !== 'undefined' && window.isoProDesktop?.platform === 'desktop' && Boolean(window.isoProDesktop.sendMail);
 }
 
+/** Texto curto para diagnosticar por que o teste SMTP local esta indisponivel. */
+export function motivoDesktopMailIndisponivel(): string {
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+  if (!api) {
+    return 'Nenhuma API desktop detectada — abra pelo icone do Windows (Setup .exe), nao pelo site no navegador.';
+  }
+  if (api.platform !== 'desktop') {
+    return `Plataforma "${String(api.platform)}" — use o aplicativo instalado no PC.`;
+  }
+  if (!api.sendMail) {
+    return `Instalacao desktop (v${api.version ?? '?'}) sem modulo de e-mail — reinstale o Setup 0.1.15 ou superior.`;
+  }
+  return '';
+}
+
 export function parseDestinatariosEmail(raw: string): string[] {
   return raw
     .split(/[,;]+/)

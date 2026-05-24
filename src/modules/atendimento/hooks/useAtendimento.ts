@@ -4,6 +4,7 @@ import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { listarColaboradoresAtivos } from '../../colaboradores/services/colaboradores.service';
 import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
+import { tocarFeedbackLeitor } from '../../../lib/leitorFeedbackSonoro';
 import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import {
@@ -12,6 +13,7 @@ import {
   listarHistoricoAtendimentosComMeta,
   montarExportacaoAtendimentosCsvItens,
   registrarAtendimento,
+  registrarAtendimentosSessao,
 } from '../services/atendimento.service';
 import type { Colaborador } from '../../colaboradores/types/colaborador.types';
 import type {
@@ -22,8 +24,22 @@ import type {
   AtendimentoRecebedorTipo,
   DadosReciboAtendimento,
   DadosReciboEstorno,
+  DadosReciboSessaoConsolidada,
   EstornoAtendimentoLinha,
+  ReciboSessaoSecaoDocumento,
+  SessaoRetiradaLinha,
 } from '../types/atendimento.types';
+import { imprimirReciboAtendimento, imprimirReciboSessaoConsolidada } from '../utils/imprimirReciboAtendimento';
+import { imprimirReciboEstorno } from '../utils/imprimirReciboEstorno';
+import { montarDadosReciboEstorno } from '../utils/montarDadosReciboEstorno';
+import { montarDadosReciboSessaoConsolidada } from '../utils/montarDadosReciboSessaoConsolidada';
+import {
+  adicionarOuAtualizarLinhaSessao,
+  montarPayloadDocumentosSessao,
+  obterErroRegistroSessaoRetirada,
+  removerLinhaSessao,
+  totalUnidadesSessao,
+} from '../utils/sessaoRetirada.utils';
 
 type AtendimentoCorePayload = {
   documentos: AtendimentoDocumento[];
@@ -119,16 +135,31 @@ export function obterErroRegistroAtendimento(
 
   return null;
 }
-import { imprimirReciboAtendimento } from '../utils/imprimirReciboAtendimento';
-import { imprimirReciboEstorno } from '../utils/imprimirReciboEstorno';
-import { montarDadosReciboEstorno } from '../utils/montarDadosReciboEstorno';
 
 /** Sugestao ao marcar linha / todos: ate o pendente do documento, limitado ao saldo disponivel. */
-function quantidadeSugeridaNestaOperacao(linha: AtendimentoDocumentoLinha): number {
+export function quantidadeMaximaAtendimentoLinha(linha: AtendimentoDocumentoLinha): number {
   const pendente = Number(linha.quantidadePendente) || 0;
   const saldo = Number(linha.saldoDisponivel) || 0;
   return Math.max(0, Math.min(pendente, saldo));
 }
+
+function quantidadeSugeridaNestaOperacao(linha: AtendimentoDocumentoLinha): number {
+  return quantidadeMaximaAtendimentoLinha(linha);
+}
+
+export type AtendimentoLeitorCandidato = {
+  documento: AtendimentoDocumento;
+  linha: AtendimentoDocumentoLinha;
+};
+
+export type AtendimentoLeitorPainelState = {
+  scan: string;
+  material: Material;
+  candidatos: AtendimentoLeitorCandidato[];
+  documentoSelecionadoId?: string;
+  passo?: 'escolher' | 'concluido';
+  quantidadeAplicada?: number;
+};
 
 /**
  * Sincronização em segundo plano (nuvem): atualiza pendência/saldo vindos do servidor sem apagar
@@ -216,12 +247,23 @@ export function useAtendimento() {
    */
   const [documentosListaTick, setDocumentosListaTick] = useState(0);
   /** Leitor de codigo: ao abrir documento por bip, marcar apenas a linha lida (nao todas). */
-  const leitorAplicarSomenteLinhaRef = useRef<{ documentoId: string; documentoItemId: string } | null>(null);
-  /** Varios documentos pendentes com o mesmo material: usuario escolhe qual atender. */
-  const [leitorEscolhaDocumento, setLeitorEscolhaDocumento] = useState<{
-    material: Material;
-    candidatos: AtendimentoDocumento[];
+  const leitorAplicarSomenteLinhaRef = useRef<{
+    documentoId: string;
+    documentoItemId: string;
+    quantidade?: number;
   } | null>(null);
+  /** Leitor USB: modal com desenho, quantidade e continuar bipando. */
+  const [leitorPainel, setLeitorPainel] = useState<AtendimentoLeitorPainelState | null>(null);
+  /** Fila multi-desenho antes de confirmar retirada unica + recibo consolidado. */
+  const [sessaoRetirada, setSessaoRetirada] = useState<SessaoRetiradaLinha[]>([]);
+  /** Confirmacao da sessao multi-desenho. */
+  const [confirmacaoSessaoRetirada, setConfirmacaoSessaoRetirada] = useState<{
+    documentoCount: number;
+    itemCount: number;
+    totalUnidades: number;
+  } | null>(null);
+  /** Recibo consolidado apos confirmar sessao. */
+  const [reciboSessaoOpcional, setReciboSessaoOpcional] = useState<DadosReciboSessaoConsolidada | null>(null);
   /** Confirmacao no padrao do sistema (Modal), substitui window.confirm. */
   const [confirmacaoAtendimento, setConfirmacaoAtendimento] = useState<{
     documentoNumero: string;
@@ -397,7 +439,11 @@ export function useAtendimento() {
                 ...d,
                 linhas: d.linhas.map((linha) =>
                   linha.documentoItemId === somenteLeitor.documentoItemId
-                    ? { ...linha, quantidadeNestaOperacao: quantidadeSugeridaNestaOperacao(linha) }
+                    ? {
+                        ...linha,
+                        quantidadeNestaOperacao:
+                          somenteLeitor.quantidade ?? quantidadeSugeridaNestaOperacao(linha),
+                      }
                     : { ...linha, quantidadeNestaOperacao: 0 },
                 ),
               },
@@ -493,32 +539,317 @@ export function useAtendimento() {
     [selectedDocumentoId, setDocumentos],
   );
 
-  const aplicarLeituraMaterialNoDocumento = useCallback(
-    (doc: AtendimentoDocumento, material: Material) => {
-      const linha = doc.linhas.find(
-        (l) => l.codigoMaterial.trim().toLowerCase() === material.codigo.trim().toLowerCase(),
+  function aplicarLinhaNoDocumento(
+    documentoId: string,
+    documentoItemId: string,
+    quantidade: number,
+  ) {
+    setIdsMarcados((prev) => new Set([...prev, documentoItemId]));
+    setDocumentos((current) =>
+      current.map((doc) =>
+        doc.id !== documentoId
+          ? doc
+          : {
+              ...doc,
+              linhas: doc.linhas.map((linha) =>
+                linha.documentoItemId === documentoItemId
+                  ? { ...linha, quantidadeNestaOperacao: quantidade }
+                  : linha,
+              ),
+            },
+      ),
+    );
+  }
+
+  const confirmarLeitorComQuantidade = useCallback(
+    (documentoId: string, quantidadeInformada: number) => {
+      if (!leitorPainel) return;
+      const cand = leitorPainel.candidatos.find((c) => c.documento.id === documentoId);
+      if (!cand) return;
+      const { documento, linha } = cand;
+      const max = quantidadeMaximaAtendimentoLinha(linha);
+      const q = Math.min(Math.max(0, quantidadeInformada), max);
+      if (q <= 0) {
+        tocarFeedbackLeitor('erro');
+        setError('Informe quantidade maior que zero (respeitando pendente e saldo).');
+        return;
+      }
+      setError('');
+
+      aplicarLinhaNoDocumento(documentoId, linha.documentoItemId, q);
+      setSessaoRetirada((prev) =>
+        adicionarOuAtualizarLinhaSessao(
+          prev,
+          {
+            documentoId: documento.id,
+            documentoNumero: documento.numero,
+            documentoRevisao: documento.revisao,
+            documentoDescricao: documento.descricao,
+            documentoResponsavel: documento.responsavel,
+            documentoItemId: linha.documentoItemId,
+            codigoMaterial: linha.codigoMaterial,
+            descricaoMaterial: linha.descricaoMaterial,
+            unidade: linha.unidade,
+            quantidade: q,
+          },
+          max,
+        ),
       );
-      if (!linha) {
-        setError('Linha do documento nao encontrada para este material.');
-        return;
-      }
 
-      if (selectedDocumentoId === doc.id) {
-        if (idsMarcados.has(linha.documentoItemId)) {
-          setSuccess(`Material ${material.codigo} ja estava selecionado nesta operacao.`);
-        } else {
-          toggleMarcaItem(linha.documentoItemId, true);
-          setSuccess(`Material ${material.codigo} incluido. Continue bipando ou confirme o atendimento.`);
-        }
-        return;
-      }
-
-      leitorAplicarSomenteLinhaRef.current = { documentoId: doc.id, documentoItemId: linha.documentoItemId };
-      setSelectedDocumentoId(doc.id);
-      setSuccess(`Documento ${doc.numero}: selecionado pelo codigo. Continue bipando ou confirme o atendimento.`);
+      setLeitorPainel((prev) =>
+        prev
+          ? {
+              ...prev,
+              passo: 'concluido',
+              documentoSelecionadoId: documentoId,
+              quantidadeAplicada: q,
+            }
+          : prev,
+      );
+      setSuccess(
+        `${leitorPainel.material.codigo} incluido na sessao (${q} ${linha.unidade}) — ${documento.numero} Rev. ${documento.revisao}.`,
+      );
+      tocarFeedbackLeitor('confirmado');
     },
-    [selectedDocumentoId, idsMarcados, toggleMarcaItem],
+    [leitorPainel],
   );
+
+  const removerLinhaSessaoRetirada = useCallback((documentoId: string, documentoItemId: string) => {
+    setSessaoRetirada((prev) => removerLinhaSessao(prev, documentoId, documentoItemId));
+    setDocumentos((current) =>
+      current.map((doc) =>
+        doc.id !== documentoId
+          ? doc
+          : {
+              ...doc,
+              linhas: doc.linhas.map((linha) =>
+                linha.documentoItemId === documentoItemId ? { ...linha, quantidadeNestaOperacao: 0 } : linha,
+              ),
+            },
+      ),
+    );
+  }, [setDocumentos]);
+
+  const limparSessaoRetirada = useCallback(() => {
+    setSessaoRetirada([]);
+    setDocumentos((current) =>
+      current.map((doc) => ({
+        ...doc,
+        linhas: doc.linhas.map((linha) => ({ ...linha, quantidadeNestaOperacao: 0 })),
+      })),
+    );
+    setIdsMarcados(new Set());
+  }, [setDocumentos]);
+
+  const podeConfirmarSessaoRetirada = useMemo(
+    () =>
+      obterErroRegistroSessaoRetirada(
+        sessaoRetirada,
+        documentos,
+        atendente,
+        recebedorTipo,
+        recebedorColaboradorId,
+        recebedor,
+        recebedorEmpresa,
+        recebedorDocumento,
+        recebedorTelefone,
+        autorizadorInterno,
+        motivoRetirada,
+      ) === null,
+    [
+      sessaoRetirada,
+      documentos,
+      atendente,
+      recebedorTipo,
+      recebedorColaboradorId,
+      recebedor,
+      recebedorEmpresa,
+      recebedorDocumento,
+      recebedorTelefone,
+      autorizadorInterno,
+      motivoRetirada,
+    ],
+  );
+
+  function pedirConfirmacaoSessaoRetirada() {
+    setError('');
+    setSuccess('');
+    setSnapshotConflict(false);
+    if (!canAccessAction('atendimento', 'editar')) {
+      setError('Seu perfil nao possui permissao para registrar atendimento.');
+      return;
+    }
+    const erro = obterErroRegistroSessaoRetirada(
+      sessaoRetirada,
+      documentos,
+      atendente,
+      recebedorTipo,
+      recebedorColaboradorId,
+      recebedor,
+      recebedorEmpresa,
+      recebedorDocumento,
+      recebedorTelefone,
+      autorizadorInterno,
+      motivoRetirada,
+    );
+    if (erro) {
+      setError(erro);
+      return;
+    }
+    const docs = new Set(sessaoRetirada.map((l) => l.documentoId));
+    setConfirmacaoSessaoRetirada({
+      documentoCount: docs.size,
+      itemCount: sessaoRetirada.length,
+      totalUnidades: totalUnidadesSessao(sessaoRetirada),
+    });
+  }
+
+  function cancelarConfirmacaoSessaoRetirada() {
+    setConfirmacaoSessaoRetirada(null);
+  }
+
+  async function confirmarSessaoRetiradaNoModal() {
+    if (!confirmacaoSessaoRetirada) return;
+    const erro = obterErroRegistroSessaoRetirada(
+      sessaoRetirada,
+      documentos,
+      atendente,
+      recebedorTipo,
+      recebedorColaboradorId,
+      recebedor,
+      recebedorEmpresa,
+      recebedorDocumento,
+      recebedorTelefone,
+      autorizadorInterno,
+      motivoRetirada,
+    );
+    if (erro) {
+      setError(erro);
+      setConfirmacaoSessaoRetirada(null);
+      return;
+    }
+
+    const metaPorDocumento = new Map<
+      string,
+      { descricao: string; revisao: string; responsavel: string; numero: string }
+    >();
+    for (const linha of sessaoRetirada) {
+      if (!metaPorDocumento.has(linha.documentoId)) {
+        metaPorDocumento.set(linha.documentoId, {
+          descricao: linha.documentoDescricao,
+          revisao: linha.documentoRevisao,
+          responsavel: linha.documentoResponsavel,
+          numero: linha.documentoNumero,
+        });
+      }
+    }
+
+    const tipoRec = recebedorTipo;
+    const colabId = recebedorColaboradorId;
+    const extNome = recebedor;
+    const extEmp = recebedorEmpresa;
+    const extDoc = recebedorDocumento;
+    const extTel = recebedorTelefone;
+    const extAuth = autorizadorInterno;
+    const extMotivo = motivoRetirada;
+
+    setConfirmacaoSessaoRetirada(null);
+
+    const result = await registrarAtendimentosSessao({
+      atendente,
+      recebedorTipo,
+      recebedorColaboradorId,
+      recebedor,
+      recebedorEmpresa,
+      recebedorDocumento,
+      recebedorTelefone,
+      autorizadorInterno,
+      motivoRetirada,
+      documentos: montarPayloadDocumentosSessao(sessaoRetirada),
+    });
+
+    if (!result.success || !result.data?.length) {
+      setError(result.error ?? 'Nao foi possivel registrar a sessao de retirada.');
+      setSnapshotConflict(result.meta?.snapshotConflict === true);
+      return;
+    }
+
+    const nomeColabRetirada =
+      tipoRec === 'interno' && colabId
+        ? colaboradores.find((c) => c.id === colabId)?.nome?.trim() ?? ''
+        : '';
+    const nomeAtendido =
+      tipoRec === 'interno'
+        ? nomeColabRetirada || '-'
+        : `${extNome.trim()}${extEmp.trim() ? ` — ${extEmp.trim()}` : ''}`.trim() || '-';
+
+    const secoes: ReciboSessaoSecaoDocumento[] = result.data.map((at) => {
+      const meta = metaPorDocumento.get(at.documentoId);
+      return {
+        atendimento: at,
+        documentoDescricao: meta?.descricao ?? '',
+        documentoRevisao: meta?.revisao ?? '—',
+        documentoResponsavel: meta?.responsavel ?? '—',
+      };
+    });
+
+    const numeros = result.data.map((a) => a.numero).join(', ');
+    setSnapshotConflict(false);
+    setSuccess(
+      result.meta?.source === 'local'
+        ? `Retirada registrada (${result.data.length} lote(s): ${numeros}).`
+        : `Retirada registrada com sucesso (${result.data.length} lote(s): ${numeros}).`,
+    );
+
+    setSessaoRetirada([]);
+    setRecebedorTipo('interno');
+    setRecebedorColaboradorId('');
+    setRecebedor('');
+    setRecebedorEmpresa('');
+    setRecebedorDocumento('');
+    setRecebedorTelefone('');
+    setAutorizadorInterno('');
+    setMotivoRetirada('');
+    setSelectedDocumentoId('');
+    setIdsMarcados(new Set());
+    await load();
+
+    setReciboSessaoOpcional(
+      montarDadosReciboSessaoConsolidada(
+        result.data,
+        secoes,
+        nomeAtendido,
+        tipoRec === 'externo'
+          ? {
+              documentoIdentificacao: extDoc.trim(),
+              telefone: extTel.trim(),
+              autorizadorInterno: extAuth.trim(),
+              motivoRetirada: extMotivo.trim(),
+            }
+          : undefined,
+      ),
+    );
+  }
+
+  function dispensarImpressaoReciboSessao() {
+    setReciboSessaoOpcional(null);
+  }
+
+  function imprimirReciboSessaoEfechar() {
+    if (reciboSessaoOpcional) {
+      const ok = imprimirReciboSessaoConsolidada(reciboSessaoOpcional);
+      if (!ok) {
+        setError(
+          'Nao foi possivel abrir a janela do recibo. Desative o bloqueador de popups para este site e tente de novo.',
+        );
+      }
+    }
+    setReciboSessaoOpcional(null);
+  }
+
+  const continuarLeitorBipando = useCallback(() => {
+    setLeitorPainel(null);
+  }, []);
 
   const processarLeituraCodigoBarras = useCallback(
     async (scanRaw: string) => {
@@ -533,51 +864,39 @@ export function useAtendimento() {
 
       const matRes = await buscarMaterialPorLeituraCodigo(scan);
       if (!matRes.success) {
+        tocarFeedbackLeitor('erro');
         setError(matRes.error ?? 'Falha ao buscar material.');
         return;
       }
       if (!matRes.data) {
+        tocarFeedbackLeitor('erro');
         setError('Material nao encontrado no cadastro (codigo ou codigo de barras).');
         return;
       }
       const material = matRes.data;
       const codigoRef = material.codigo.trim().toLowerCase();
 
-      const candidatos = documentos.filter((d) =>
-        d.linhas.some((l) => l.codigoMaterial.trim().toLowerCase() === codigoRef),
-      );
+      const candidatos = documentos.flatMap((d) => {
+        const linha = d.linhas.find((l) => l.codigoMaterial.trim().toLowerCase() === codigoRef);
+        return linha ? [{ documento: d, linha }] : [];
+      });
+
+      setLeitorPainel({ scan, material, candidatos, passo: 'escolher' });
 
       if (candidatos.length === 0) {
+        tocarFeedbackLeitor('erro');
         setError(
           'Nenhum documento pendente inclui este material. E necessario cadastro, recebimento (saldo) e linha no documento.',
         );
-        return;
+      } else {
+        tocarFeedbackLeitor('sucesso');
       }
-
-      if (candidatos.length > 1) {
-        setLeitorEscolhaDocumento({ material, candidatos });
-        return;
-      }
-
-      aplicarLeituraMaterialNoDocumento(candidatos[0]!, material);
     },
-    [documentos, canAccessAction, aplicarLeituraMaterialNoDocumento],
+    [documentos, canAccessAction],
   );
 
-  const confirmarLeitorDocumento = useCallback(
-    (documentoId: string) => {
-      if (!leitorEscolhaDocumento) return;
-      const doc = leitorEscolhaDocumento.candidatos.find((d) => d.id === documentoId);
-      const { material } = leitorEscolhaDocumento;
-      setLeitorEscolhaDocumento(null);
-      if (!doc) return;
-      aplicarLeituraMaterialNoDocumento(doc, material);
-    },
-    [leitorEscolhaDocumento, aplicarLeituraMaterialNoDocumento],
-  );
-
-  const cancelarLeitorEscolhaDocumento = useCallback(() => {
-    setLeitorEscolhaDocumento(null);
+  const fecharLeitorPainel = useCallback(() => {
+    setLeitorPainel(null);
   }, []);
 
   const marcarTodosItens = useCallback(
@@ -1037,10 +1356,22 @@ export function useAtendimento() {
     toggleMarcaItem,
     marcarTodosItens,
     exportarAtendimentosMateriaisExcel,
-    leitorEscolhaDocumento,
+    leitorPainel,
     processarLeituraCodigoBarras,
-    confirmarLeitorDocumento,
-    cancelarLeitorEscolhaDocumento,
+    confirmarLeitorComQuantidade,
+    continuarLeitorBipando,
+    fecharLeitorPainel,
+    sessaoRetirada,
+    removerLinhaSessaoRetirada,
+    limparSessaoRetirada,
+    podeConfirmarSessaoRetirada,
+    pedirConfirmacaoSessaoRetirada,
+    confirmacaoSessaoRetirada,
+    cancelarConfirmacaoSessaoRetirada,
+    confirmarSessaoRetiradaNoModal,
+    reciboSessaoOpcional,
+    dispensarImpressaoReciboSessao,
+    imprimirReciboSessaoEfechar,
   };
 }
 

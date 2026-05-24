@@ -19,44 +19,48 @@ export function RelatoriosPage() {
     <div className="panel">
       <div className="panel-header">
         <div>
-          <p className="panel-kicker">Modulo</p>
-          <h2>Relatorios</h2>
+          <p className="panel-kicker">Gestão</p>
+          <h2>Relatórios</h2>
         </div>
       </div>
 
       <ModuleHelp>
         <p className="panel-copy">
-          Painel gerencial resumido para acompanhar estoque, planejamento, recebimentos, qualidade e dispositivos mobile sem sobrecarregar o
-          front.
+          Painel gerencial e documentos de encerramento: indicadores do projeto, relatório fotográfico e relatório final de
+          obra para apresentação à diretoria e ao cliente.
         </p>
       </ModuleHelp>
 
-      <div className="info-card" style={{ marginBottom: 20 }}>
-        <p className="panel-kicker">Encerramento de obra</p>
-        <h3>Relatório Final de Obra</h3>
-        <ModuleHelp>
-          <p className="panel-copy">
-            Consolida todos os registros do projeto (planejamento, recebimentos, RIR, RNC, atendimentos, inventários e relatórios
-            fotográficos) em documento único de encerramento, com exportação PDF, Word e Excel.
-          </p>
-        </ModuleHelp>
-        <Link className="button button-primary" to="/relatorio-final-obra">
-          Gerar relatório final
-        </Link>
-      </div>
+      <div className="section-block" style={{ marginBottom: 24 }}>
+        <p className="panel-kicker">Documentos</p>
+        <div className="cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+          <div className="info-card">
+            <p className="panel-kicker">Encerramento de obra</p>
+            <h3>Relatório Final de Obra</h3>
+            <ModuleHelp>
+              <p className="panel-copy">
+                Consolida planejamento, recebimentos, RIR, RNC, atendimentos, inventários e relatórios fotográficos em
+                documento executivo único, com exportação PDF, Word e Excel.
+              </p>
+            </ModuleHelp>
+            <Link className="button button-primary" to="/relatorios/final-obra">
+              Gerar relatório final
+            </Link>
+          </div>
 
-      <div className="info-card" style={{ marginBottom: 20 }}>
-        <p className="panel-kicker">Evidências</p>
-        <h3>Relatório fotográfico</h3>
-        <ModuleHelp>
-          <p className="panel-copy">
-            Registo de fotos com compressão automática, vínculo opcional a recebimentos e impressão em HTML. Sincronização com Supabase
-            (tabela <code>iso_pro_relatorio_snapshot</code>) quando configurado.
-          </p>
-        </ModuleHelp>
-        <Link className="button button-primary" to="/relatorio-fotografico">
-          Abrir relatório fotográfico
-        </Link>
+          <div className="info-card">
+            <p className="panel-kicker">Evidências</p>
+            <h3>Relatório fotográfico</h3>
+            <ModuleHelp>
+              <p className="panel-copy">
+                Registo de fotos com compressão automática, vínculo opcional a recebimentos e impressão em HTML.
+              </p>
+            </ModuleHelp>
+            <Link className="button" to="/relatorio-fotografico">
+              Abrir relatório fotográfico
+            </Link>
+          </div>
+        </div>
       </div>
 
       {resumoSeguranca ? <OperationalNotice tone="warning">{resumoSeguranca.detalhe}</OperationalNotice> : null}

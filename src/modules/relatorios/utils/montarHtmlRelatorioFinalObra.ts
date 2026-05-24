@@ -28,79 +28,124 @@ function cssRelatorioFinalObra(): string {
     @page { margin: 18mm 16mm; }
     body {
       font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-      margin: 0; padding: 0; color: #0f172a; font-size: 10.5pt; line-height: 1.55;
-      background: #f1f5f9;
+      margin: 0; padding: 0; color: #1e293b; font-size: 10.5pt; line-height: 1.55;
+      background: #e8ecef;
     }
-    .rfo-page { max-width: 210mm; margin: 0 auto; background: #fff; }
-.rfo-capa {
-      background: linear-gradient(160deg, #0f172a 0%, #1e3a5f 50%, #0c4a6e 100%);
-      color: #f8fafc; padding: 28px 32px 24px; border-radius: 0 0 10px 10px;
+    .rfo-page { max-width: 210mm; margin: 0 auto; background: #fff; box-shadow: 0 2px 16px rgba(15,23,42,0.06); }
+    .rfo-preview-strip {
+      display: none;
     }
-    .rfo-capa-inner { max-width: 520px; margin: 0 auto; text-align: center; }
-    .rfo-capa-top {
-      display: flex; flex-direction: column; align-items: center; gap: 8px;
-      padding-bottom: 16px; margin-bottom: 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.18);
+    @media screen {
+      .rfo-preview-strip {
+        display: flex; align-items: center; justify-content: space-between; gap: 16px;
+        max-width: 210mm; margin: 0 auto; padding: 10px 16px;
+        background: #fffbeb; border-bottom: 1px solid #fde68a;
+      }
+      .rfo-preview-strip__titulo { font-size: 10pt; font-weight: 600; color: #92400e; letter-spacing: 0.02em; }
+      .rfo-preview-strip__cliente { font-size: 9pt; color: #64748b; text-align: right; max-width: 42%; line-height: 1.35; }
     }
-    .rfo-capa-logo { display: flex; justify-content: center; }
-    .rfo-capa-logo .inst-logo-col { flex: none; min-height: 0; margin: 0; }
-    .rfo-capa-logo .inst-logo-img { max-width: 72px; max-height: 40px; width: auto; height: auto; }
-    .rfo-capa-logo .inst-logo-placeholder {
-      width: 72px; min-height: 36px; max-height: 40px; padding: 4px 6px; margin: 0 auto;
-      border-color: rgba(255,255,255,0.3); background: rgba(0,0,0,0.2);
+    .rfo-capa {
+      background: #fff; color: #1e293b;
+      min-height: auto; box-sizing: border-box;
+      display: flex; flex-direction: column;
+      padding-bottom: 8px;
     }
-    .rfo-capa-logo .inst-logo-hint { font-size: 6.5pt; line-height: 1.2; color: rgba(248,250,252,0.85); }
-    .rfo-capa-logo .inst-logo-sub { font-size: 6pt; color: rgba(248,250,252,0.55); }
-    .rfo-capa-marca {
-      margin: 0; font-size: 8pt; letter-spacing: 0.14em; text-transform: uppercase;
-      font-weight: 600; opacity: 0.82;
+    .rfo-capa-head {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+      padding: 24px 40px 18px;
+      border-bottom: 2px solid #16a34a;
     }
-    .rfo-capa-titulo-wrap { margin-bottom: 14px; }
-    .rfo-capa-eyebrow {
-      margin: 0 0 8px; font-size: 7.5pt; letter-spacing: 0.2em; text-transform: uppercase;
-      font-weight: 600; color: #7dd3fc;
+    .rfo-capa-brand { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+    .rfo-capa-brand .inst-logo-col { flex: none; min-height: 0; margin: 0; justify-content: flex-start; }
+    .rfo-capa-brand .inst-logo-img { max-width: 160px; max-height: 72px; width: auto; height: auto; }
+    .rfo-capa-brand .inst-logo-placeholder {
+      width: 160px; min-height: 56px; padding: 10px 12px; margin: 0;
+      border: 1px dashed #cbd5e1; background: #f8fafc; border-radius: 6px;
+    }
+    .rfo-capa-brand .inst-logo-hint { font-size: 7.5pt; color: #64748b; }
+    .rfo-capa-brand .inst-logo-sub { font-size: 6.5pt; color: #94a3b8; }
+    .rfo-capa-docref { text-align: right; flex-shrink: 0; padding-top: 4px; }
+    .rfo-capa-docref__label {
+      display: block; font-size: 7pt; font-weight: 600; letter-spacing: 0.14em;
+      text-transform: uppercase; color: #64748b;
+    }
+    .rfo-capa-docref__num {
+      display: block; margin-top: 6px; font-size: 13pt; font-weight: 700;
+      letter-spacing: 0.03em; color: #0f172a;
+    }
+    .rfo-capa-intro {
+      flex: 1; padding: 40px 44px 28px;
+      display: flex; flex-direction: column; justify-content: center;
+    }
+    .rfo-capa-kicker {
+      margin: 0 0 12px; font-size: 8pt; letter-spacing: 0.18em; text-transform: uppercase;
+      font-weight: 600; color: #16a34a;
     }
     .rfo-capa h1 {
-      margin: 0; padding: 0; border: none; color: #fff;
-      font-size: 1.55rem; font-weight: 700; line-height: 1.2; letter-spacing: 0.02em;
+      margin: 0; padding: 0; border: none;
+      font-size: 2rem; font-weight: 700; line-height: 1.18;
+      letter-spacing: -0.015em; color: #111827;
     }
-    .rfo-capa-titulo-l2 { display: block; font-size: 1.05em; font-weight: 600; color: #e0f2fe; margin-top: 2px; }
-    .rfo-capa-sub {
-      font-size: 9.5pt; opacity: 0.88; margin: 12px auto 0; max-width: 420px; line-height: 1.45;
+    .rfo-capa-lead {
+      margin: 14px 0 0; max-width: 620px; font-size: 10.5pt; line-height: 1.55; color: #4b5563;
     }
-    .rfo-capa-numero-wrap { margin-bottom: 18px; }
-    .rfo-capa-numero {
-      display: inline-block; padding: 6px 14px;
-      background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.22);
-      border-radius: 6px; font-size: 10pt; font-weight: 600; letter-spacing: 0.03em;
+    .rfo-capa-nota-previa {
+      margin: 12px 0 0; font-size: 9pt; color: #92400e; font-style: italic;
     }
-    .rfo-capa-meta-box {
-      text-align: left; padding: 14px 16px; border-radius: 8px;
-      background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.16);
+    .rfo-capa-ficha {
+      margin: 0 44px 36px;
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;
+      background: #fff;
     }
-    .rfo-capa-meta {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 16px; font-size: 9pt; margin: 0;
+    .rfo-capa-ficha-item {
+      padding: 14px 16px; border-right: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0;
     }
-    .rfo-capa-meta dt {
-      font-weight: 600; opacity: 0.7; margin: 0; font-size: 7pt;
-      text-transform: uppercase; letter-spacing: 0.05em;
+    .rfo-capa-ficha-item:nth-child(3n) { border-right: none; }
+    .rfo-capa-ficha-item:nth-last-child(-n+3) { border-bottom: none; }
+    .rfo-capa-ficha dt {
+      margin: 0; font-size: 6.8pt; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.07em; color: #94a3b8;
     }
-    .rfo-capa-meta dd { margin: 3px 0 0; font-weight: 500; font-size: 9.5pt; line-height: 1.3; }
-    .rfo-body { padding: 28px 36px 40px; }
-    .rfo-sec { margin-bottom: 28px; }
+    .rfo-capa-ficha dd {
+      margin: 5px 0 0; font-size: 10pt; font-weight: 600; line-height: 1.35; color: #0f172a;
+    }
+    .rfo-capa-foot {
+      display: flex; justify-content: space-between; align-items: center; gap: 16px;
+      padding: 14px 44px 28px; font-size: 8pt; color: #94a3b8;
+      border-top: 1px solid #f1f5f9;
+    }
+    .rfo-capa-foot strong { color: #64748b; font-weight: 600; }
+    .rfo-body { padding: 32px 40px 44px; }
+    .rfo-sec { margin-bottom: 32px; }
     .rfo-sec-title {
-      display: flex; align-items: center; gap: 10px;
-      font-size: 1.05rem; font-weight: 700; color: #0f172a;
-      margin: 0 0 12px; padding: 0 0 8px; border-bottom: 2px solid #0284c7;
+      display: flex; align-items: baseline; gap: 10px;
+      font-size: 1rem; font-weight: 700; color: #111827;
+      margin: 0 0 12px; padding: 0 0 8px;
+      border-bottom: 2px solid #111827;
     }
     .rfo-sec-num {
-      flex: 0 0 auto; min-width: 2rem; text-align: center;
-      font-size: 8.5pt; font-weight: 800; color: #fff; background: #0284c7;
-      padding: 4px 7px; border-radius: 4px; margin-right: 0;
+      flex: 0 0 auto; font-size: 9pt; font-weight: 700; color: #16a34a;
+      letter-spacing: 0.06em;
     }
+    .rfo-tabela {
+      width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 4px 0 0;
+    }
+    .rfo-tabela th {
+      background: #f9fafb; color: #374151; padding: 9px 12px; text-align: left;
+      font-weight: 600; border-bottom: 2px solid #111827;
+    }
+    .rfo-tabela td {
+      padding: 8px 12px; border-bottom: 1px solid #e5e7eb; vertical-align: top; color: #1f2937;
+    }
+    .rfo-tabela tbody tr:nth-child(even) td { background: #fafafa; }
+    .rfo-td-num { text-align: right; font-weight: 600; white-space: nowrap; }
+    .rfo-td-modulo { font-weight: 600; vertical-align: top; background: #fff !important; }
+    .rfo-td-modulo span { display: block; font-size: 8pt; font-weight: 500; color: #6b7280; margin-top: 2px; }
+    .rfo-tabela--panorama td:first-child { width: 22%; }
     .rfo-sintese {
-      background: #f8fafc; border-left: 4px solid #0284c7;
-      padding: 16px 20px; border-radius: 0 8px 8px 0; margin-bottom: 16px;
+      background: #fafafa; border-left: 4px solid #16a34a;
+      padding: 16px 20px; border-radius: 0 6px 6px 0; margin-bottom: 16px;
     }
     .rfo-sintese p { margin: 0 0 12px; text-align: justify; }
     .rfo-sintese p:last-child { margin-bottom: 0; }
@@ -117,8 +162,9 @@ function cssRelatorioFinalObra(): string {
     .rfo-modulo-ia p:last-child { margin-bottom: 0; }
     .rfo-badge-ia {
       display: inline-block; font-size: 8.5pt; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.06em; color: #0369a1; background: #e0f2fe;
-      padding: 4px 10px; border-radius: 999px; margin-bottom: 12px;
+      letter-spacing: 0.06em; color: #166534; background: #f0fdf4;
+      padding: 4px 10px; border-radius: 4px; margin-bottom: 12px;
+      border: 1px solid #bbf7d0;
     }
     .rfo-alertas { display: flex; flex-direction: column; gap: 8px; }
     .rfo-alerta {
@@ -129,10 +175,11 @@ function cssRelatorioFinalObra(): string {
     .rfo-alerta--ok { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
     .rfo-kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 8px; }
     .rfo-kpi {
-      background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
-      border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 12px; text-align: center;
+      background: #fff;
+      border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 12px; text-align: center;
+      box-shadow: 0 1px 3px rgba(15,23,42,0.06);
     }
-    .rfo-kpi strong { display: block; font-size: 1.5rem; color: #0284c7; font-weight: 700; }
+    .rfo-kpi strong { display: block; font-size: 1.55rem; color: #0f172a; font-weight: 800; line-height: 1.1; }
     .rfo-kpi span { display: block; font-size: 8.5pt; color: #64748b; margin-top: 4px; line-height: 1.3; }
     .rfo-mod-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .rfo-mod-card {
@@ -142,7 +189,7 @@ function cssRelatorioFinalObra(): string {
     .rfo-bar-row { margin-bottom: 8px; }
     .rfo-bar-label { display: flex; justify-content: space-between; font-size: 9pt; margin-bottom: 3px; color: #334155; }
     .rfo-bar-track { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; }
-    .rfo-bar-fill { height: 100%; background: linear-gradient(90deg, #0284c7, #38bdf8); border-radius: 4px; }
+    .rfo-bar-fill { height: 100%; background: #16a34a; border-radius: 4px; }
     .rfo-rir-panel {
       display: grid; grid-template-columns: 1fr 1.2fr; gap: 20px;
       background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px;
@@ -154,7 +201,8 @@ function cssRelatorioFinalObra(): string {
     .rfo-rir-stat span { font-size: 9pt; color: #64748b; }
     .rfo-destaque-table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
     .rfo-destaque-table th {
-      background: #0f172a; color: #f8fafc; padding: 10px 12px; text-align: left; font-weight: 600;
+      background: #f8fafc; color: #334155; padding: 10px 12px; text-align: left; font-weight: 600;
+      border-bottom: 2px solid #16a34a;
     }
     .rfo-destaque-table td { padding: 9px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
     tr.rfo-sev-critico td { background: #fef2f2; }
@@ -165,7 +213,8 @@ function cssRelatorioFinalObra(): string {
       page-break-inside: avoid;
     }
     .rfo-rf-head {
-      background: #0f172a; color: #f8fafc; padding: 14px 18px;
+      background: #f8fafc; color: #0f172a; padding: 14px 18px;
+      border-bottom: 1px solid #e2e8f0;
     }
     .rfo-rf-head h4 { margin: 0 0 6px; font-size: 11pt; }
     .rfo-rf-motivos { font-size: 9pt; opacity: 0.9; margin: 0; }
@@ -191,8 +240,10 @@ function cssRelatorioFinalObra(): string {
       background: #f8fafc; border: 1px dashed #cbd5e1; margin: 0;
     }
     .rfo-indice {
-      margin-bottom: 22px; padding: 14px 16px;
-      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+      margin-bottom: 26px; padding: 16px 18px;
+      background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+      border: 1px solid #e2e8f0; border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(15,23,42,0.04);
     }
     .rfo-indice h2 {
       margin: 0 0 10px; font-size: 10pt; font-weight: 700; text-transform: uppercase;
@@ -200,8 +251,7 @@ function cssRelatorioFinalObra(): string {
     }
     .rfo-indice ol { margin: 0; padding: 0 0 0 1.25rem; columns: 2; column-gap: 28px; }
     .rfo-indice li { margin: 4px 0; font-size: 9.5pt; break-inside: avoid; }
-    .rfo-indice a { color: #0c4a6e; text-decoration: none; font-weight: 500; }
-    .rfo-print-chrome { display: none; }
+    .rfo-indice a { color: #111827; text-decoration: none; font-weight: 500; }
     .rfo-declaracao-box {
       padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fafbfc;
     }
@@ -209,45 +259,60 @@ function cssRelatorioFinalObra(): string {
     .rfo-assinatura-linha { border-top: 1px solid #334155; padding-top: 6px; font-size: 9pt; color: #334155; }
     @media print {
       body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .rfo-page { max-width: none; }
-      .rfo-capa { page-break-after: always; break-after: page; }
+      .rfo-page { max-width: none; box-shadow: none; }
+      .rfo-preview-strip { display: none !important; }
+      .rfo-capa { page-break-after: always; break-after: page; padding-bottom: 0; }
       .rfo-sec { page-break-inside: auto; break-inside: auto; orphans: 3; widows: 3; }
       .rfo-sec-title { break-after: avoid; page-break-after: avoid; }
-      .rfo-kpi, .rfo-mod-card, .rfo-rir-panel, .rfo-rf-card, .rfo-modulo-ia, .rfo-indice {
+      .rfo-tabela, .rfo-rir-panel, .rfo-rf-card, .rfo-modulo-ia, .rfo-indice {
         break-inside: avoid; page-break-inside: avoid;
       }
+      .rfo-tabela tr { break-inside: avoid; page-break-inside: avoid; }
       .rfo-destaque-table thead { display: table-header-group; }
       .rfo-destaque-table tr { break-inside: avoid; page-break-inside: avoid; }
-      .rfo-print-chrome {
-        display: block; position: fixed; left: 0; right: 0; z-index: 1000;
-        padding-left: 10mm; padding-right: 10mm; font-size: 7.5pt; color: #64748b; background: #fff;
-      }
-      .rfo-print-chrome--top {
-        top: 0; padding-top: 3mm; padding-bottom: 2mm; border-bottom: 1px solid #e2e8f0;
-        display: flex; justify-content: space-between; align-items: center;
-      }
-      .rfo-print-chrome--bottom {
-        bottom: 0; padding-top: 2mm; padding-bottom: 3mm; border-top: 1px solid #e2e8f0; text-align: center;
-      }
-      .rfo-body { padding-top: 10mm; padding-bottom: 8mm; }
     }
   `;
 }
 
-function htmlBarrasResumo(mod: ResumoStatusModulo): string {
-  if (mod.total === 0) return '<p class="rfo-nota">Sem registros.</p>';
-  const max = Math.max(...mod.linhas.map((l) => l.quantidade), 1);
-  const bars = mod.linhas
-    .map((l) => {
-      const w = Math.round((l.quantidade / max) * 100);
-      return `<div class="rfo-bar-row">
-        <div class="rfo-bar-label"><span>${esc(l.rotulo)}</span><span>${l.quantidade} (${l.percentual}%)</span></div>
-        <div class="rfo-bar-track"><div class="rfo-bar-fill" style="width:${w}%"></div></div>
-      </div>`;
-    })
+function htmlTabelaIndicadores(
+  kpis: { v: number; l: string; s: string }[],
+): string {
+  const rows = kpis
+    .map(
+      (k) =>
+        `<tr><td>${esc(k.l)}</td><td class="rfo-td-num">${k.v}</td><td>${esc(k.s)}</td></tr>`,
+    )
     .join('');
-  return `<div class="rfo-mod-card"><h4>${esc(mod.modulo)} · ${mod.total} registro(s)</h4>${bars}</div>`;
+  return `<table class="rfo-tabela rfo-tabela--indicadores">
+    <thead><tr><th>Indicador</th><th>Quantidade</th><th>Observação</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
+
+function htmlTabelaPanorama(mods: ResumoStatusModulo[]): string {
+  const ativos = mods.filter((m) => m.total > 0);
+  if (ativos.length === 0) {
+    return '<p class="rfo-vazio">Sem registros operacionais para resumo neste projeto.</p>';
+  }
+  const rows = ativos
+    .flatMap((mod) =>
+      mod.linhas.map(
+        (l, idx) =>
+          `<tr>
+            ${idx === 0 ? `<td rowspan="${mod.linhas.length}" class="rfo-td-modulo">${esc(mod.modulo)}<br /><span>${mod.total} reg.</span></td>` : ''}
+            <td>${esc(l.rotulo)}</td>
+            <td class="rfo-td-num">${l.quantidade}</td>
+            <td class="rfo-td-num">${l.percentual}%</td>
+          </tr>`,
+      ),
+    )
+    .join('');
+  return `<table class="rfo-tabela rfo-tabela--panorama">
+    <thead><tr><th>Módulo</th><th>Situação</th><th>Qtd.</th><th>%</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 
 function htmlPainelRir(rc: ResumoRirCertificados): string {
   const pct =
@@ -393,9 +458,12 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
     ? 'Destaques priorizados pela análise assistida e regras do sistema (máx. ' + analise.destaques.length + ' registros).'
     : `Selecionadas automaticamente: cancelamentos, divergências, NC, estornos e pendências (máx. ${analise.destaques.length} registros).`;
   const rotuloNumero = rotuloNumeroRelatorioFinalObra(contexto);
+  const proximoOficial = preverProximoNumeroRelatorioFinalObra();
   const numeroCapa = contexto.registrado
     ? `Nº ${rotuloNumero}`
-    : `${rotuloNumero} · próximo oficial: ${preverProximoNumeroRelatorioFinalObra()}`;
+    : `${rotuloNumero} · próximo oficial: ${proximoOficial}`;
+  const badgeDocLabel = contexto.registrado ? '✓ Documento executivo' : 'Pré-visualização';
+  const badgeDocNum = contexto.registrado ? rotuloNumero : proximoOficial;
 
   const kpis = [
     { v: totais.documentos, l: 'Planejamento', s: `${totais.documentosCancelados} cancel.` },
@@ -408,21 +476,14 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
     { v: totais.materiais, l: 'Materiais', s: 'cadastro' },
   ];
 
-  const kpiHtml = kpis
-    .map((k) => `<div class="rfo-kpi"><strong>${k.v}</strong><span>${esc(k.l)}</span><span>${esc(k.s)}</span></div>`)
-    .join('');
+  const kpiHtml = htmlTabelaIndicadores(kpis);
 
   const sinteseParagrafos = ap.sintese.paragrafos.map((p) => `<p>${esc(p)}</p>`).join('');
   const alertasHtml = ap.sintese.alertas
     .map((a) => `<div class="rfo-alerta rfo-alerta--${a.nivel}">${esc(a.texto)}</div>`)
     .join('');
 
-  const modCards = analise.resumosStatus
-    .filter((m) => m.total > 0)
-    .map(htmlBarrasResumo)
-    .join('');
-  const panoramaHtml =
-    modCards || '<p class="rfo-vazio">Sem registros operacionais para resumo gráfico neste projeto.</p>';
+  const panoramaHtml = htmlTabelaPanorama(analise.resumosStatus);
 
   const secoesModulo = ap.secoesModulo ?? [];
   const htmlSecoesModulo = htmlAnalisePorModulo(secoesModulo);
@@ -462,13 +523,13 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
       id: 'rfo-indicadores',
       num: numSec(),
       titulo: 'Indicadores da obra',
-      corpo: `<div class="rfo-kpi-row">${kpiHtml}</div>`,
+      corpo: kpiHtml,
     },
     {
       id: 'rfo-panorama',
       num: numSec(),
       titulo: 'Panorama por módulo',
-      corpo: `<div class="rfo-mod-grid">${panoramaHtml}</div>`,
+      corpo: panoramaHtml,
     },
     {
       id: 'rfo-rir',
@@ -505,43 +566,44 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
   );
 
   const chromeCliente = esc(contexto.cliente || contexto.projeto || '—');
-  const printChrome = `
-    <div class="rfo-print-chrome rfo-print-chrome--top" aria-hidden="true">
-      <span><strong>${esc(rotuloNumero)}</strong> · Relatório Final de Obra</span>
-      <span>${chromeCliente}</span>
-    </div>
-    <div class="rfo-print-chrome rfo-print-chrome--bottom" aria-hidden="true">
-      I.S.O PRO · ${esc(geradoFmt)}${segRodape}
-    </div>`;
+  const logoCapa = logo ? htmlBlocoLogoInstitucional(logo, false) : '';
+  const previewStrip =
+    opts?.incluirBarraPreVisualizacao !== false && !contexto.registrado
+      ? `<div class="rfo-preview-strip" aria-hidden="true">
+          <span class="rfo-preview-strip__titulo">Pré-visualização — documento ainda não registrado</span>
+          <span class="rfo-preview-strip__cliente">${chromeCliente}</span>
+        </div>`
+      : '';
 
   const corpo = `
     ${barra}
-    ${printChrome}
+    ${previewStrip}
     <div class="rfo-page">
       <header class="rfo-capa">
-        <div class="rfo-capa-inner">
-          <div class="rfo-capa-top">
-            ${logo ? `<div class="rfo-capa-logo">${htmlBlocoLogoInstitucional(logo, true)}</div>` : ''}
-            <p class="rfo-capa-marca">I.S.O PRO · Gestão de Materiais</p>
+        <div class="rfo-capa-head">
+          <div class="rfo-capa-brand">${logoCapa}</div>
+          <div class="rfo-capa-docref">
+            <span class="rfo-capa-docref__label">${esc(badgeDocLabel)}</span>
+            <span class="rfo-capa-docref__num">${esc(badgeDocNum)}</span>
           </div>
-          <div class="rfo-capa-titulo-wrap">
-            <p class="rfo-capa-eyebrow">Documento executivo</p>
-            <h1><span class="rfo-capa-titulo-l1">Relatório Final</span><span class="rfo-capa-titulo-l2">de Obra</span></h1>
-            <p class="rfo-capa-sub">Apresentação ao cliente — síntese da operação e evidências relevantes do projeto</p>
-          </div>
-          <div class="rfo-capa-numero-wrap">
-            <span class="rfo-capa-numero">${esc(numeroCapa)}</span>
-          </div>
-          <div class="rfo-capa-meta-box">
-            <dl class="rfo-capa-meta">
-              <div><dt>Cliente / UO</dt><dd>${esc(contexto.cliente || '—')}</dd></div>
-              <div><dt>Projeto</dt><dd>${esc(contexto.projeto || '—')}</dd></div>
-              <div><dt>Contrato / CNPJ</dt><dd>${esc(contexto.contrato || '—')}</dd></div>
-              <div><dt>Local</dt><dd>${esc(contexto.local || '—')}</dd></div>
-              <div><dt>Emitido em</dt><dd>${esc(geradoFmt)}</dd></div>
-              <div><dt>Modo</dt><dd>${analise.usarModoResumido ? 'Executivo (alto volume)' : 'Completo'}</dd></div>
-            </dl>
-          </div>
+        </div>
+        <div class="rfo-capa-intro">
+          <p class="rfo-capa-kicker">Documento executivo · encerramento de obra</p>
+          <h1>Relatório Final de Obra</h1>
+          <p class="rfo-capa-lead">Apresentação institucional ao cliente — síntese da operação, indicadores de desempenho e evidências relevantes do projeto.</p>
+          ${!contexto.registrado ? `<p class="rfo-capa-nota-previa">${esc(numeroCapa)}</p>` : ''}
+        </div>
+        <dl class="rfo-capa-ficha">
+          <div class="rfo-capa-ficha-item"><dt>Cliente / UO</dt><dd>${esc(contexto.cliente || '—')}</dd></div>
+          <div class="rfo-capa-ficha-item"><dt>Projeto</dt><dd>${esc(contexto.projeto || '—')}</dd></div>
+          <div class="rfo-capa-ficha-item"><dt>Contrato / CNPJ</dt><dd>${esc(contexto.contrato || '—')}</dd></div>
+          <div class="rfo-capa-ficha-item"><dt>Local</dt><dd>${esc(contexto.local || '—')}</dd></div>
+          <div class="rfo-capa-ficha-item"><dt>Emitido em</dt><dd>${esc(geradoFmt)}</dd></div>
+          <div class="rfo-capa-ficha-item"><dt>Modo</dt><dd>${analise.usarModoResumido ? 'Executivo (alto volume)' : 'Completo'}</dd></div>
+        </dl>
+        <div class="rfo-capa-foot">
+          <span><strong>I.S.O PRO</strong> · Gestão de Materiais</span>
+          <span>${esc(geradoFmt)}${segRodape}</span>
         </div>
       </header>
 
