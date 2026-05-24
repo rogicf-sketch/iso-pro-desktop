@@ -1,5 +1,9 @@
+import { createRequire } from 'node:module';
 import { ipcMain } from 'electron';
-import nodemailer from 'nodemailer';
+
+/** nodemailer é CJS; import ESM no main Electron falha com «Dynamic require of "events"». */
+const require = createRequire(import.meta.url);
+const nodemailer = require('nodemailer') as typeof import('nodemailer');
 
 export type DesktopMailSmtpConfig = {
   host: string;
