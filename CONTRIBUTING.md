@@ -4,6 +4,7 @@
 
 - **Node.js** ≥ 22 (vê `.nvmrc`). Com `.npmrc` (`engine-strict=true`), `npm ci` / `npm install` **falham** se a versão de Node não cumprir `package.json` → `engines`.
 - Dependências: `npm ci` (preferível a `npm install` para lockfile exacto).
+- O pacote **`iso-pro-shared`** vive em `packages/iso-pro-shared` (contrato do snapshot PC ↔ mobile). O CI do GitHub precisa desta pasta no repositório; não use só `../iso-pro-shared` fora do clone.
 
 ## Limpar artefactos de build
 
