@@ -1,3 +1,4 @@
+import { isElectronApp } from '../../../lib/isElectronApp';
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
@@ -8,9 +9,121 @@ import { appendAuthAuditEvent } from './authAudit.service';
 
 export const AUTH_SESSION_STORAGE_KEY_BASE = 'iso-pro-desktop-session';
 export const AUTH_USERS_STORAGE_KEY_BASE = 'iso-pro-desktop-usuarios-sistema';
+/** Preferência da caixa «Permanecer logado» no ecrã de entrada (não é a sessão em si). */
+export const AUTH_REMEMBER_LOGIN_PREFERENCE_KEY_BASE = 'iso-pro-auth-permanecer-logado';
+export const AUTH_SESSION_LAST_ACTIVITY_KEY_BASE = 'iso-pro-auth-last-activity';
+/** Mesmo com «permanecer logado», a sessão expira após este tempo sem uso (ms). */
+export const AUTH_SESSION_MAX_IDLE_MS = 8 * 60 * 60 * 1000;
 
 export function getAuthSessionStorageKey(): string {
   return getScopedIsoProStorageKey(AUTH_SESSION_STORAGE_KEY_BASE);
+}
+
+export function getAuthRememberLoginPreferenceKey(): string {
+  return getScopedIsoProStorageKey(AUTH_REMEMBER_LOGIN_PREFERENCE_KEY_BASE);
+}
+
+function getAuthLastActivityKey(): string {
+  return getScopedIsoProStorageKey(AUTH_SESSION_LAST_ACTIVITY_KEY_BASE);
+}
+
+function clearAuthLastActivity(): void {
+  if (typeof window === 'undefined') return;
+  const key = getAuthLastActivityKey();
+  window.localStorage.removeItem(key);
+  window.sessionStorage.removeItem(key);
+}
+
+/** Regista actividade do utilizador para o limite de inatividade (8 h). */
+export function touchAuthSessionActivity(): void {
+  const backend = getActiveAuthSessionStorage();
+  if (!backend) return;
+  backend.setItem(getAuthLastActivityKey(), String(Date.now()));
+}
+
+function ensureAuthActivityTimestamp(): void {
+  const backend = getActiveAuthSessionStorage();
+  if (!backend) return;
+  const key = getAuthLastActivityKey();
+  if (!backend.getItem(key)) {
+    backend.setItem(key, String(Date.now()));
+  }
+}
+
+function isAuthSessionIdleExpired(): boolean {
+  const backend = getActiveAuthSessionStorage();
+  if (!backend) return false;
+  const raw = backend.getItem(getAuthLastActivityKey());
+  if (!raw) return false;
+  const last = Number(raw);
+  if (!Number.isFinite(last)) return false;
+  return Date.now() - last > AUTH_SESSION_MAX_IDLE_MS;
+}
+
+function invalidateSessionForIdle(actorLogin: string): void {
+  appendAuthAuditEvent({
+    type: 'session_invalidated',
+    actorLogin,
+    detail: 'Sessao terminada por inatividade (limite de 8 horas sem uso).',
+  });
+  clearAuthSessionStorage();
+  clearVolatileSessionPassword();
+}
+
+function readAuthSessionRaw(): string | null {
+  if (typeof window === 'undefined') return null;
+  const key = getAuthSessionStorageKey();
+  return window.sessionStorage.getItem(key) ?? window.localStorage.getItem(key);
+}
+
+/** Onde a sessão activa foi gravada (sessionStorage = só até fechar o browser/tab). */
+export function getActiveAuthSessionStorage(): Storage | null {
+  if (typeof window === 'undefined') return null;
+  const key = getAuthSessionStorageKey();
+  if (window.sessionStorage.getItem(key)) return window.sessionStorage;
+  if (window.localStorage.getItem(key)) return window.localStorage;
+  return null;
+}
+
+export function clearAuthSessionStorage(): void {
+  if (typeof window === 'undefined') return;
+  const key = getAuthSessionStorageKey();
+  window.localStorage.removeItem(key);
+  window.sessionStorage.removeItem(key);
+  clearAuthLastActivity();
+}
+
+export function persistAuthSession(user: AuthUser, permanecerLogado: boolean): void {
+  const key = getAuthSessionStorageKey();
+  const payload = JSON.stringify(user);
+  window.localStorage.removeItem(key);
+  window.sessionStorage.removeItem(key);
+  const backend = permanecerLogado ? window.localStorage : window.sessionStorage;
+  backend.setItem(key, payload);
+  try {
+    window.localStorage.setItem(getAuthRememberLoginPreferenceKey(), permanecerLogado ? '1' : '0');
+  } catch {
+    /* quota ou modo privado */
+  }
+  touchAuthSessionActivity();
+}
+
+/** Por omissão: web desmarcado; app desktop (Electron) marcado. */
+export function readRememberLoginDefault(): boolean {
+  return isElectronApp();
+}
+
+/** Última escolha da caixa «Permanecer logado», ou omissão conforme web vs desktop. */
+export function readRememberLoginPreference(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(getAuthRememberLoginPreferenceKey());
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    return readRememberLoginDefault();
+  } catch {
+    return readRememberLoginDefault();
+  }
 }
 
 export function getAuthUsersStorageKey(): string {
@@ -302,7 +415,7 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
 
   const sessionUser = mapRemoteUser(user);
   setVolatileSessionPasswordAfterSuccessfulLogin(senha);
-  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  persistAuthSession(sessionUser, payload.permanecerLogado);
   return sessionUser;
 }
 
@@ -321,11 +434,11 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
   if (demoUser && demoUser.senha === payload.senha.trim()) {
     const sessionUser = sanitizeUser(demoUser);
     setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
-    localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    persistAuthSession(sessionUser, payload.permanecerLogado);
     appendAuthAuditEvent({
       type: 'login_success',
       actorLogin: sessionUser.login,
-      detail: 'Login com perfil de demonstracao (VITE_ENABLE_LOCAL_MOCK_AUTH).',
+      detail: `Login com perfil de demonstracao (VITE_ENABLE_LOCAL_MOCK_AUTH). Sessao ${payload.permanecerLogado ? 'persistente' : 'ate fechar o browser'}.`,
     });
     return sessionUser;
   }
@@ -350,11 +463,11 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
         if (fallbackUser.senha === payload.senha.trim()) {
           const sessionUser = sanitizeUser(fallbackUser);
           setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
-          localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+          persistAuthSession(sessionUser, payload.permanecerLogado);
           appendAuthAuditEvent({
             type: 'login_success',
             actorLogin: sessionUser.login,
-            detail: 'Login realizado com fallback local por indisponibilidade da nuvem.',
+            detail: `Login realizado com fallback local por indisponibilidade da nuvem. Sessao ${payload.permanecerLogado ? 'persistente' : 'ate fechar o browser'}.`,
           });
           return sessionUser;
         }
@@ -382,11 +495,11 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
 
   const sessionUser = sanitizeUser(user);
   setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
-  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  persistAuthSession(sessionUser, payload.permanecerLogado);
   appendAuthAuditEvent({
     type: 'login_success',
     actorLogin: sessionUser.login,
-    detail: 'Login local realizado com sucesso.',
+    detail: `Login local realizado com sucesso. Sessao ${payload.permanecerLogado ? 'persistente' : 'ate fechar o browser'}.`,
   });
   return sessionUser;
 }
@@ -400,28 +513,42 @@ export function logout() {
       detail: 'Logout realizado pelo usuario.',
     });
   }
-  localStorage.removeItem(getAuthSessionStorageKey());
+  clearAuthSessionStorage();
   clearVolatileSessionPassword();
   invalidateIsoProSnapshotCache();
   resetSupabaseClient();
 }
 
 export function getCurrentUser(): AuthUser | null {
-  const raw = localStorage.getItem(getAuthSessionStorageKey());
+  const raw = readAuthSessionRaw();
   if (!raw) return null;
+
+  ensureAuthActivityTimestamp();
+  if (isAuthSessionIdleExpired()) {
+    let actorLogin = 'desconhecido';
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      const u = parseAuthSessionUser(parsed);
+      if (u?.login) actorLogin = u.login;
+    } catch {
+      /* ignora */
+    }
+    invalidateSessionForIdle(actorLogin);
+    return null;
+  }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    localStorage.removeItem(getAuthSessionStorageKey());
+    clearAuthSessionStorage();
     clearVolatileSessionPassword();
     return null;
   }
 
   const user = parseAuthSessionUser(parsed);
   if (user === null) {
-    localStorage.removeItem(getAuthSessionStorageKey());
+    clearAuthSessionStorage();
     clearVolatileSessionPassword();
     return null;
   }
@@ -429,7 +556,8 @@ export function getCurrentUser(): AuthUser | null {
   const merged = mergePermissoesComDefaultsPerfil(user.permissoes, user.perfil.id);
   if (JSON.stringify(merged) !== JSON.stringify(user.permissoes)) {
     const next: AuthUser = { ...user, permissoes: merged };
-    localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(next));
+    const backend = getActiveAuthSessionStorage() ?? window.localStorage;
+    backend.setItem(getAuthSessionStorageKey(), JSON.stringify(next));
     return next;
   }
 
@@ -461,13 +589,15 @@ async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
       actorLogin: user.login,
       detail: 'Sessao invalidada porque o usuario deixou de estar ativo na base principal.',
     });
-    localStorage.removeItem(getAuthSessionStorageKey());
+    clearAuthSessionStorage();
     clearVolatileSessionPassword();
     return null;
   }
 
   const sessionUser = mapRemoteUser(refreshed);
-  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  const backend = getActiveAuthSessionStorage() ?? window.localStorage;
+  backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  touchAuthSessionActivity();
   return sessionUser;
 }
 
@@ -479,13 +609,15 @@ function refreshLocalSession(user: AuthUser): AuthUser | null {
       actorLogin: user.login,
       detail: 'Sessao invalidada porque o usuario nao foi encontrado na base local.',
     });
-    localStorage.removeItem(getAuthSessionStorageKey());
+    clearAuthSessionStorage();
     clearVolatileSessionPassword();
     return null;
   }
 
   const sessionUser = sanitizeUser(localUser);
-  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  const backend = getActiveAuthSessionStorage() ?? window.localStorage;
+  backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  touchAuthSessionActivity();
   return sessionUser;
 }
 
@@ -507,7 +639,7 @@ export function ensureDevLocalAdminSession(): AuthUser | null {
   if (isTruthyEnv(import.meta.env.VITE_DISABLE_DEV_AUTO_LOGIN)) return null;
   const sessionUser = sanitizeUser(mockUsers.admin);
   setVolatileSessionPasswordAfterSuccessfulLogin(mockUsers.admin.senha);
-  localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  persistAuthSession(sessionUser, true);
   return sessionUser;
 }
 
@@ -522,23 +654,28 @@ export async function validateCurrentSession(user: AuthUser | null): Promise<Aut
         actorLogin: user.login,
         detail: 'Sessao local embutida nao encontrada nos mocks nem na lista local.',
       });
-      localStorage.removeItem(getAuthSessionStorageKey());
+      clearAuthSessionStorage();
       clearVolatileSessionPassword();
       return null;
     }
     const sessionUser = sanitizeUser(resolved);
-    localStorage.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    const backend = getActiveAuthSessionStorage() ?? window.localStorage;
+    backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    touchAuthSessionActivity();
     return sessionUser;
   }
 
   if (hasSupabaseConfig()) {
     try {
-      return await refreshRemoteSession(user);
+      const refreshed = await refreshRemoteSession(user);
+      if (refreshed) touchAuthSessionActivity();
+      return refreshed;
     } catch (error) {
       if (error instanceof AuthServiceError && error.code === 'remote_unavailable') {
+        touchAuthSessionActivity();
         return user;
       }
-      localStorage.removeItem(getAuthSessionStorageKey());
+      clearAuthSessionStorage();
       clearVolatileSessionPassword();
       return null;
     }

@@ -11,7 +11,8 @@ import {
 } from '../../../lib/isoProTenant';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
-import { isLocalMockAuthSeedEnabled } from '../services/auth.service';
+import { isElectronApp } from '../../../lib/isElectronApp';
+import { isLocalMockAuthSeedEnabled, readRememberLoginPreference } from '../services/auth.service';
 import { getFirstAccessibleRoute } from '../../../routes/navigation';
 
 function IconEye() {
@@ -47,12 +48,14 @@ export function LoginPage() {
   const titularLinha = getTitularSistemaLinhaResumo();
   const { isAuthenticated, login, user } = useAuth();
   const [form, setForm] = useState({ login: '', senha: '' });
+  const [permanecerLogado, setPermanecerLogado] = useState(() => readRememberLoginPreference());
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [tenantsNuvem, setTenantsNuvem] = useState<IsoProTenantListItem[]>([]);
   const [tenantSelectId, setTenantSelectId] = useState(() => getActiveTenantId());
   const [tenantListaErro, setTenantListaErro] = useState('');
+  const appDesktop = isElectronApp();
 
   useEffect(() => {
     if (!hasSupabaseConfig()) return;
@@ -93,7 +96,7 @@ export function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      await login(form);
+      await login({ ...form, permanecerLogado });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não foi possível entrar.');
     } finally {
@@ -169,6 +172,20 @@ export function LoginPage() {
           </div>
         </label>
 
+        <label className="login-remember">
+          <input
+            checked={permanecerLogado}
+            onChange={(event) => setPermanecerLogado(event.target.checked)}
+            type="checkbox"
+          />
+          <span>{appDesktop ? 'Manter sessão neste computador' : 'Permanecer logado neste navegador'}</span>
+        </label>
+        <p className="login-remember__hint">
+          {appDesktop
+            ? 'Recomendado no PC da obra. Mesmo assim, após 8 horas sem usar o sistema será pedido login outra vez.'
+            : 'Na web, deixe desmarcado em computadores partilhados. Ao fechar o navegador terá de entrar outra vez. Com ou sem esta opção, após 8 h sem uso a sessão expira.'}
+        </p>
+
         {error ? <div className="error-box">{error}</div> : null}
 
         {isLocalMockAuthSeedEnabled() ? (
@@ -201,7 +218,10 @@ export function LoginPage() {
         )}
 
         <OperationalNotice tone="warning">
-          Segurança: não partilhe credenciais. O início de sessão não é preenchido automaticamente.
+          Segurança: não partilhe credenciais.
+          {appDesktop
+            ? ' Use «Manter sessão» só neste equipamento autorizado.'
+            : ' Na web, não marque «Permanecer logado» em PCs que não são só seus.'}
         </OperationalNotice>
 
         <button className="primary-button login-submit" disabled={isSubmitting} type="submit">

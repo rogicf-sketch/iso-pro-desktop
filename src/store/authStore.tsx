@@ -8,6 +8,7 @@ import {
   getCurrentUser,
   login as doLogin,
   logout as doLogout,
+  touchAuthSessionActivity,
   validateCurrentSession,
 } from '../modules/auth/services/auth.service';
 import { aplicarTemaEfetivoNaSessao } from '../modules/configuracoes/services/configuracoes.service';
@@ -34,6 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!cancelled) {
         setUser(nextUser);
         setIsLoading(false);
+        if (nextUser) touchAuthSessionActivity();
       }
       isRefreshing = false;
     }
@@ -82,6 +84,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('storage', handleStorage);
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let debounceId: number | undefined;
+    function registerActivity() {
+      if (debounceId) window.clearTimeout(debounceId);
+      debounceId = window.setTimeout(() => touchAuthSessionActivity(), 60_000);
+    }
+    registerActivity();
+    window.addEventListener('click', registerActivity);
+    window.addEventListener('keydown', registerActivity);
+    return () => {
+      if (debounceId) window.clearTimeout(debounceId);
+      window.removeEventListener('click', registerActivity);
+      window.removeEventListener('keydown', registerActivity);
+    };
+  }, [user]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

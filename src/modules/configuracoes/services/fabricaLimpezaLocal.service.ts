@@ -6,8 +6,7 @@ import {
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
 import { resetSupabaseClient } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
-import { parseAuthSessionUser } from '../../auth/schemas/authLocal.zod';
-import { getAuthSessionStorageKey } from '../../auth/services/auth.service';
+import { clearAuthSessionStorage, getCurrentUser } from '../../auth/services/auth.service';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { limparTodosRelatoriosFotograficosLocais } from '../../relatorios/services/relatorioFotografico.service';
 
@@ -42,17 +41,8 @@ export async function executarLimpezaLocalFabricaIsoPro(): Promise<
     return { success: false, error: 'Ambiente invalido (sem localStorage).' };
   }
 
-  let actorLogin = 'desconhecido';
-  try {
-    const rawSession = localStorage.getItem(getAuthSessionStorageKey());
-    if (rawSession) {
-      const parsed: unknown = JSON.parse(rawSession);
-      const user = parseAuthSessionUser(parsed);
-      if (user?.login) actorLogin = user.login;
-    }
-  } catch {
-    /* ignora sessao ilegivel */
-  }
+  const current = getCurrentUser();
+  const actorLogin = current?.login ?? 'desconhecido';
 
   const rel = await limparTodosRelatoriosFotograficosLocais();
 
@@ -60,6 +50,7 @@ export async function executarLimpezaLocalFabricaIsoPro(): Promise<
   for (const k of chaves) {
     localStorage.removeItem(k);
   }
+  clearAuthSessionStorage();
 
   invalidateIsoProSnapshotCache();
   resetSupabaseClient();

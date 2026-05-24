@@ -41,4 +41,6 @@ export type AuthUser = {
 export type LoginPayload = {
   login: string;
   senha: string;
+  /** true = localStorage (persiste após fechar o browser); false = sessionStorage (só esta sessão). */
+  permanecerLogado: boolean;
 };

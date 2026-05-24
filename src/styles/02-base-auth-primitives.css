@@ -247,6 +247,31 @@ a {
   box-shadow: 0 0 0 3px rgba(57, 255, 154, 0.14);
 }
 
+.login-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  line-height: 1.4;
+}
+
+.login-remember input {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: #39ff9a;
+  flex-shrink: 0;
+}
+
+.login-remember__hint {
+  margin: -8px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #94a3b8;
+}
+
 .login-password-wrap {
   position: relative;
   display: flex;
