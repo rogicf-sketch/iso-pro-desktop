@@ -1,13 +1,9 @@
 import { expect, test } from '@playwright/test';
 
-test('página inicial carrega (título I.S.O PRO)', async ({ page }) => {
-  await page.goto('/');
+test('página de login carrega (hash router)', async ({ page }) => {
+  // A app usa createHashRouter — sem #/login a rota protegida não hidrata o ecrã de entrada.
+  await page.goto('/#/login');
   await expect(page).toHaveTitle(/I\.S\.O PRO/);
   await expect(page.locator('[data-e2e="app-root"]')).toBeAttached();
-  // #root pode não ter altura própria; validar UI hidratada (login ou gate desktop).
-  await expect(
-    page
-      .getByRole('heading', { name: 'Entrar' })
-      .or(page.getByText(/Validando seguranca da instalacao desktop/i)),
-  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: 'Entrar' })).toBeVisible({ timeout: 30_000 });
 });
