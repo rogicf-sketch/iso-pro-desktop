@@ -11,7 +11,6 @@ import {
 } from '../../../lib/isoProTenant';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
-import { isElectronApp } from '../../../lib/isElectronApp';
 import { isLocalMockAuthSeedEnabled, readRememberLoginPreference } from '../services/auth.service';
 import { getFirstAccessibleRoute } from '../../../routes/navigation';
 
@@ -55,7 +54,6 @@ export function LoginPage() {
   const [tenantsNuvem, setTenantsNuvem] = useState<IsoProTenantListItem[]>([]);
   const [tenantSelectId, setTenantSelectId] = useState(() => getActiveTenantId());
   const [tenantListaErro, setTenantListaErro] = useState('');
-  const appDesktop = isElectronApp();
 
   useEffect(() => {
     if (!hasSupabaseConfig()) return;
@@ -112,7 +110,9 @@ export function LoginPage() {
   return (
     <div className="login-page">
       <header className="login-page__head">
-        <h2 className="login-page__title">Entrar</h2>
+        <h2 className="login-page__title" data-e2e="login-title">
+          Entrar
+        </h2>
         <p className="login-page__subtitle">Utilize as credenciais fornecidas pela sua organização.</p>
       </header>
 
@@ -178,12 +178,11 @@ export function LoginPage() {
             onChange={(event) => setPermanecerLogado(event.target.checked)}
             type="checkbox"
           />
-          <span>{appDesktop ? 'Manter sessão neste computador' : 'Permanecer logado neste navegador'}</span>
+          <span>Permanecer logado</span>
         </label>
         <p className="login-remember__hint">
-          {appDesktop
-            ? 'Recomendado no PC da obra. Mesmo assim, após 8 horas sem usar o sistema será pedido login outra vez.'
-            : 'Na web, deixe desmarcado em computadores partilhados. Ao fechar o navegador terá de entrar outra vez. Com ou sem esta opção, após 8 h sem uso a sessão expira.'}
+          Se não marcar, terá de entrar outra vez ao fechar o programa ou o navegador. Deixe desmarcado em computadores
+          partilhados. Após 8 horas sem usar o sistema, a sessão expira de qualquer forma.
         </p>
 
         {error ? <div className="error-box">{error}</div> : null}
@@ -218,10 +217,7 @@ export function LoginPage() {
         )}
 
         <OperationalNotice tone="warning">
-          Segurança: não partilhe credenciais.
-          {appDesktop
-            ? ' Use «Manter sessão» só neste equipamento autorizado.'
-            : ' Na web, não marque «Permanecer logado» em PCs que não são só seus.'}
+          Segurança: não partilhe credenciais. Marque «Permanecer logado» só em equipamentos de confiança.
         </OperationalNotice>
 
         <button className="primary-button login-submit" disabled={isSubmitting} type="submit">

@@ -50,10 +50,10 @@ jobs:
         run: npm run build:icon
 
       - name: Install Playwright (Chromium)
-        run: npx --yes @playwright/test@1.57.0 install --with-deps chromium
+        run: npx playwright install --with-deps chromium
 
       - name: E2E smoke (Vite preview)
-        run: npx --yes @playwright/test@1.57.0 test
+        run: npm run test:e2e
 
       - name: Audit dependencies (falha em high+)
         run: npm audit --audit-level=high
