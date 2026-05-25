@@ -29,6 +29,7 @@ const recebimentoItemSchema = z
     quantidade: z.union([z.number(), s]).optional(),
     quantidadeConferida: z.union([z.number(), s, z.null()]).optional(),
     observacaoItem: sShort.optional(),
+    localizacao: sShort.optional(),
     unidade: sShort.optional(),
     disciplina: sShort.optional(),
   })

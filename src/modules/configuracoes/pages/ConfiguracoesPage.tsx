@@ -37,7 +37,10 @@ import {
   getScopedIsoProStorageKey,
   readEstadoAmbientes,
   removerAmbienteObra,
+  resumoCentroCustoAmbiente,
+  type IsoProCentroCustoAmbiente,
 } from '../../../lib/isoProAmbiente';
+import { aplicarCentroCustoInicialNoAmbiente } from '../services/configuracoes.service';
 import {
   aplicarTenantAtivoERecarregar,
   carregarListaTenantsNuvem,
@@ -175,6 +178,12 @@ export function ConfiguracoesPage() {
 
   const [ambientesUi, setAmbientesUi] = useState(readEstadoAmbientes);
   const [novoAmbienteNome, setNovoAmbienteNome] = useState('');
+  const [novoAmbienteCentro, setNovoAmbienteCentro] = useState<IsoProCentroCustoAmbiente>({
+    cliente: '',
+    projeto: '',
+    contrato: '',
+    local: '',
+  });
   const [ambienteFormErro, setAmbienteFormErro] = useState('');
   const [tenantsNuvemCfg, setTenantsNuvemCfg] = useState<IsoProTenantListItem[]>([]);
   const [tenantCfgSelect, setTenantCfgSelect] = useState(() => getActiveTenantId());
@@ -508,18 +517,65 @@ export function ConfiguracoesPage() {
                 placeholder="Ex.: Obra 4358 — Norte"
                 value={novoAmbienteNome}
               />
+              <p className="panel-copy" style={{ gridColumn: '1 / -1', margin: 0 }}>
+                <strong>Centro de custo</strong> (recomendado) — usado em RIR, relatórios e backup; pode alterar depois em «Dados gerais».
+              </p>
+              <Input
+                disabled={!canAdminister}
+                label="Cliente"
+                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, cliente: event.target.value }))}
+                placeholder="Ex.: Cliente ABC"
+                value={novoAmbienteCentro.cliente}
+              />
+              <Input
+                disabled={!canAdminister}
+                label="Projeto / obra"
+                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, projeto: event.target.value }))}
+                placeholder='Ex.: obra 55 ou "Cliente 01 - obra 55"'
+                value={novoAmbienteCentro.projeto}
+              />
+              <Input
+                disabled={!canAdminister}
+                label="Contrato"
+                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, contrato: event.target.value }))}
+                value={novoAmbienteCentro.contrato}
+              />
+              <Input
+                disabled={!canAdminister}
+                label="Local"
+                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, local: event.target.value }))}
+                value={novoAmbienteCentro.local}
+              />
               <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={!canAdminister}
+                  onClick={() => {
+                    if (!form) return;
+                    setNovoAmbienteCentro({
+                      cliente: form.cliente,
+                      projeto: form.projeto,
+                      contrato: form.contrato,
+                      local: form.local,
+                    });
+                  }}
+                >
+                  Copiar do centro de custo actual
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   onClick={() => {
                     setAmbienteFormErro('');
-                    const criado = adicionarAmbienteObra(novoAmbienteNome);
+                    const criado = adicionarAmbienteObra(novoAmbienteNome, novoAmbienteCentro);
                     if (!criado) {
                       setAmbienteFormErro('Indique um nome para criar o ambiente.');
                       return;
                     }
+                    aplicarCentroCustoInicialNoAmbiente(criado.id, criado.centroCusto ?? novoAmbienteCentro);
                     setNovoAmbienteNome('');
+                    setNovoAmbienteCentro({ cliente: '', projeto: '', contrato: '', local: '' });
                     setAmbientesUi(readEstadoAmbientes());
                   }}
                 >
@@ -536,6 +592,11 @@ export function ConfiguracoesPage() {
               {ambientesUi.ambientes.map((a) => (
                 <li key={a.id} style={{ marginBottom: 8 }}>
                   <strong>{a.nome}</strong>
+                  {resumoCentroCustoAmbiente(a.centroCusto) ? (
+                    <span style={{ display: 'block', marginTop: 4, opacity: 0.85 }}>
+                      Centro de custo: {resumoCentroCustoAmbiente(a.centroCusto)}
+                    </span>
+                  ) : null}
                   {a.id !== 'padrao' ? (
                     <>
                       {' '}

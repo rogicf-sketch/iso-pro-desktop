@@ -13,6 +13,8 @@ export interface RecebimentoItem {
   quantidadeConferida?: number | string | null;
   /** Notas por linha (ex.: divergência na conferência, embalagem, lote). Sincronizado desktop ↔ mobile pelo snapshot. */
   observacaoItem?: string;
+  /** Endereço / posição de estoque (lançamento no PC; conferente pode confirmar ou corrigir no mobile). */
+  localizacao?: string;
   unidade?: string;
   disciplina?: string;
   [key: string]: unknown;

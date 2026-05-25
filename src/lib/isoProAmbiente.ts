@@ -5,9 +5,18 @@
 
 export const ISO_PRO_AMBIENTE_ESTADO_KEY = 'iso-pro-desktop-ambientes-estado-v1';
 
+/** Centro de custo inicial da obra (espelha Configurações → Dados gerais). */
+export type IsoProCentroCustoAmbiente = {
+  cliente: string;
+  projeto: string;
+  contrato: string;
+  local: string;
+};
+
 export type IsoProAmbienteDef = {
   id: string;
   nome: string;
+  centroCusto?: IsoProCentroCustoAmbiente;
 };
 
 export type IsoProAmbientesEstado = {
@@ -29,7 +38,13 @@ export function readEstadoAmbientes(): IsoProAmbientesEstado {
     if (!raw) return DEFAULT_ESTADO;
     const p = JSON.parse(raw) as Partial<IsoProAmbientesEstado>;
     if (p.version !== 1 || !Array.isArray(p.ambientes) || p.ambientes.length === 0) return DEFAULT_ESTADO;
-    const ambientes = p.ambientes.filter((a) => a?.id?.trim() && a?.nome?.trim()) as IsoProAmbienteDef[];
+    const ambientes = p.ambientes
+      .filter((a) => a?.id?.trim() && a?.nome?.trim())
+      .map((a) => ({
+        id: String(a.id).trim(),
+        nome: String(a.nome).trim(),
+        centroCusto: normalizarCentroCustoAmbiente(a.centroCusto),
+      })) as IsoProAmbienteDef[];
     if (!ambientes.some((a) => a.id === 'padrao')) {
       ambientes.unshift({ id: 'padrao', nome: 'Principal (dados já existentes neste PC)' });
     }
@@ -49,11 +64,38 @@ export function getAmbienteAtivoId(): string {
   return readEstadoAmbientes().ativoId;
 }
 
-/** Chave `localStorage` / IndexedDB com isolamento por ambiente activo. */
-export function getScopedIsoProStorageKey(baseKey: string): string {
-  const id = getAmbienteAtivoId();
+function normalizarCentroCustoAmbiente(raw: unknown): IsoProCentroCustoAmbiente | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const c = raw as Partial<IsoProCentroCustoAmbiente>;
+  const centro: IsoProCentroCustoAmbiente = {
+    cliente: String(c.cliente ?? '').trim(),
+    projeto: String(c.projeto ?? '').trim(),
+    contrato: String(c.contrato ?? '').trim(),
+    local: String(c.local ?? '').trim(),
+  };
+  return centroCustoAmbientePreenchido(centro) ? centro : undefined;
+}
+
+export function centroCustoAmbientePreenchido(centro: Partial<IsoProCentroCustoAmbiente> | undefined): boolean {
+  if (!centro) return false;
+  return [centro.cliente, centro.projeto, centro.contrato, centro.local].some((v) => String(v ?? '').trim());
+}
+
+export function resumoCentroCustoAmbiente(centro: IsoProCentroCustoAmbiente | undefined): string {
+  if (!centro || !centroCustoAmbientePreenchido(centro)) return '';
+  return [centro.cliente, centro.projeto, centro.contrato, centro.local].filter((v) => v.trim()).join(' · ');
+}
+
+/** Chave `localStorage` / IndexedDB para um ambiente concreto (sem depender do activo). */
+export function getScopedIsoProStorageKeyForAmbienteId(baseKey: string, ambienteId: string): string {
+  const id = ambienteId.trim();
   if (!id || id === 'padrao') return baseKey;
   return `${baseKey}::ambiente:${id}`;
+}
+
+/** Chave `localStorage` / IndexedDB com isolamento por ambiente activo. */
+export function getScopedIsoProStorageKey(baseKey: string): string {
+  return getScopedIsoProStorageKeyForAmbienteId(baseKey, getAmbienteAtivoId());
 }
 
 /** Sufixo estável para nome da base IndexedDB de blobs (evita misturar fotos entre obras). */
@@ -94,7 +136,10 @@ export function slugifyNovoAmbienteId(nome: string): string {
   return t || `obra-${Date.now()}`;
 }
 
-export function adicionarAmbienteObra(nome: string): IsoProAmbienteDef | null {
+export function adicionarAmbienteObra(
+  nome: string,
+  centroCusto?: Partial<IsoProCentroCustoAmbiente>,
+): IsoProAmbienteDef | null {
   const n = nome.trim();
   if (!n) return null;
   const estado = readEstadoAmbientes();
@@ -103,7 +148,8 @@ export function adicionarAmbienteObra(nome: string): IsoProAmbienteDef | null {
   while (estado.ambientes.some((a) => a.id === id)) {
     id = `${slugifyNovoAmbienteId(n)}-${i++}`;
   }
-  const novo: IsoProAmbienteDef = { id, nome: n };
+  const centro = normalizarCentroCustoAmbiente(centroCusto);
+  const novo: IsoProAmbienteDef = centro ? { id, nome: n, centroCusto: centro } : { id, nome: n };
   writeEstadoAmbientes({ ...estado, ambientes: [...estado.ambientes, novo] });
   return novo;
 }

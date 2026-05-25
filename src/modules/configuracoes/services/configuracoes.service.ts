@@ -1,4 +1,10 @@
-import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import {
+  centroCustoAmbientePreenchido,
+  getAmbienteAtivoId,
+  getScopedIsoProStorageKey,
+  getScopedIsoProStorageKeyForAmbienteId,
+  type IsoProCentroCustoAmbiente,
+} from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { dispatchIsoProConfigUpdatedEvent } from '../../../lib/configEvents';
 import { getCurrentUser } from '../../auth/services/auth.service';
@@ -196,6 +202,38 @@ export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
   const config = readConfiguracoes();
   aplicarTemaEfetivoNaSessao();
   return config;
+}
+
+/** Grava centro de custo nas configurações isoladas de um ambiente de obra (ao criar obra nova). */
+export function aplicarCentroCustoInicialNoAmbiente(ambienteId: string, centro: IsoProCentroCustoAmbiente): void {
+  if (!centroCustoAmbientePreenchido(centro)) return;
+  if (typeof localStorage === 'undefined') return;
+
+  const key = getScopedIsoProStorageKeyForAmbienteId(STORAGE_KEY_BASE, ambienteId);
+  let payload: Partial<ConfiguracaoSistema> = {};
+  const raw = localStorage.getItem(key);
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      const validated = parseConfiguracaoJson(parsed);
+      if (validated) payload = validated as Partial<ConfiguracaoSistema>;
+    } catch {
+      avisarPreservacaoLocalStorageCorrupto('Configuracoes', key);
+    }
+  }
+
+  const next: ConfiguracaoSistema = {
+    ...defaultConfig,
+    ...payload,
+    cliente: centro.cliente.trim() || payload.cliente?.trim() || defaultConfig.cliente,
+    projeto: centro.projeto.trim() || payload.projeto?.trim() || defaultConfig.projeto,
+    contrato: centro.contrato.trim() || payload.contrato?.trim() || defaultConfig.contrato,
+    local: centro.local.trim() || payload.local?.trim() || defaultConfig.local,
+  };
+  localStorage.setItem(key, JSON.stringify(next));
+  if (getAmbienteAtivoId() === ambienteId) {
+    dispatchIsoProConfigUpdatedEvent();
+  }
 }
 
 export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise<ServiceResult<ConfiguracaoSistema>> {
