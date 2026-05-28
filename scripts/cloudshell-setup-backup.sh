@@ -14,7 +14,19 @@ NS=$(oci os ns get --query data --raw-output)
 echo "    Namespace: $NS"
 
 echo "==> Compartment (root tenancy)..."
-TENANCY=$(oci iam tenancy get --query data.id --raw-output)
+OCI_CONFIG="${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}"
+if [ -f "$OCI_CONFIG" ]; then
+  TENANCY=$(grep -E '^tenancy=' "$OCI_CONFIG" | head -1 | cut -d= -f2- | tr -d ' ')
+fi
+if [ -z "${TENANCY:-}" ]; then
+  TENANCY="${OCI_TENANCY:-${OCI_TENANCY_ID:-}}"
+fi
+if [ -z "${TENANCY:-}" ]; then
+  echo "Erro: tenancy OCID nao encontrado em $OCI_CONFIG"
+  echo "Abra o console > Perfil > Tenancy rogicf > copie o OCID e exporte:"
+  echo "  export OCI_TENANCY_ID=ocid1.tenancy.oc1..aaaa..."
+  exit 1
+fi
 echo "    Tenancy OCID: $TENANCY"
 
 echo "==> Bucket $BUCKET..."
