@@ -40,7 +40,7 @@
     "preview": "vite preview",
     "license:keypair": "tsx scripts/generateDesktopLicenseKeyPair.ts",
     "license:generate": "tsx scripts/generateDesktopLicense.ts",
-    "snapshot:export": "node scripts/export-iso-pro-snapshot.mjs",
+    "snapshot:export": "node --use-system-ca scripts/export-iso-pro-snapshot.mjs",
     "snapshot:verify": "node scripts/verify-iso-pro-snapshot-export.mjs",
     "backup:upload-oci": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upload-backup-to-oci.ps1",
     "deploy:web": "node scripts/deploy-web.mjs"

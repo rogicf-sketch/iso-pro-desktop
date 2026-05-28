@@ -22,6 +22,7 @@ electron/.dev-main.mjs.map
 .env.local
 !.env.example
 scripts/deploy-web.env
+scripts/backup-oci.env
 
 # Supabase CLI estado local (não versionar)
 supabase/.temp/

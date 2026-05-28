@@ -13,7 +13,9 @@ Requisitos previos:
 
 Fluxo tipico:
   npm run snapshot:export
-  .\scripts\upload-backup-to-oci.ps1 -BucketName "iso-pro-backups"
+  # Opcional: copie scripts/backup-oci.env.example para scripts/backup-oci.env (OCI_BUCKET_NAME=...)
+  npm run backup:upload-oci
+  # ou: .\scripts\upload-backup-to-oci.ps1 -BucketName "iso-pro-backups"
 
 Automatico (desktop): ao gravar Configuracoes no app Electron, e criado
   %APPDATA%\iso-pro-desktop\oci-upload-context.json
@@ -47,12 +49,11 @@ Opcional. Segunda pasta: por defeito junta ao Cliente como "Cliente - Projeto" (
 Se definido, a segunda pasta usa apenas o texto de Projeto (sem prefixar Cliente).
 #>
 param(
-  [Parameter(Mandatory = $true)]
-  [string] $BucketName,
+  [string] $BucketName = '',
 
   [string] $FilePath = '',
 
-  [string] $Prefix = 'iso-pro-snapshots',
+  [string] $Prefix = '',
 
   [string] $Cliente = '',
 
@@ -62,6 +63,46 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Import-IsoProBackupOciEnvFile {
+  param([string] $Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith('#')) { return }
+    $eq = $line.IndexOf('=')
+    if ($eq -le 0) { return }
+    $key = $line.Substring(0, $eq).Trim()
+    $val = $line.Substring($eq + 1).Trim()
+    if (($val.StartsWith('"') -and $val.EndsWith('"')) -or ($val.StartsWith("'") -and $val.EndsWith("'"))) {
+      $val = $val.Substring(1, $val.Length - 2)
+    }
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($key))) {
+      Set-Item -Path "Env:$key" -Value $val
+    }
+  }
+}
+
+$projectRootEarly = Split-Path -Parent $PSScriptRoot
+Import-IsoProBackupOciEnvFile -Path (Join-Path $PSScriptRoot 'backup-oci.env')
+
+if ([string]::IsNullOrWhiteSpace($BucketName)) {
+  $BucketName = [string]$env:OCI_BUCKET_NAME
+}
+if ([string]::IsNullOrWhiteSpace($Prefix)) {
+  $Prefix = [string]$env:OCI_PREFIX
+}
+if ([string]::IsNullOrWhiteSpace($Prefix)) {
+  $Prefix = 'iso-pro-snapshots'
+}
+
+if ([string]::IsNullOrWhiteSpace($BucketName)) {
+  throw @"
+BucketName em falta. Use uma destas opcoes:
+  1) Copie scripts/backup-oci.env.example para scripts/backup-oci.env e defina OCI_BUCKET_NAME=...
+  2) npm run backup:upload-oci -- -BucketName `"seu-bucket`"
+"@
+}
 
 if (-not (Get-Command oci -ErrorAction SilentlyContinue)) {
   throw 'OCI CLI nao encontrado no PATH. Instala a partir de: https://docs.oracle.com/iaas/Content/API/Concepts/cliconcepts.htm'
@@ -168,7 +209,7 @@ function Read-OciUploadContextMerged {
       }
     }
     catch {
-      Write-Host "Aviso: contexto OCI ilegivel em $file — $($_.Exception.Message)" -ForegroundColor DarkYellow
+      Write-Host "Aviso: contexto OCI ilegivel em $file - $($_.Exception.Message)" -ForegroundColor DarkYellow
     }
   }
   return @{ Cliente = $c; Projeto = $p }
@@ -239,4 +280,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ''
-Write-Host 'OK — upload concluido.'
+Write-Host 'OK - upload concluido.'

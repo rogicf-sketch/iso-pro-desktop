@@ -12,14 +12,26 @@
  *
  * Opcional: pasta de saida
  *   $env:SNAPSHOT_EXPORT_DIR="C:\\Backups\\ISO-PRO"
+ *
+ * Tambem le `.env` na raiz do projeto (VITE_SUPABASE_* vira fallback para export).
+ * No Windows, se aparecer "fetch failed" / certificado SSL, o npm script ja usa `node --use-system-ca`.
  */
 import { createClient } from '@supabase/supabase-js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadEnvFile } from './loadEnvFile.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
+
+loadEnvFile(path.join(projectRoot, '.env'));
+
+function envOuFallback(nome, fallbackNome) {
+  const v = String(process.env[nome] ?? '').trim();
+  if (v) return v;
+  return String(process.env[fallbackNome] ?? '').trim();
+}
 
 /** Ignora valores de exemplo (tutorial) ou `...` que quebram o createClient. */
 function chaveSupabasePlausivel(valor) {
@@ -40,7 +52,7 @@ function escolherChaveApi() {
     { nome: 'SUPABASE_SECRET_KEY', valor: process.env.SUPABASE_SECRET_KEY },
     { nome: 'SUPABASE_SERVICE_ROLE_KEY', valor: process.env.SUPABASE_SERVICE_ROLE_KEY },
     { nome: 'SUPABASE_PUBLISHABLE_KEY', valor: process.env.SUPABASE_PUBLISHABLE_KEY },
-    { nome: 'SUPABASE_ANON_KEY', valor: process.env.SUPABASE_ANON_KEY },
+    { nome: 'SUPABASE_ANON_KEY', valor: envOuFallback('SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY') },
   ];
   for (const c of candidatos) {
     if (chaveSupabasePlausivel(c.valor)) {
@@ -50,13 +62,14 @@ function escolherChaveApi() {
   return { chave: '', origem: '' };
 }
 
-const url = String(process.env.SUPABASE_URL ?? '').trim();
+const url = envOuFallback('SUPABASE_URL', 'VITE_SUPABASE_URL');
 const { chave: key, origem: chaveOrigem } = escolherChaveApi();
 
 const outDir = String(process.env.SNAPSHOT_EXPORT_DIR ?? path.join(projectRoot, 'backups')).trim();
 
 if (!url || !/^https:\/\//i.test(url)) {
   console.error('[export-iso-pro-snapshot] SUPABASE_URL invalida ou em falta (deve comecar por https://).');
+  console.error('  Defina SUPABASE_URL ou preencha VITE_SUPABASE_URL no .env da raiz do projeto.');
   process.exit(1);
 }
 
@@ -89,7 +102,13 @@ const { data, error } = await supabase
   .eq('tenant_id', tenantId);
 
 if (error) {
-  console.error('[export-iso-pro-snapshot] Erro Supabase:', error.message);
+  const msg = error.message ?? String(error);
+  console.error('[export-iso-pro-snapshot] Erro Supabase:', msg);
+  if (/fetch failed/i.test(msg)) {
+    console.error(
+      '  Dica: em Windows com proxy/antivirus, tente: node --use-system-ca scripts/export-iso-pro-snapshot.mjs',
+    );
+  }
   process.exit(1);
 }
 
