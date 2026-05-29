@@ -46,7 +46,9 @@
     "backup:upload-oci": "node --use-system-ca scripts/upload-backup-to-oci-node.mjs",
     "backup:verify-bucket-private": "node --use-system-ca scripts/verify-oci-bucket-private.mjs",
     "oci:setup-windows": "node scripts/gerar-oci-config-windows.mjs",
-    "deploy:web": "node scripts/deploy-web.mjs"
+    "deploy:web": "node scripts/deploy-web.mjs",
+    "deploy:nginx-security": "node scripts/deploy-nginx-security.mjs",
+    "restore:https-oracle": "node scripts/restore-https-oracle.mjs"
   },
   "dependencies": {
     "@sentry/react": "^9.22.0",
@@ -86,6 +88,7 @@
     "jsdom": "^29.0.1",
     "png2icons": "^2.0.1",
     "sharp": "^0.34.5",
+    "supabase": "^2.102.0",
     "tsx": "^4.20.6",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.0",
