@@ -21,6 +21,34 @@ declare global {
       writeOciUploadContext?: (payload: { cliente: string; projeto: string }) => Promise<
         { ok: true; path: string } | { ok: false; error: string }
       >;
+      syncBackupOracleSettings?: (payload: {
+        habilitado: boolean;
+        intervaloRotinaDias: number;
+        intervaloFluxoAltoDias: number;
+        minAtendimentosFluxo: number;
+        minRecebimentosFluxo: number;
+        minCadastrosFluxo: number;
+        supabaseUrl: string;
+        supabaseAnonKey: string;
+        cliente: string;
+        projeto: string;
+      }) => Promise<{ ok: true } | { ok: false; error: string }>;
+      registrarAtividadeBackupOracle?: (
+        kind: 'atendimento' | 'recebimento' | 'cadastro',
+      ) => Promise<{ ok: true }>;
+      obterEstadoBackupOracle?: () => Promise<
+        | {
+            ok: true;
+            ultimoBackupEm: string | null;
+            ultimoBackupOk: boolean;
+            ultimoErro: string;
+            ultimoMotivo: string;
+            atividade: { atendimentos: number; recebimentos: number; cadastros: number };
+            backupEmCurso: boolean;
+          }
+        | { ok: false; error: string }
+      >;
+      executarBackupOracleAgora?: () => Promise<{ ok: true; detail: string } | { ok: false; error: string }>;
       verifySmtpMail?: (payload: {
         smtp: { host: string; port: number; secure: boolean; user: string; pass: string };
         from: string;

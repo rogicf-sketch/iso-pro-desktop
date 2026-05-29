@@ -7,6 +7,7 @@ import {
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
@@ -475,9 +476,8 @@ async function writeSnapshotRecebimentos(write: SnapshotRecebimentosWrite): Prom
       },
     };
   });
+  registrarAtividadeBackupOracle('recebimento');
 }
-
-/** Mesma regra da listagem (busca, status, modo), sem paginacao. */
 export function aplicarFiltrosListaRecebimentos(
   items: Recebimento[],
   filtro: Pick<RecebimentoFiltro, 'busca' | 'status' | 'modo'>,

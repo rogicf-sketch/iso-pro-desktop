@@ -42,7 +42,8 @@
     "license:generate": "tsx scripts/generateDesktopLicense.ts",
     "snapshot:export": "node --use-system-ca scripts/export-iso-pro-snapshot.mjs",
     "snapshot:verify": "node scripts/verify-iso-pro-snapshot-export.mjs",
-    "backup:upload-oci": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/upload-backup-to-oci.ps1",
+    "backup:upload-oci": "node --use-system-ca scripts/upload-backup-to-oci-node.mjs",
+    "oci:setup-windows": "node scripts/gerar-oci-config-windows.mjs",
     "deploy:web": "node scripts/deploy-web.mjs"
   },
   "dependencies": {

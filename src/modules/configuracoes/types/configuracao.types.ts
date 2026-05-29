@@ -74,4 +74,13 @@ export type ConfiguracaoSistema = {
   smtpSenha: string;
   /** Remetente, ex.: ISO PRO Alertas <alertas@empresa.com> */
   smtpRemetente: string;
+  /** Backup automatico do snapshot para Oracle Object Storage (app desktop). */
+  backupOracleAutomaticoHabilitado: boolean;
+  /** Dias entre backups de rotina (ex.: 7 = ~1x por semana). */
+  backupOracleIntervaloRotinaDias: number;
+  /** Com fluxo alto, intervalo minimo em dias (ex.: 3). */
+  backupOracleIntervaloFluxoAltoDias: number;
+  backupOracleMinAtendimentosFluxo: number;
+  backupOracleMinRecebimentosFluxo: number;
+  backupOracleMinCadastrosFluxo: number;
 };

@@ -42,6 +42,12 @@ function cfgMinima(overrides: Partial<ConfiguracaoSistema> = {}): ConfiguracaoSi
     smtpUsuario: '',
     smtpSenha: '',
     smtpRemetente: '',
+    backupOracleAutomaticoHabilitado: true,
+    backupOracleIntervaloRotinaDias: 7,
+    backupOracleIntervaloFluxoAltoDias: 3,
+    backupOracleMinAtendimentosFluxo: 10,
+    backupOracleMinRecebimentosFluxo: 3,
+    backupOracleMinCadastrosFluxo: 5,
     ...overrides,
   };
 }

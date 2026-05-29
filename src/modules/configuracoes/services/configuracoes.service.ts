@@ -17,6 +17,7 @@ import type { ConfiguracaoSistema, RirProcedimentoCadastroItem } from '../types/
 import { normalizeIaApiBaseUrl } from '../../../lib/isoProIaApi.service';
 import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
 import { sincronizarConfigAlertaEstoqueParaNuvem } from './syncAlertaEstoqueConfigNuvem.service';
+import { sincronizarBackupOracleSettingsFromConfig } from '../../../lib/backupOracleAuto.client';
 
 const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
 
@@ -90,6 +91,12 @@ const defaultConfig: ConfiguracaoSistema = {
   smtpUsuario: '',
   smtpSenha: '',
   smtpRemetente: '',
+  backupOracleAutomaticoHabilitado: true,
+  backupOracleIntervaloRotinaDias: 7,
+  backupOracleIntervaloFluxoAltoDias: 3,
+  backupOracleMinAtendimentosFluxo: 10,
+  backupOracleMinRecebimentosFluxo: 3,
+  backupOracleMinCadastrosFluxo: 5,
 };
 
 function normalizeRelatorioFinalIaBaseUrl(url: unknown): string {
@@ -182,6 +189,22 @@ export function readConfiguracoes(): ConfiguracaoSistema {
       smtpUsuario: String(parsedConfig.smtpUsuario ?? '').trim(),
       smtpSenha: String(parsedConfig.smtpSenha ?? ''),
       smtpRemetente: String(parsedConfig.smtpRemetente ?? '').trim(),
+      backupOracleAutomaticoHabilitado: parsedConfig.backupOracleAutomaticoHabilitado !== false,
+      backupOracleIntervaloRotinaDias: Number(parsedConfig.backupOracleIntervaloRotinaDias) > 0
+        ? Number(parsedConfig.backupOracleIntervaloRotinaDias)
+        : defaultConfig.backupOracleIntervaloRotinaDias,
+      backupOracleIntervaloFluxoAltoDias: Number(parsedConfig.backupOracleIntervaloFluxoAltoDias) > 0
+        ? Number(parsedConfig.backupOracleIntervaloFluxoAltoDias)
+        : defaultConfig.backupOracleIntervaloFluxoAltoDias,
+      backupOracleMinAtendimentosFluxo: Number(parsedConfig.backupOracleMinAtendimentosFluxo) > 0
+        ? Number(parsedConfig.backupOracleMinAtendimentosFluxo)
+        : defaultConfig.backupOracleMinAtendimentosFluxo,
+      backupOracleMinRecebimentosFluxo: Number(parsedConfig.backupOracleMinRecebimentosFluxo) > 0
+        ? Number(parsedConfig.backupOracleMinRecebimentosFluxo)
+        : defaultConfig.backupOracleMinRecebimentosFluxo,
+      backupOracleMinCadastrosFluxo: Number(parsedConfig.backupOracleMinCadastrosFluxo) > 0
+        ? Number(parsedConfig.backupOracleMinCadastrosFluxo)
+        : defaultConfig.backupOracleMinCadastrosFluxo,
     };
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
@@ -201,6 +224,7 @@ export function aplicarTemaEfetivoNaSessao(): void {
 export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
   const config = readConfiguracoes();
   aplicarTemaEfetivoNaSessao();
+  void sincronizarBackupOracleSettingsFromConfig(config);
   return config;
 }
 
@@ -289,6 +313,27 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     smtpUsuario: payload.smtpUsuario.trim(),
     smtpSenha: payload.smtpSenha,
     smtpRemetente: payload.smtpRemetente.trim(),
+    backupOracleAutomaticoHabilitado: payload.backupOracleAutomaticoHabilitado === true,
+    backupOracleIntervaloRotinaDias:
+      payload.backupOracleIntervaloRotinaDias > 0
+        ? payload.backupOracleIntervaloRotinaDias
+        : defaultConfig.backupOracleIntervaloRotinaDias,
+    backupOracleIntervaloFluxoAltoDias:
+      payload.backupOracleIntervaloFluxoAltoDias > 0
+        ? payload.backupOracleIntervaloFluxoAltoDias
+        : defaultConfig.backupOracleIntervaloFluxoAltoDias,
+    backupOracleMinAtendimentosFluxo:
+      payload.backupOracleMinAtendimentosFluxo > 0
+        ? payload.backupOracleMinAtendimentosFluxo
+        : defaultConfig.backupOracleMinAtendimentosFluxo,
+    backupOracleMinRecebimentosFluxo:
+      payload.backupOracleMinRecebimentosFluxo > 0
+        ? payload.backupOracleMinRecebimentosFluxo
+        : defaultConfig.backupOracleMinRecebimentosFluxo,
+    backupOracleMinCadastrosFluxo:
+      payload.backupOracleMinCadastrosFluxo > 0
+        ? payload.backupOracleMinCadastrosFluxo
+        : defaultConfig.backupOracleMinCadastrosFluxo,
   };
 
   if (normalizedBase.desktopVinculoAtivo && !normalizedBase.desktopInstalacaoAutorizadaId.trim()) {
@@ -369,6 +414,8 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     cliente: normalized.cliente,
     projeto: normalized.projeto,
   });
+
+  void sincronizarBackupOracleSettingsFromConfig(normalized);
 
   if (hasSupabaseConfig()) {
     void sincronizarConfigAlertaEstoqueParaNuvem(normalized);

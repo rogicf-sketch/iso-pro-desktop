@@ -5,6 +5,7 @@ import {
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { mergeSnapshotRowsById } from '../../../lib/snapshotPatchMerge';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
 import {
@@ -338,6 +339,7 @@ async function writeSnapshotAtendimentoPatch(patch: {
       },
     };
   });
+  registrarAtividadeBackupOracle('atendimento');
 }
 
 function buildLocalPayloadParaReconciliacao(

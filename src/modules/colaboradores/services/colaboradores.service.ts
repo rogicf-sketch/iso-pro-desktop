@@ -7,6 +7,7 @@ import {
   readIsoProSnapshotPayload,
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
+import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -182,6 +183,7 @@ async function writeSnapshotColaboradores(items: Colaborador[]): Promise<void> {
       },
     };
   });
+  registrarAtividadeBackupOracle('cadastro');
 }
 
 export async function listarColaboradores(filtro: ColaboradorFiltro): Promise<ServiceResult<PaginatedResult<Colaborador>>> {

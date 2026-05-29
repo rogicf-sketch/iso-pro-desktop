@@ -12,6 +12,7 @@ import { logout as authLogout, verifyCurrentUserPassword } from '../../auth/serv
 import { RIR_NUMERACAO_LABELS, descricaoModoNumeracaoRir } from '../../qualidade/utils/rirNumeracaoCopy';
 import { ConfiguracaoRelatorioFinalIaPanel } from '../components/ConfiguracaoRelatorioFinalIaPanel';
 import { ConfiguracaoAlertaEstoqueEmailPanel } from '../components/ConfiguracaoAlertaEstoqueEmailPanel';
+import { ConfiguracaoBackupOraclePanel } from '../components/ConfiguracaoBackupOraclePanel';
 import { ConfiguracoesSecaoIntro } from '../components/ConfiguracoesSecaoIntro';
 import { ConfiguracoesSecaoNav } from '../components/ConfiguracoesSecaoNav';
 import {
@@ -1082,6 +1083,13 @@ export function ConfiguracoesPage() {
           id="config-secao-desktop"
           role="tabpanel"
         >
+        {form ? (
+          <ConfiguracaoBackupOraclePanel
+            canAdminister={canAdminister}
+            form={form}
+            onChange={(next) => setForm(next)}
+          />
+        ) : null}
         <div className="panel">
           <div className="panel-header">
             <div>

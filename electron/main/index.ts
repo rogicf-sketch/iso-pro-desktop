@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron';
 import { registerBackupContextHandlers } from './backupContext';
+import { initBackupOracleAuto, registerBackupOracleAutoHandlers } from './backupOracleAuto';
 import { registerMailHandlers } from './mail';
 import { registerPrintHandlers } from './print';
 import { registerSecurityHandlers } from './security';
@@ -16,9 +17,11 @@ app.commandLine.appendSwitch('lang', 'pt-BR');
 function bootstrap() {
   registerSecurityHandlers();
   registerBackupContextHandlers();
+  registerBackupOracleAutoHandlers();
   registerMailHandlers();
   registerPrintHandlers();
   createMainWindow();
+  void initBackupOracleAuto();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

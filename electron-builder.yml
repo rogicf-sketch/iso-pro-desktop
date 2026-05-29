@@ -33,6 +33,14 @@ asar: true
 extraResources:
   - from: build/icon.ico
     to: icon.ico
+  - from: scripts/export-iso-pro-snapshot.mjs
+    to: backup-scripts/export-iso-pro-snapshot.mjs
+  - from: scripts/upload-backup-to-oci-node.mjs
+    to: backup-scripts/upload-backup-to-oci-node.mjs
+  - from: scripts/loadEnvFile.mjs
+    to: backup-scripts/loadEnvFile.mjs
+  - from: scripts/ociObjectStorageSign.mjs
+    to: backup-scripts/ociObjectStorageSign.mjs
 
 win:
   # Evita download/extração do winCodeSign quando não há assinatura (útil em Windows sem symlinks / Developer Mode).
