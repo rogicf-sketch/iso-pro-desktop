@@ -1,5 +1,6 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { preparePasswordForStorage } from 'iso-pro-shared';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -427,10 +428,13 @@ export async function salvarUsuario(payload: UsuarioFormData, currentId?: string
         return { success: false, error: 'Ja existe um usuario com esse login.' };
       }
 
+      const senhaPlain = payload.senha.trim() || undefined;
+      const senhaHashed = senhaPlain ? await preparePasswordForStorage(senhaPlain) : undefined;
+
       const normalized = {
         login: normalizedLogin,
         nome: payload.nome.trim(),
-        senha: payload.senha.trim() || undefined,
+        senha: senhaHashed,
         perfil_id: payload.perfilId,
         ativo: payload.ativo,
         colaborador_id: colaboradorIdNorm,
@@ -461,7 +465,7 @@ export async function salvarUsuario(payload: UsuarioFormData, currentId?: string
           user: {
             login: normalizedLogin,
             nome: normalized.nome,
-            senha: currentId ? normalized.senha : payload.senha.trim(),
+            senha: currentId ? normalized.senha : senhaPlain!,
             perfil_id: normalized.perfil_id,
             ativo: normalized.ativo,
             colaborador_id: colaboradorIdNorm,
@@ -629,11 +633,15 @@ export async function salvarUsuario(payload: UsuarioFormData, currentId?: string
   if (currentId) {
     const index = users.findIndex((item) => item.id === currentId);
     if (index === -1) return { success: false, error: 'Usuario nao encontrado.' };
+    const senhaLocal =
+      payload.senha.trim() !== ''
+        ? (await preparePasswordForStorage(payload.senha.trim())) ?? users[index].senha
+        : users[index].senha;
     users[index] = {
       ...users[index],
       login: normalizedLogin,
       nome: payload.nome.trim(),
-      senha: payload.senha.trim() || users[index].senha,
+      senha: senhaLocal,
       ativo: payload.ativo,
       perfilId: perfil.id,
       perfilNome: perfil.nome,
@@ -645,11 +653,16 @@ export async function salvarUsuario(payload: UsuarioFormData, currentId?: string
     return { success: true, data: toUserListItem(users[index]) };
   }
 
+  const senhaNova = await preparePasswordForStorage(payload.senha.trim());
+  if (!senhaNova) {
+    return { success: false, error: 'Informe a senha.' };
+  }
+
   const created = {
     id: crypto.randomUUID(),
     login: normalizedLogin,
     nome: payload.nome.trim(),
-    senha: payload.senha.trim(),
+    senha: senhaNova,
     ativo: payload.ativo,
     perfilId: perfil.id,
     perfilNome: perfil.nome,

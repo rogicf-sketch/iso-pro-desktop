@@ -5,6 +5,7 @@
  * Frase: manter em sync com `src/modules/configuracoes/constants/limparCadastros.constants.ts`.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+import { verifyPassword } from '../_shared/passwordHash.ts';
 
 const FRASE = 'APAGAR_CADASTROS_NUVEM';
 const SNAPSHOT_ID = 'default';
@@ -211,7 +212,7 @@ Deno.serve(async (req) => {
       perfis_acesso?: { perfil_permissoes?: PermRow[] | null } | null;
     } | null;
 
-    if (!u || String(u.senha ?? '') !== senha) {
+    if (!u || !(await verifyPassword(senha, String(u.senha ?? '')))) {
       return new Response(JSON.stringify({ ok: false, message: 'Login ou senha invalidos para este tenant.' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

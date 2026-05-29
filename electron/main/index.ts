@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron';
 import { registerBackupContextHandlers } from './backupContext';
+import { registerConfigSecretsHandlers } from './configSecrets';
 import { initBackupOracleAuto, registerBackupOracleAutoHandlers } from './backupOracleAuto';
 import { registerMailHandlers } from './mail';
 import { registerPrintHandlers } from './print';
@@ -16,6 +17,7 @@ app.commandLine.appendSwitch('lang', 'pt-BR');
 
 function bootstrap() {
   registerSecurityHandlers();
+  registerConfigSecretsHandlers();
   registerBackupContextHandlers();
   registerBackupOracleAutoHandlers();
   registerMailHandlers();

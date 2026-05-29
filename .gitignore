@@ -30,6 +30,11 @@ supabase/.temp/
 # Export manual do snapshot (npm run snapshot:export)
 backups
 
+# Testes E2E / Playwright (nunca commitar)
+test-results/
+playwright-report/
+blob-report/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

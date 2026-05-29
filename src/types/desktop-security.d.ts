@@ -11,6 +11,12 @@ declare global {
         machineLabel: string;
         appVersion: string;
       }>;
+      loadConfigSecrets?: () => Promise<
+        | { ok: true; available: boolean; secrets: Record<string, string> }
+        | { ok: false; error: string }
+      >;
+      saveConfigSecrets?: (secrets: Record<string, string>) => Promise<{ ok: true } | { ok: false; error: string }>;
+      isConfigSecretsAvailable?: () => Promise<boolean>;
       /** IPC: impressão de HTML no processo principal (evita PDF em branco no Electron). */
       printHtml?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       /** IPC: gera PDF com fundos (`printToPDF`), mais fiável que «Guardar como PDF» na impressão. */

@@ -12,6 +12,7 @@ import {
   loadOciConfig,
   ociObjectStorageFetch,
 } from './ociObjectStorageSign.mjs';
+import { backupEncryptionEnabled, encryptBackupPayload } from './backupCrypto.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -42,7 +43,18 @@ const filePath = path.join(backupDir, exports[0].f);
 const baseName = exports[0].f;
 const now = new Date();
 const datePart = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-const objectName = `${prefix}/${datePart}/${baseName}`;
+
+let uploadBody = fs.readFileSync(filePath);
+let uploadFileName = baseName;
+let contentType = 'application/json';
+if (backupEncryptionEnabled()) {
+  uploadBody = encryptBackupPayload(uploadBody);
+  uploadFileName = baseName.replace(/\.json$/i, '.json.enc');
+  contentType = 'application/octet-stream';
+  console.log('[upload-backup-oci] Encriptacao AES-256-GCM activa (.json.enc)');
+}
+
+const objectName = `${prefix}/${datePart}/${uploadFileName}`;
 
 const cfg = loadOciConfig();
 console.log('[upload-backup-oci] Region:', cfg.region);
@@ -53,13 +65,13 @@ console.log('[upload-backup-oci] Bucket:   ', bucket);
 console.log('[upload-backup-oci] Object:   ', objectName);
 console.log('[upload-backup-oci] Ficheiro: ', filePath);
 
-const body = fs.readFileSync(filePath);
+const body = uploadBody;
 const apiPath = `/n/${encodeURIComponent(ns)}/b/${encodeURIComponent(bucket)}/o/${encodeObjectName(objectName)}`;
 
 const { res, text } = await ociObjectStorageFetch('PUT', apiPath, {
   cfg,
   body,
-  contentType: 'application/json',
+  contentType,
 });
 
 if (!res.ok) {

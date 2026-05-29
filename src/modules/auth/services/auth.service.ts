@@ -3,6 +3,7 @@ import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
 import { getSupabase, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
+import { hashPassword, isPasswordHash, verifyPassword } from 'iso-pro-shared';
 import { parseAuthSessionUser, parseAuthUsersStorageList } from '../schemas/authLocal.zod';
 import type { AppModule, AuthUser, LoginPayload, Permission, PermissionAction } from '../types/auth.types';
 import { appendAuthAuditEvent } from './authAudit.service';
@@ -387,6 +388,29 @@ function mapRemoteUser(row: RemoteUserRow): AuthUser {
   };
 }
 
+async function senhaArmazenadaValida(plainSenha: string, storedSenha: string): Promise<boolean> {
+  return verifyPassword(plainSenha, storedSenha);
+}
+
+/** Rehash silencioso após login com senha legada em texto plano (migração gradual). */
+function rehashRemotePasswordIfLegacy(userId: string, plainSenha: string, storedSenha: string): void {
+  if (isPasswordHash(storedSenha)) return;
+  const supabase = getSupabase();
+  if (!supabase) return;
+  void (async () => {
+    try {
+      const hashed = await hashPassword(plainSenha);
+      await supabase
+        .from('usuarios_sistema')
+        .update({ senha: hashed })
+        .eq('id', userId)
+        .eq('tenant_id', getActiveTenantId());
+    } catch {
+      /* migração best-effort */
+    }
+  })();
+}
+
 async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
   const supabase = getSupabase();
   if (!supabase) {
@@ -409,9 +433,12 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
   }
 
   const user = data as RemoteUserRow | null;
-  if (!user || String(user.senha ?? '') !== senha) {
+  const storedSenha = String(user?.senha ?? '');
+  if (!user || !(await senhaArmazenadaValida(senha, storedSenha))) {
     throw new AuthServiceError('Login ou senha invalidos.', 'invalid_credentials');
   }
+
+  rehashRemotePasswordIfLegacy(String(user.id ?? ''), senha, storedSenha);
 
   const sessionUser = mapRemoteUser(user);
   setVolatileSessionPasswordAfterSuccessfulLogin(senha);
@@ -431,7 +458,7 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
 
   /** Com VITE_ENABLE_LOCAL_MOCK_AUTH=true no build, demo entra antes do Supabase (útil com .env que já tem URL/key). */
   const demoUser = localMockUserByLogin(payload.login);
-  if (demoUser && demoUser.senha === payload.senha.trim()) {
+  if (demoUser && (await senhaArmazenadaValida(payload.senha.trim(), demoUser.senha))) {
     const sessionUser = sanitizeUser(demoUser);
     setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
     persistAuthSession(sessionUser, payload.permanecerLogado);
@@ -460,7 +487,7 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
       const login = payload.login.trim().toLowerCase();
       const fallbackUser = readLocalUsers().find((item) => item.login === login) ?? localMockUserByLogin(login);
       if (fallbackUser) {
-        if (fallbackUser.senha === payload.senha.trim()) {
+        if (await senhaArmazenadaValida(payload.senha.trim(), fallbackUser.senha)) {
           const sessionUser = sanitizeUser(fallbackUser);
           setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
           persistAuthSession(sessionUser, payload.permanecerLogado);
@@ -484,7 +511,7 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
   const localUsers = readLocalUsers();
   const login = payload.login.trim().toLowerCase();
   const user = localUsers.find((item) => item.login === login);
-  if (!user || user.senha !== payload.senha.trim()) {
+  if (!user || !(await senhaArmazenadaValida(payload.senha.trim(), user.senha))) {
     appendAuthAuditEvent({
       type: 'login_failure',
       actorLogin: login,
@@ -707,7 +734,7 @@ export async function verifyCurrentUserPassword(senha: string): Promise<boolean>
 
   if (isEmbeddedLocalMockSession(user)) {
     const resolved = resolveEmbeddedLocalMockUser(user);
-    return resolved != null && resolved.senha === trimmed;
+    return resolved != null && (await senhaArmazenadaValida(trimmed, resolved.senha));
   }
 
   if (hasSupabaseConfig()) {
@@ -722,16 +749,17 @@ export async function verifyCurrentUserPassword(senha: string): Promise<boolean>
           .eq('ativo', true)
           .maybeSingle();
         if (!error && data != null) {
-          return String((data as { senha?: string }).senha ?? '') === trimmed;
+          const stored = String((data as { senha?: string }).senha ?? '');
+          return senhaArmazenadaValida(trimmed, stored);
         }
       } catch {
         // tentativa fallback local abaixo
       }
     }
     const localUser = readLocalUsers().find((item) => item.id === user.id || item.login === user.login);
-    return localUser != null && localUser.senha === trimmed;
+    return localUser != null && (await senhaArmazenadaValida(trimmed, localUser.senha));
   }
 
   const localUser = readLocalUsers().find((item) => item.id === user.id || item.login === user.login);
-  return localUser != null && localUser.senha === trimmed;
+  return localUser != null && (await senhaArmazenadaValida(trimmed, localUser.senha));
 }

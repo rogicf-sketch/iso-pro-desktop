@@ -31,7 +31,8 @@
     "verify:release": "node scripts/verify-release.mjs",
     "clean": "node scripts/clean.mjs",
     "check": "npm run typecheck && npm run test && npm run lint",
-    "ci": "npm run typecheck && npm run test && npm run lint && npm run build:app && npm run build:icon && npm audit --audit-level=high",
+    "ci": "npm run typecheck && npm run test && npm run lint && npm run build:app && npm run build:icon && npm run audit:ci",
+    "audit:ci": "node scripts/npm-audit-ci.mjs",
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
@@ -43,6 +44,7 @@
     "snapshot:export": "node --use-system-ca scripts/export-iso-pro-snapshot.mjs",
     "snapshot:verify": "node scripts/verify-iso-pro-snapshot-export.mjs",
     "backup:upload-oci": "node --use-system-ca scripts/upload-backup-to-oci-node.mjs",
+    "backup:verify-bucket-private": "node --use-system-ca scripts/verify-oci-bucket-private.mjs",
     "oci:setup-windows": "node scripts/gerar-oci-config-windows.mjs",
     "deploy:web": "node scripts/deploy-web.mjs"
   },

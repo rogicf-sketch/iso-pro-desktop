@@ -6,6 +6,7 @@
  * Não expor o secret no bundle web público sem proxy; desktop pode enviar o mesmo modelo que purge_cloud_data.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
+import { hashPasswordForStorage } from '../_shared/passwordHash.ts';
 
 /** Aceita tenant default ISO PRO (00000000-0000-0000-0000-000000000001) e UUIDs v4 normais. */
 const LOOSE_UUID_RE =
@@ -217,7 +218,7 @@ Deno.serve(async (req) => {
       const insertRow: Record<string, unknown> = {
         login: normalizedLogin,
         nome: nome.trim(),
-        senha: senha!.trim(),
+        senha: await hashPasswordForStorage(senha!.trim()),
         perfil_id: perfilId.trim(),
         ativo,
         colaborador_id: colaboradorId,
@@ -309,7 +310,7 @@ Deno.serve(async (req) => {
       colaborador_id: colaboradorId,
     };
     if (senha != null && String(senha).trim()) {
-      updateRow.senha = String(senha).trim();
+      updateRow.senha = await hashPasswordForStorage(String(senha).trim());
     }
 
     const { data: updated, error: upErr } = await admin

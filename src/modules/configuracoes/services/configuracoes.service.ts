@@ -18,6 +18,11 @@ import { normalizeIaApiBaseUrl } from '../../../lib/isoProIaApi.service';
 import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
 import { sincronizarConfigAlertaEstoqueParaNuvem } from './syncAlertaEstoqueConfigNuvem.service';
 import { sincronizarBackupOracleSettingsFromConfig } from '../../../lib/backupOracleAuto.client';
+import {
+  hydrateConfigSecretsVault,
+  mergeConfigSecrets,
+  persistConfigSecretsVault,
+} from '../../../lib/configSecrets.client';
 
 const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
 
@@ -151,7 +156,7 @@ export function readConfiguracoes(): ConfiguracaoSistema {
   const raw = localStorage.getItem(configStorageKey());
   if (!raw) {
     localStorage.setItem(configStorageKey(), JSON.stringify(defaultConfig));
-    return defaultConfig;
+    return mergeConfigSecrets(defaultConfig);
   }
 
   try {
@@ -159,7 +164,7 @@ export function readConfiguracoes(): ConfiguracaoSistema {
     const validated = parseConfiguracaoJson(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
-      return { ...defaultConfig };
+      return mergeConfigSecrets({ ...defaultConfig });
     }
     const parsedConfig = validated as Partial<ConfiguracaoSistema> & { reciboLogoUrl?: string };
     const logoBruto = (parsedConfig.logoInstitucionalUrl ?? parsedConfig.reciboLogoUrl ?? '').trim();
@@ -167,7 +172,7 @@ export function readConfiguracoes(): ConfiguracaoSistema {
     const rirProcedimentosCadastro = Array.isArray(parsedConfig.rirProcedimentosCadastro)
       ? (parsedConfig.rirProcedimentosCadastro as RirProcedimentoCadastroItem[])
       : defaultConfig.rirProcedimentosCadastro;
-    return {
+    const merged = {
       ...defaultConfig,
       ...parsedConfig,
       tema: normalizeTema(parsedConfig.tema),
@@ -206,9 +211,10 @@ export function readConfiguracoes(): ConfiguracaoSistema {
         ? Number(parsedConfig.backupOracleMinCadastrosFluxo)
         : defaultConfig.backupOracleMinCadastrosFluxo,
     };
+    return mergeConfigSecrets(merged);
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
-    return { ...defaultConfig };
+    return mergeConfigSecrets({ ...defaultConfig });
   }
 }
 
@@ -222,6 +228,12 @@ export function aplicarTemaEfetivoNaSessao(): void {
 }
 
 export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
+  const configBeforeVault = readConfiguracoes();
+  const { migrated } = await hydrateConfigSecretsVault(configBeforeVault);
+  if (migrated) {
+    const stripped = await persistConfigSecretsVault(configBeforeVault);
+    localStorage.setItem(configStorageKey(), JSON.stringify(stripped));
+  }
   const config = readConfiguracoes();
   aplicarTemaEfetivoNaSessao();
   void sincronizarBackupOracleSettingsFromConfig(config);
@@ -398,7 +410,7 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     };
   }
 
-  localStorage.setItem(configStorageKey(), JSON.stringify(normalized));
+  localStorage.setItem(configStorageKey(), JSON.stringify(await persistConfigSecretsVault(normalized)));
   aplicarTemaEfetivoNaSessao();
 
   const supabaseTargetChanged =

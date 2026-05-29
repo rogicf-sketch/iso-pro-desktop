@@ -20,6 +20,9 @@ B) VM ORACLE (Ubuntu de exemplo)
 4. sudo apt update && sudo apt install -y nginx
 5. Copie nginx-isopro.conf para /etc/nginx/sites-available/isopro e ative o site
    (ver comentários no topo do ficheiro .conf).
+5b. Copie nginx-security-headers.conf para /etc/nginx/snippets/isopro-security-headers.conf
+   (cabecalhos CSP, X-Frame-Options, etc.). No bloco HTTPS do Certbot, inclua o mesmo
+   `include` e descomente HSTS em nginx-security-headers.conf.
 6. sudo apt install -y certbot python3-certbot-nginx
 7. sudo certbot --nginx -d isoprogestaodemateriais.com.br -d www.isoprogestaodemateriais.com.br
 

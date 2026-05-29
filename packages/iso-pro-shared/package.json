@@ -28,9 +28,11 @@
     "ci": "npm run build && npm run test"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "typescript": "~5.9.3",
     "vitest": "^4.1.2"
   }

@@ -17,6 +17,7 @@ import {
   parseDestinatarios,
 } from '../_shared/estoqueCriticoNuvem.ts';
 import { enviarEmailSmtp } from '../_shared/mailSmtp.ts';
+import { verifyPassword } from '../_shared/passwordHash.ts';
 
 const SNAPSHOT_ID = 'default';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -295,7 +296,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (userErr) throw new Error(userErr.message);
-    if (!userRow || String((userRow as { senha?: string }).senha ?? '') !== senha) {
+    if (!userRow || !(await verifyPassword(senha, String((userRow as { senha?: string }).senha ?? '')))) {
       return new Response(JSON.stringify({ ok: false, message: 'Login ou senha invalidos.' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

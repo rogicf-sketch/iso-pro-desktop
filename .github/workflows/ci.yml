@@ -56,4 +56,4 @@ jobs:
         run: npm run test:e2e
 
       - name: Audit dependencies (falha em high+)
-        run: npm audit --audit-level=high
+        run: node --use-system-ca scripts/npm-audit-ci.mjs

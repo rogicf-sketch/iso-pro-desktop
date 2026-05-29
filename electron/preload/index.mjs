@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   obterEstadoBackupOracle: () => ipcRenderer.invoke('desktop-backup-oracle:estado'),
   executarBackupOracleAgora: () => ipcRenderer.invoke('desktop-backup-oracle:executar-agora'),
   getSecurityContext: () => ipcRenderer.invoke('desktop-security:get-context'),
+  loadConfigSecrets: () => ipcRenderer.invoke('desktop-config-secrets:load'),
+  saveConfigSecrets: (secrets) => ipcRenderer.invoke('desktop-config-secrets:save', secrets),
+  isConfigSecretsAvailable: () => ipcRenderer.invoke('desktop-config-secrets:is-available'),
   /** Recibos / relatórios HTML — impressão fiável (processo principal). */
   printHtml: (html) => ipcRenderer.invoke('desktop-print:html', html),
   /** PDF com fundos/cores alinhados à pré-visualização (sem depender do diálogo Imprimir). */
