@@ -11,6 +11,69 @@ export function quantidadeMaximaLinhaDocumento(linha: AtendimentoDocumentoLinha)
   return Math.max(0, Math.min(pendente, saldo));
 }
 
+export function obterQuantidadeLinhaSessao(
+  sessao: SessaoRetiradaLinha[],
+  documentoId: string,
+  documentoItemId: string,
+): number {
+  return sessao
+    .filter((l) => l.documentoId === documentoId && l.documentoItemId === documentoItemId)
+    .reduce((acc, l) => acc + (Number(l.quantidade) || 0), 0);
+}
+
+export function consumoCodigoMaterialNaSessao(sessao: SessaoRetiradaLinha[], codigoMaterial: string): number {
+  const codigo = codigoMaterial.trim().toLowerCase();
+  return sessao
+    .filter((l) => l.codigoMaterial.trim().toLowerCase() === codigo)
+    .reduce((acc, l) => acc + (Number(l.quantidade) || 0), 0);
+}
+
+/** Quantidade ainda permitida no leitor, descontando o que ja esta na sessao de retirada. */
+export function quantidadeMaximaRestanteLeitor(
+  linha: AtendimentoDocumentoLinha,
+  sessao: SessaoRetiradaLinha[],
+  documentoId: string,
+): number {
+  const qtdLinha = obterQuantidadeLinhaSessao(sessao, documentoId, linha.documentoItemId);
+  const tetoLinha = Math.max(0, quantidadeMaximaLinhaDocumento(linha) - qtdLinha);
+  const consumoCodigo = consumoCodigoMaterialNaSessao(sessao, linha.codigoMaterial);
+  const saldoRestante = Math.max(0, (Number(linha.saldoDisponivel) || 0) - consumoCodigo);
+  return Math.max(0, Math.min(tetoLinha, saldoRestante));
+}
+
+export type AnaliseQuantidadeAtendimento = {
+  valida: boolean;
+  quantidade: number;
+  mensagem: string | null;
+};
+
+/** Valida quantidade informada contra o teto (pendente ∩ saldo). */
+export function analisarQuantidadeAtendimentoLinha(
+  valorTexto: string,
+  maxQtd: number,
+  unidade: string,
+): AnaliseQuantidadeAtendimento {
+  const bruto = String(valorTexto ?? '').trim();
+  if (!bruto) {
+    return { valida: false, quantidade: 0, mensagem: 'Informe a quantidade nesta operacao.' };
+  }
+  const q = Number(bruto.replace(',', '.'));
+  if (!Number.isFinite(q)) {
+    return { valida: false, quantidade: 0, mensagem: 'Informe um numero valido.' };
+  }
+  if (q <= 0) {
+    return { valida: false, quantidade: q, mensagem: 'Informe quantidade maior que zero.' };
+  }
+  if (q > maxQtd) {
+    return {
+      valida: false,
+      quantidade: q,
+      mensagem: `Quantidade excede o maximo permitido (${maxQtd} ${unidade} — limite do pendente e saldo).`,
+    };
+  }
+  return { valida: true, quantidade: q, mensagem: null };
+}
+
 export function adicionarOuAtualizarLinhaSessao(
   linhas: SessaoRetiradaLinha[],
   nova: SessaoRetiradaLinha,

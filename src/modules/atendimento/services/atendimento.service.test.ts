@@ -5,6 +5,7 @@ import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   estornarAtendimento,
   listarHistoricoAtendimentos,
+  mergeAtendimentoHistoricoPreservingLegacy,
   montarExportacaoAtendimentosCsvItens,
   registrarAtendimento,
   registrarAtendimentosSessao,
@@ -278,6 +279,121 @@ function snapshotDocumentoSemSaldoPendente() {
   };
 }
 
+describe('atendimento.service / mergeAtendimentoHistoricoPreservingLegacy', () => {
+  it('preserva linhas legado cujo lote nao esta em atendimentos', () => {
+    const legacy = [
+      {
+        id: 1,
+        loteNumero: 'ATD-20260413-00012',
+        data: '2026-04-13T10:00:00.000Z',
+        documentoId: 'd1',
+        documento: 'Doc A',
+        atendente: 'Admin',
+        recebedor: 'Joao',
+        codigo: 'X',
+        descricao: 'Item',
+        unidade: 'UN',
+        quantidade: 5,
+        origem: 'mobile' as const,
+      },
+    ];
+    const atendimentos = [
+      {
+        id: 'a1',
+        numero: 'ATD-20260529-0003',
+        documentoId: 'd2',
+        documentoNumero: 'Doc B',
+        atendente: 'Igor',
+        recebedorTipo: 'interno' as const,
+        recebedorColaboradorId: null,
+        recebedor: 'Gabriel',
+        recebedorEmpresa: '',
+        recebedorDocumento: '',
+        recebedorTelefone: '',
+        autorizadorInterno: '',
+        motivoRetirada: '',
+        origem: 'windows' as const,
+        status: 'concluido' as const,
+        dataAtendimento: '2026-05-29T22:44:05.000Z',
+        itens: [
+          {
+            id: 'i1',
+            documentoItemId: 'x',
+            materialId: null,
+            codigoMaterial: 'Y',
+            descricaoMaterial: 'Novo',
+            unidade: 'UN',
+            quantidadeAtendida: 10,
+          },
+        ],
+      },
+    ];
+
+    const merged = mergeAtendimentoHistoricoPreservingLegacy(legacy, atendimentos);
+    const lotes = new Set(merged.map((h) => h.loteNumero));
+
+    expect(lotes.has('ATD-20260413-00012')).toBe(true);
+    expect(lotes.has('ATD-20260529-0003')).toBe(true);
+    expect(merged.length).toBe(2);
+  });
+
+  it('substitui historico derivado quando o lote ja existe em atendimentos', () => {
+    const legacy = [
+      {
+        id: 1,
+        loteNumero: 'ATD-20260529-0003',
+        data: '2026-05-29T20:00:00.000Z',
+        documentoId: 'd1',
+        documento: 'Antigo',
+        atendente: 'Admin',
+        recebedor: 'Joao',
+        codigo: 'OLD',
+        descricao: 'Velho',
+        unidade: 'UN',
+        quantidade: 1,
+        origem: 'mobile' as const,
+      },
+    ];
+    const atendimentos = [
+      {
+        id: 'a1',
+        numero: 'ATD-20260529-0003',
+        documentoId: 'd2',
+        documentoNumero: 'Doc B',
+        atendente: 'Igor',
+        recebedorTipo: 'interno' as const,
+        recebedorColaboradorId: null,
+        recebedor: 'Gabriel',
+        recebedorEmpresa: '',
+        recebedorDocumento: '',
+        recebedorTelefone: '',
+        autorizadorInterno: '',
+        motivoRetirada: '',
+        origem: 'windows' as const,
+        status: 'concluido' as const,
+        dataAtendimento: '2026-05-29T22:44:05.000Z',
+        itens: [
+          {
+            id: 'i1',
+            documentoItemId: 'x',
+            materialId: null,
+            codigoMaterial: 'NEW',
+            descricaoMaterial: 'Atualizado',
+            unidade: 'UN',
+            quantidadeAtendida: 10,
+          },
+        ],
+      },
+    ];
+
+    const merged = mergeAtendimentoHistoricoPreservingLegacy(legacy, atendimentos);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.codigo).toBe('NEW');
+    expect(merged[0]?.descricao).toBe('Atualizado');
+  });
+});
+
 describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -324,7 +440,7 @@ describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', (
           descricao: 'Tubo',
           unidade: 'M',
           quantidade: 70,
-          origem: 'mobile',
+          origem: 'mobile' as const,
         },
       ],
     });
@@ -358,7 +474,7 @@ describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', (
           descricao: 'Y',
           unidade: 'UN',
           quantidade: 1,
-          origem: 'mobile',
+          origem: 'mobile' as const,
         },
       ],
     });

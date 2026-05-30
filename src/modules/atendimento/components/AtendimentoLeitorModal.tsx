@@ -3,15 +3,18 @@ import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import type { Colaborador } from '../../colaboradores/types/colaborador.types';
-import type { AtendimentoRecebedorTipo } from '../types/atendimento.types';
+import type { AtendimentoRecebedorTipo, SessaoRetiradaLinha } from '../types/atendimento.types';
+import type { AtendimentoLeitorPainelState } from '../hooks/useAtendimento';
 import {
-  quantidadeMaximaAtendimentoLinha,
-  type AtendimentoLeitorPainelState,
-} from '../hooks/useAtendimento';
+  analisarQuantidadeAtendimentoLinha,
+  obterQuantidadeLinhaSessao,
+  quantidadeMaximaRestanteLeitor,
+} from '../utils/sessaoRetirada.utils';
 
 type Props = {
   open: boolean;
   painel: AtendimentoLeitorPainelState | null;
+  sessaoRetirada: SessaoRetiradaLinha[];
   atendente: string;
   recebedorTipo: AtendimentoRecebedorTipo;
   recebedorColaboradorId: string;
@@ -39,6 +42,7 @@ function rotuloRetirante(
 export function AtendimentoLeitorModal({
   open,
   painel,
+  sessaoRetirada,
   atendente,
   recebedorTipo,
   recebedorColaboradorId,
@@ -67,42 +71,77 @@ export function AtendimentoLeitorModal({
     [painel, documentoId],
   );
 
-  const maxQtd = candidato ? quantidadeMaximaAtendimentoLinha(candidato.linha) : 0;
+  const qtdNaSessao = candidato
+    ? obterQuantidadeLinhaSessao(sessaoRetirada, candidato.documento.id, candidato.linha.documentoItemId)
+    : 0;
+
+  const maxQtd = candidato ? quantidadeMaximaRestanteLeitor(candidato.linha, sessaoRetirada, candidato.documento.id) : 0;
   const concluido = painel?.passo === 'concluido';
+  const todosCandidatosEsgotados = useMemo(() => {
+    if (!painel?.candidatos.length) return false;
+    return painel.candidatos.every(
+      (c) => quantidadeMaximaRestanteLeitor(c.linha, sessaoRetirada, c.documento.id) <= 0,
+    );
+  }, [painel, sessaoRetirada]);
+
+  const analiseQuantidade = useMemo(() => {
+    if (!candidato) {
+      return { valida: false, quantidade: 0, mensagem: null as string | null };
+    }
+    if (maxQtd <= 0) {
+      return {
+        valida: false,
+        quantidade: 0,
+        mensagem:
+          qtdNaSessao > 0
+            ? `Este material ja consta na sessao com ${qtdNaSessao} ${candidato.linha.unidade} neste documento (quantidade maxima atingida).`
+            : 'Nao ha quantidade pendente ou saldo disponivel para este documento.',
+      };
+    }
+    return analisarQuantidadeAtendimentoLinha(quantidade, maxQtd, candidato.linha.unidade);
+  }, [candidato, maxQtd, qtdNaSessao, quantidade]);
+
+  const podeIncluir = Boolean(candidato && maxQtd > 0 && analiseQuantidade.valida);
 
   const confirmarInclusao = useCallback(() => {
-    if (!documentoId || !candidato || maxQtd <= 0) return;
-    const q = Number(quantidade.replace(',', '.'));
-    onConfirmar(documentoId, q);
-  }, [candidato, documentoId, maxQtd, onConfirmar, quantidade]);
+    if (!documentoId || !candidato || !podeIncluir) return;
+    onConfirmar(documentoId, analiseQuantidade.quantidade);
+  }, [analiseQuantidade.quantidade, candidato, documentoId, onConfirmar, podeIncluir]);
 
   useEffect(() => {
     if (!painel || !open) return;
-    const primeiro = painel.candidatos[0];
+    const comRestante = painel.candidatos.filter(
+      (c) => quantidadeMaximaRestanteLeitor(c.linha, sessaoRetirada, c.documento.id) > 0,
+    );
+    const preferido = comRestante[0] ?? painel.candidatos[0];
     const idInicial =
-      painel.documentoSelecionadoId ?? (painel.candidatos.length === 1 ? primeiro?.documento.id : '') ?? '';
+      painel.documentoSelecionadoId ??
+      (painel.candidatos.length === 1 ? preferido?.documento.id : preferido?.documento.id) ??
+      '';
     setDocumentoId(idInicial);
-    if (primeiro && idInicial === primeiro.documento.id) {
-      setQuantidade(String(quantidadeMaximaAtendimentoLinha(primeiro.linha)));
+    if (preferido && idInicial === preferido.documento.id) {
+      const restante = quantidadeMaximaRestanteLeitor(preferido.linha, sessaoRetirada, preferido.documento.id);
+      setQuantidade(restante > 0 ? String(restante) : '');
     } else {
       setQuantidade('');
     }
-  }, [painel?.scan, open, painel]);
+  }, [painel?.scan, open, painel, sessaoRetirada]);
 
   useEffect(() => {
     if (!candidato) return;
-    setQuantidade(String(quantidadeMaximaAtendimentoLinha(candidato.linha)));
-  }, [documentoId, candidato]);
+    const restante = quantidadeMaximaRestanteLeitor(candidato.linha, sessaoRetirada, candidato.documento.id);
+    setQuantidade(restante > 0 ? String(restante) : '');
+  }, [documentoId, candidato, sessaoRetirada]);
 
   useEffect(() => {
     if (!open || concluido) return;
-    if (candidato) {
+    if (candidato && maxQtd > 0) {
       window.setTimeout(() => {
         quantidadeRef.current?.focus();
         quantidadeRef.current?.select();
       }, 0);
     }
-  }, [open, concluido, candidato, painel?.scan]);
+  }, [open, concluido, candidato, maxQtd, painel?.scan]);
 
   useEffect(() => {
     if (!open || !concluido) return;
@@ -121,13 +160,13 @@ export function AtendimentoLeitorModal({
         onContinuarBipando();
         return;
       }
-      if (!painel || painel.candidatos.length === 0 || !candidato || maxQtd <= 0) return;
+      if (!painel || painel.candidatos.length === 0 || !podeIncluir) return;
       event.preventDefault();
       confirmarInclusao();
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, concluido, candidato, maxQtd, confirmarInclusao, onContinuarBipando, painel]);
+  }, [open, concluido, podeIncluir, confirmarInclusao, onContinuarBipando, painel]);
 
   if (!painel) return null;
 
@@ -182,10 +221,19 @@ export function AtendimentoLeitorModal({
           </>
         ) : (
           <>
+            {todosCandidatosEsgotados ? (
+              <OperationalNotice tone="warning">
+                Material <strong>{material.codigo}</strong> ja consta na sessao de retirada com a quantidade maxima
+                permitida neste(s) documento(s). Bipe outro material ou confirme a retirada na tabela abaixo.
+              </OperationalNotice>
+            ) : null}
+
             <p className="panel-kicker">Desenho / documento</p>
             <ul className="stack-grid" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
               {candidatos.map(({ documento, linha }) => {
                 const ativo = documentoId === documento.id;
+                const naSessao = obterQuantidadeLinhaSessao(sessaoRetirada, documento.id, linha.documentoItemId);
+                const restante = quantidadeMaximaRestanteLeitor(linha, sessaoRetirada, documento.id);
                 return (
                   <li key={documento.id}>
                     <button
@@ -200,6 +248,12 @@ export function AtendimentoLeitorModal({
                       <br />
                       <span className="panel-copy">
                         Pendente {linha.quantidadePendente} {linha.unidade} · Saldo {linha.saldoDisponivel}
+                        {naSessao > 0 ? (
+                          <>
+                            <br />
+                            Na sessao: {naSessao} {linha.unidade} · Restante: {restante} {linha.unidade}
+                          </>
+                        ) : null}
                       </span>
                     </button>
                   </li>
@@ -208,32 +262,43 @@ export function AtendimentoLeitorModal({
             </ul>
 
             {candidato ? (
-              <label className="field">
-                <span>
-                  Quantidade nesta operacao (max. {maxQtd} {candidato.linha.unidade}) — Enter confirma
-                </span>
-                <input
-                  className="input-control"
-                  inputMode="decimal"
-                  min={0}
-                  max={maxQtd}
-                  onChange={(e) => setQuantidade(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return;
-                    e.preventDefault();
-                    confirmarInclusao();
-                  }}
-                  ref={quantidadeRef}
-                  type="number"
-                  value={quantidade}
-                />
-              </label>
+              maxQtd > 0 ? (
+                <>
+                  <label className="field">
+                    <span>
+                      Quantidade nesta operacao (max. {maxQtd} {candidato.linha.unidade}
+                      {qtdNaSessao > 0 ? ` — ja ha ${qtdNaSessao} na sessao` : ''}) — Enter confirma
+                    </span>
+                    <input
+                      aria-invalid={Boolean(analiseQuantidade.mensagem)}
+                      className="input-control"
+                      inputMode="decimal"
+                      min={0}
+                      max={maxQtd}
+                      onChange={(e) => setQuantidade(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        confirmarInclusao();
+                      }}
+                      ref={quantidadeRef}
+                      type="number"
+                      value={quantidade}
+                    />
+                  </label>
+                  {analiseQuantidade.mensagem ? (
+                    <OperationalNotice tone="warning">{analiseQuantidade.mensagem}</OperationalNotice>
+                  ) : null}
+                </>
+              ) : analiseQuantidade.mensagem ? (
+                <OperationalNotice tone="warning">{analiseQuantidade.mensagem}</OperationalNotice>
+              ) : null
             ) : (
               <OperationalNotice>Selecione um documento acima.</OperationalNotice>
             )}
 
             <div className="form-actions">
-              <Button disabled={!candidato || maxQtd <= 0} onClick={confirmarInclusao} type="button">
+              <Button disabled={!podeIncluir} onClick={confirmarInclusao} type="button">
                 Incluir no atendimento
               </Button>
               <Button onClick={onCancelar} type="button" variant="ghost">

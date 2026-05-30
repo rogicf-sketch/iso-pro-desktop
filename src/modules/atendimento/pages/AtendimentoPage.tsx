@@ -797,6 +797,7 @@ export function AtendimentoPage() {
         recebedor={recebedor}
         recebedorColaboradorId={recebedorColaboradorId}
         recebedorTipo={recebedorTipo}
+        sessaoRetirada={sessaoRetirada}
       />
     </div>
   );

@@ -1,18 +1,25 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { LocalStorageCorruptoBanner } from '@/components/LocalStorageCorruptoBanner';
 import { GlobalConsultaRapida } from '@/components/GlobalConsultaRapida';
+import { AtendimentoOperacaoGuardProvider } from '../modules/atendimento/context/AtendimentoOperacaoGuard';
+import { useAtendimentoOperacaoGuard } from '../modules/atendimento/context/atendimentoOperacaoGuard.hooks';
 import { getTitularSistemaLinhaResumo } from '../lib/titularSistemaCodigo';
 import { useAuth } from '../modules/auth/hooks/useAuth';
 import { getModuleTitleForPath, moduleNavigation } from '../routes/navigation';
 
-export function MainLayout() {
+function MainLayoutInner() {
   const { user, logout, canAccessModule } = useAuth();
+  const operacaoGuard = useAtendimentoOperacaoGuard();
   const location = useLocation();
   const moduleTitle = getModuleTitleForPath(location.pathname);
   const visibleMenuItems = moduleNavigation.filter(
     (item) => canAccessModule(item.modulo) && !('hideInSidebar' in item && item.hideInSidebar),
   );
   const titularLinha = getTitularSistemaLinhaResumo();
+
+  function handleLogout() {
+    operacaoGuard?.requestLeaveConfirm(logout);
+  }
 
   return (
     <div className="app-shell">
@@ -64,7 +71,7 @@ export function MainLayout() {
               <strong>{user?.nome ?? 'Utilizador'}</strong>
               <p className="panel-copy">Perfil: {user?.perfil.nome ?? '—'}</p>
             </div>
-            <button className="ghost-button topbar-sair" onClick={logout} type="button">
+            <button className="ghost-button topbar-sair" onClick={handleLogout} type="button">
               Sair
             </button>
           </div>
@@ -77,5 +84,13 @@ export function MainLayout() {
         </section>
       </main>
     </div>
+  );
+}
+
+export function MainLayout() {
+  return (
+    <AtendimentoOperacaoGuardProvider>
+      <MainLayoutInner />
+    </AtendimentoOperacaoGuardProvider>
   );
 }

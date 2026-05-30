@@ -175,7 +175,7 @@ export function ConfiguracaoAlertaEstoqueEmailPanel({ form, canAdminister, onCha
       ) : canAdminister ? (
         <OperationalNotice tone="warning">
           <strong>Teste pelo PC (.exe) indisponivel nesta janela.</strong> {desktopMotivo} Use o teste pela nuvem abaixo (nao precisa
-          do instalador). Para activar os botoes desktop, abra pelo icone do Menu Iniciar (Setup 0.1.15+) — nao pelo navegador.
+          do instalador). Para activar os botoes desktop, abra pelo icone do Menu Iniciar (Setup 0.1.16+) — nao pelo navegador.
         </OperationalNotice>
       ) : null}
       {!nuvemOk ? (

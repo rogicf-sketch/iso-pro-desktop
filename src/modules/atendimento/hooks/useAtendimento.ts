@@ -33,10 +33,14 @@ import { imprimirReciboAtendimento, imprimirReciboSessaoConsolidada } from '../u
 import { imprimirReciboEstorno } from '../utils/imprimirReciboEstorno';
 import { montarDadosReciboEstorno } from '../utils/montarDadosReciboEstorno';
 import { montarDadosReciboSessaoConsolidada } from '../utils/montarDadosReciboSessaoConsolidada';
+import { useRegistrarAtendimentoOperacaoGuard } from '../context/atendimentoOperacaoGuard.hooks';
 import {
   adicionarOuAtualizarLinhaSessao,
   montarPayloadDocumentosSessao,
   obterErroRegistroSessaoRetirada,
+  obterQuantidadeLinhaSessao,
+  quantidadeMaximaLinhaDocumento,
+  quantidadeMaximaRestanteLeitor,
   removerLinhaSessao,
   totalUnidadesSessao,
 } from '../utils/sessaoRetirada.utils';
@@ -567,11 +571,22 @@ export function useAtendimento() {
       const cand = leitorPainel.candidatos.find((c) => c.documento.id === documentoId);
       if (!cand) return;
       const { documento, linha } = cand;
-      const max = quantidadeMaximaAtendimentoLinha(linha);
-      const q = Math.min(Math.max(0, quantidadeInformada), max);
-      if (q <= 0) {
+      const maxLinha = quantidadeMaximaLinhaDocumento(linha);
+      const max = quantidadeMaximaRestanteLeitor(linha, sessaoRetirada, documentoId);
+      const q = Number(quantidadeInformada);
+      if (!Number.isFinite(q) || q <= 0) {
         tocarFeedbackLeitor('erro');
         setError('Informe quantidade maior que zero (respeitando pendente e saldo).');
+        return;
+      }
+      if (q > max) {
+        tocarFeedbackLeitor('erro');
+        const naSessao = obterQuantidadeLinhaSessao(sessaoRetirada, documentoId, linha.documentoItemId);
+        setError(
+          naSessao > 0
+            ? `Quantidade excede o restante permitido (${max} ${linha.unidade} — ja ha ${naSessao} na sessao).`
+            : `Quantidade excede o maximo permitido (${max} ${linha.unidade} — limite do pendente e saldo).`,
+        );
         return;
       }
       setError('');
@@ -592,7 +607,7 @@ export function useAtendimento() {
             unidade: linha.unidade,
             quantidade: q,
           },
-          max,
+          maxLinha,
         ),
       );
 
@@ -611,7 +626,7 @@ export function useAtendimento() {
       );
       tocarFeedbackLeitor('confirmado');
     },
-    [leitorPainel],
+    [leitorPainel, sessaoRetirada],
   );
 
   const removerLinhaSessaoRetirada = useCallback((documentoId: string, documentoItemId: string) => {
@@ -881,6 +896,10 @@ export function useAtendimento() {
         return linha ? [{ documento: d, linha }] : [];
       });
 
+      const candidatosComRestante = candidatos.filter(
+        (c) => quantidadeMaximaRestanteLeitor(c.linha, sessaoRetirada, c.documento.id) > 0,
+      );
+
       setLeitorPainel({ scan, material, candidatos, passo: 'escolher' });
 
       if (candidatos.length === 0) {
@@ -888,16 +907,51 @@ export function useAtendimento() {
         setError(
           'Nenhum documento pendente inclui este material. E necessario cadastro, recebimento (saldo) e linha no documento.',
         );
+      } else if (candidatosComRestante.length === 0) {
+        tocarFeedbackLeitor('erro');
+        const ref = candidatos[0];
+        const qtd =
+          ref != null
+            ? obterQuantidadeLinhaSessao(sessaoRetirada, ref.documento.id, ref.linha.documentoItemId)
+            : 0;
+        setError(
+          qtd > 0
+            ? `Material ${material.codigo} ja consta na sessao (${qtd} ${ref?.linha.unidade ?? 'UN'}). Bipe outro codigo ou confirme a retirada.`
+            : `Material ${material.codigo} sem quantidade restante nestes documentos (pendente/saldo esgotado).`,
+        );
       } else {
         tocarFeedbackLeitor('sucesso');
       }
     },
-    [documentos, canAccessAction],
+    [documentos, sessaoRetirada, canAccessAction],
   );
 
   const fecharLeitorPainel = useCallback(() => {
     setLeitorPainel(null);
   }, []);
+
+  const sessaoDocumentoCount = useMemo(
+    () => new Set(sessaoRetirada.map((l) => l.documentoId)).size,
+    [sessaoRetirada],
+  );
+
+  useRegistrarAtendimentoOperacaoGuard({
+    ativa: sessaoRetirada.length > 0,
+    itemCount: sessaoRetirada.length,
+    documentoCount: sessaoDocumentoCount,
+    totalUnidades: totalUnidadesSessao(sessaoRetirada),
+    onDescartar: () => {
+      limparSessaoRetirada();
+      setLeitorPainel(null);
+      setConfirmacaoSessaoRetirada(null);
+      setError('');
+      setSuccess('');
+    },
+    onConfirmarRetirada: () => {
+      setLeitorPainel(null);
+      pedirConfirmacaoSessaoRetirada();
+    },
+  });
 
   const marcarTodosItens = useCallback(
     (marcado: boolean) => {

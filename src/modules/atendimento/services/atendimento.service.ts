@@ -304,6 +304,19 @@ function buildAtendimentoHistoricoFromAtendimentos(atendimentos: Atendimento[]):
   );
 }
 
+/** Preserva linhas legado/mobile em `atendimentoHistorico` cujo lote ainda nao existe em `atendimentos`. */
+export function mergeAtendimentoHistoricoPreservingLegacy(
+  existingHistorico: SnapshotHistoricoRecord[],
+  atendimentosMerged: Atendimento[],
+): SnapshotHistoricoRecord[] {
+  const numerosAtendimentos = new Set(atendimentosMerged.map((a) => a.numero));
+  const legacyHistorico = existingHistorico.filter((h) => {
+    const lote = String(h.loteNumero ?? '').trim();
+    return lote && !numerosAtendimentos.has(lote);
+  });
+  return [...legacyHistorico, ...buildAtendimentoHistoricoFromAtendimentos(atendimentosMerged)];
+}
+
 /** Grava documento(s) e atendimento(s) com merge por `id` sobre o snapshot fresco (concorrência). */
 async function writeSnapshotAtendimentoPatch(patch: {
   documentos?: DocumentoStored[];
@@ -326,7 +339,8 @@ async function writeSnapshotAtendimentoPatch(patch: {
       ...currentPayload,
       atendimentos: atendimentosSnapshot,
     });
-    const atendimentoHistorico = buildAtendimentoHistoricoFromAtendimentos(atendimentosMerged);
+    const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
+    const atendimentoHistorico = mergeAtendimentoHistoricoPreservingLegacy(existingHistorico, atendimentosMerged);
 
     return {
       baselineUpdatedAt,

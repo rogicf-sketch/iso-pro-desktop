@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { AtendimentoDocumento } from '../types/atendimento.types';
 import {
   adicionarOuAtualizarLinhaSessao,
+  analisarQuantidadeAtendimentoLinha,
   montarPayloadDocumentosSessao,
   obterErroRegistroSessaoRetirada,
+  quantidadeMaximaRestanteLeitor,
 } from './sessaoRetirada.utils';
 
 function docBase(): AtendimentoDocumento {
@@ -80,6 +82,36 @@ describe('sessaoRetirada.utils', () => {
     ]);
     expect(payload).toHaveLength(2);
     expect(payload.find((p) => p.documentoId === 'doc-a')?.itens[0].quantidade).toBe(2);
+  });
+
+  it('rejeita quantidade acima do maximo permitido', () => {
+    const acima = analisarQuantidadeAtendimentoLinha('200', 129, 'PC');
+    expect(acima.valida).toBe(false);
+    expect(acima.mensagem).toMatch(/129/);
+
+    const ok = analisarQuantidadeAtendimentoLinha('129', 129, 'PC');
+    expect(ok.valida).toBe(true);
+    expect(ok.quantidade).toBe(129);
+  });
+
+  it('desconta quantidade ja incluida na sessao ao calcular restante do leitor', () => {
+    const linha = { ...docBase().linhas[0]!, quantidadePendente: 109, saldoDisponivel: 129 };
+    const sessao = [
+      {
+        documentoId: 'doc-a',
+        documentoNumero: 'DES-A',
+        documentoRevisao: 'A',
+        documentoDescricao: 'Desc',
+        documentoResponsavel: 'R',
+        documentoItemId: 'item-a1',
+        codigoMaterial: 'M1',
+        descricaoMaterial: 'Mat 1',
+        unidade: 'UN',
+        quantidade: 109,
+      },
+    ];
+    expect(quantidadeMaximaRestanteLeitor(linha, sessao, 'doc-a')).toBe(0);
+    expect(quantidadeMaximaRestanteLeitor(linha, [], 'doc-a')).toBe(109);
   });
 
   it('valida sessao com atendente e retirante', () => {

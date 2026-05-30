@@ -29,7 +29,7 @@ export function motivoDesktopMailIndisponivel(): string {
     return `Plataforma "${String(api.platform)}" — use o aplicativo instalado no PC.`;
   }
   if (!api.sendMail) {
-    return `Instalacao desktop (v${api.version ?? '?'}) sem modulo de e-mail — reinstale o Setup 0.1.15 ou superior.`;
+    return `Instalacao desktop (v${api.version ?? '?'}) sem modulo de e-mail — reinstale o Setup 0.1.16 ou superior.`;
   }
   return '';
 }
