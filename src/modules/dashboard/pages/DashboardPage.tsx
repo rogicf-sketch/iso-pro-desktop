@@ -8,6 +8,7 @@ import { DashboardNuvemStatus } from '../components/DashboardNuvemStatus';
 import { DashboardSistemaAmbiente } from '../components/DashboardSistemaAmbiente';
 import { getDashboardAlerts, getDashboardCloudPanel, getDashboardIndicators } from '../services/dashboard.service';
 import { processarAlertaEstoqueEmailAutomatico } from '../../materiais/services/alertaEstoqueEmail.service';
+import { processarAlertaOperacionalEmailAutomatico } from '../services/alertaOperacionalEmail.service';
 import type { DashboardAlert, DashboardCloudPanel, DashboardIndicator } from '../types/dashboard.types';
 
 const AUTO_REFRESH_MS = 60_000;
@@ -45,6 +46,7 @@ export function DashboardPage() {
       setCloudPanel(getDashboardCloudPanel());
       setLastRefresh(new Date());
       void processarAlertaEstoqueEmailAutomatico();
+      void processarAlertaOperacionalEmailAutomatico();
     } finally {
       setRefreshing(false);
       setSistemaLoading(false);

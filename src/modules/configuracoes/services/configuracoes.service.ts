@@ -90,6 +90,17 @@ const defaultConfig: ConfiguracaoSistema = {
   relatorioFinalIaBaseUrl: 'https://api.openai.com/v1',
   alertaEstoqueEmailHabilitado: false,
   alertaEstoqueEmailDestinatarios: '',
+  alertaOperacionalEmailHabilitado: false,
+  alertaOperacionalEmailDestinatarios: '',
+  alertaOperacionalConferenciaHabilitado: true,
+  alertaOperacionalConferenciaPrazoDias: 2,
+  alertaOperacionalRirHabilitado: true,
+  alertaOperacionalRirPrazoDias: 5,
+  alertaOperacionalRncHabilitado: true,
+  alertaOperacionalRncPrazoDias: 7,
+  alertaOperacionalInventarioHabilitado: false,
+  alertaOperacionalInventarioPrazoDias: 7,
+  alertaOperacionalIntervaloMinimoHoras: 24,
   smtpHost: '',
   smtpPort: 587,
   smtpSecure: false,
@@ -186,6 +197,32 @@ export function readConfiguracoes(): ConfiguracaoSistema {
       relatorioFinalIaBaseUrl: normalizeRelatorioFinalIaBaseUrl(parsedConfig.relatorioFinalIaBaseUrl),
       alertaEstoqueEmailHabilitado: parsedConfig.alertaEstoqueEmailHabilitado === true,
       alertaEstoqueEmailDestinatarios: String(parsedConfig.alertaEstoqueEmailDestinatarios ?? '').trim(),
+      alertaOperacionalEmailHabilitado: parsedConfig.alertaOperacionalEmailHabilitado === true,
+      alertaOperacionalEmailDestinatarios: String(parsedConfig.alertaOperacionalEmailDestinatarios ?? '').trim(),
+      alertaOperacionalConferenciaHabilitado: parsedConfig.alertaOperacionalConferenciaHabilitado !== false,
+      alertaOperacionalConferenciaPrazoDias:
+        Number(parsedConfig.alertaOperacionalConferenciaPrazoDias) > 0
+          ? Number(parsedConfig.alertaOperacionalConferenciaPrazoDias)
+          : defaultConfig.alertaOperacionalConferenciaPrazoDias,
+      alertaOperacionalRirHabilitado: parsedConfig.alertaOperacionalRirHabilitado !== false,
+      alertaOperacionalRirPrazoDias:
+        Number(parsedConfig.alertaOperacionalRirPrazoDias) > 0
+          ? Number(parsedConfig.alertaOperacionalRirPrazoDias)
+          : defaultConfig.alertaOperacionalRirPrazoDias,
+      alertaOperacionalRncHabilitado: parsedConfig.alertaOperacionalRncHabilitado !== false,
+      alertaOperacionalRncPrazoDias:
+        Number(parsedConfig.alertaOperacionalRncPrazoDias) > 0
+          ? Number(parsedConfig.alertaOperacionalRncPrazoDias)
+          : defaultConfig.alertaOperacionalRncPrazoDias,
+      alertaOperacionalInventarioHabilitado: parsedConfig.alertaOperacionalInventarioHabilitado === true,
+      alertaOperacionalInventarioPrazoDias:
+        Number(parsedConfig.alertaOperacionalInventarioPrazoDias) > 0
+          ? Number(parsedConfig.alertaOperacionalInventarioPrazoDias)
+          : defaultConfig.alertaOperacionalInventarioPrazoDias,
+      alertaOperacionalIntervaloMinimoHoras:
+        Number(parsedConfig.alertaOperacionalIntervaloMinimoHoras) > 0
+          ? Number(parsedConfig.alertaOperacionalIntervaloMinimoHoras)
+          : defaultConfig.alertaOperacionalIntervaloMinimoHoras,
       smtpHost: String(parsedConfig.smtpHost ?? '').trim(),
       smtpPort: Number.isFinite(Number(parsedConfig.smtpPort)) && Number(parsedConfig.smtpPort) > 0
         ? Number(parsedConfig.smtpPort)
@@ -319,6 +356,28 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     relatorioFinalIaBaseUrl: normalizeRelatorioFinalIaBaseUrl(payload.relatorioFinalIaBaseUrl),
     alertaEstoqueEmailHabilitado: payload.alertaEstoqueEmailHabilitado === true,
     alertaEstoqueEmailDestinatarios: payload.alertaEstoqueEmailDestinatarios.trim(),
+    alertaOperacionalEmailHabilitado: payload.alertaOperacionalEmailHabilitado === true,
+    alertaOperacionalEmailDestinatarios: payload.alertaOperacionalEmailDestinatarios.trim(),
+    alertaOperacionalConferenciaHabilitado: payload.alertaOperacionalConferenciaHabilitado !== false,
+    alertaOperacionalConferenciaPrazoDias:
+      payload.alertaOperacionalConferenciaPrazoDias > 0
+        ? payload.alertaOperacionalConferenciaPrazoDias
+        : defaultConfig.alertaOperacionalConferenciaPrazoDias,
+    alertaOperacionalRirHabilitado: payload.alertaOperacionalRirHabilitado !== false,
+    alertaOperacionalRirPrazoDias:
+      payload.alertaOperacionalRirPrazoDias > 0 ? payload.alertaOperacionalRirPrazoDias : defaultConfig.alertaOperacionalRirPrazoDias,
+    alertaOperacionalRncHabilitado: payload.alertaOperacionalRncHabilitado !== false,
+    alertaOperacionalRncPrazoDias:
+      payload.alertaOperacionalRncPrazoDias > 0 ? payload.alertaOperacionalRncPrazoDias : defaultConfig.alertaOperacionalRncPrazoDias,
+    alertaOperacionalInventarioHabilitado: payload.alertaOperacionalInventarioHabilitado === true,
+    alertaOperacionalInventarioPrazoDias:
+      payload.alertaOperacionalInventarioPrazoDias > 0
+        ? payload.alertaOperacionalInventarioPrazoDias
+        : defaultConfig.alertaOperacionalInventarioPrazoDias,
+    alertaOperacionalIntervaloMinimoHoras:
+      payload.alertaOperacionalIntervaloMinimoHoras > 0
+        ? payload.alertaOperacionalIntervaloMinimoHoras
+        : defaultConfig.alertaOperacionalIntervaloMinimoHoras,
     smtpHost: payload.smtpHost.trim(),
     smtpPort: payload.smtpPort > 0 ? payload.smtpPort : defaultConfig.smtpPort,
     smtpSecure: payload.smtpSecure === true,

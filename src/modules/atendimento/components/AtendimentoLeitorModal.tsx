@@ -151,6 +151,11 @@ export function AtendimentoLeitorModal({
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancelar();
+        return;
+      }
       if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey) return;
       const alvo = event.target;
       if (alvo instanceof HTMLElement && alvo.tagName === 'BUTTON') return;
@@ -166,7 +171,7 @@ export function AtendimentoLeitorModal({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, concluido, podeIncluir, confirmarInclusao, onContinuarBipando, painel]);
+  }, [open, concluido, podeIncluir, confirmarInclusao, onContinuarBipando, onCancelar, painel]);
 
   if (!painel) return null;
 
@@ -209,7 +214,7 @@ export function AtendimentoLeitorModal({
                 ? ` no documento ${candidatoConcluido.documento.numero} Rev. ${candidatoConcluido.documento.revisao}.`
                 : '.'}
             </OperationalNotice>
-            <p className="panel-copy">Deseja bipar o proximo material? (Enter = sim)</p>
+            <p className="panel-copy">Deseja bipar o proximo material? (Enter = sim, Esc = fechar)</p>
             <div className="form-actions">
               <Button onClick={onContinuarBipando} ref={continuarRef} type="button">
                 Sim — continuar bipando

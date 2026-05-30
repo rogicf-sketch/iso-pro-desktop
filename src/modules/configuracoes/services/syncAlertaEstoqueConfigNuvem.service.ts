@@ -32,6 +32,10 @@ export async function sincronizarConfigAlertaEstoqueParaNuvem(
           lastNotifiedCriticalIds: [],
           lastSentAt: '',
         },
+        alertaOperacionalEmailState: atual.alertaOperacionalEmailState ?? {
+          lastNotifiedFingerprint: '',
+          lastSentAt: '',
+        },
       };
       return {
         baselineUpdatedAt,

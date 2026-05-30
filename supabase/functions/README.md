@@ -236,3 +236,41 @@ Corpo JSON (POST):
 
 - SMTP e destinatarios ficam no JSON do snapshot (mesmo nivel de sensibilidade que localStorage no PC). Restrinja RLS/`iso_pro_snapshot` a utilizadores autenticados.
 - Cron exige secret dedicado; nao coloque em cliente publico.
+
+---
+
+## `alerta_operacional`
+
+Envia e-mail SMTP quando conferencias, RIR, RNC ou inventarios ultrapassam o prazo configurado em **Configuracoes → Alertas → Pendencias operacionais**. Tambem inclui **RIR reprovado sem RNC** vinculada ao recebimento (lacuna de rastreio ISO).
+
+### Modos
+
+**Cron (recomendado):**
+
+```bash
+supabase secrets set ISO_PRO_ALERTA_OPERACIONAL_CRON_SECRET="valor-aleatorio-longo"
+supabase functions deploy alerta_operacional --no-verify-jwt
+```
+
+Agendar POST para `alerta_operacional` com body `{"modo":"cron"}` e header `x-iso-pro-cron-secret` igual ao secret (ex.: 1x/dia ou a cada 6 h).
+
+**Manual (desktop):** Configuracoes → Alertas → **Verificar pendencias na nuvem** (login+senha de administrador).
+
+Corpo JSON (POST):
+
+```json
+{
+  "tenantId": "00000000-0000-0000-0000-000000000001",
+  "login": "admin",
+  "senha": "********",
+  "forcar": false
+}
+```
+
+### Pre-requisitos
+
+1. SMTP preenchido na aba Alertas (secao estoque critico) e **Salvar configuracoes**.
+2. Alerta operacional activo, destinatarios e prazos definidos.
+3. Funcao publicada (comando acima).
+
+Pode usar o **mesmo schedule** do estoque critico apontando para esta funcao, ou combinar invocacoes separadas no cron externo.

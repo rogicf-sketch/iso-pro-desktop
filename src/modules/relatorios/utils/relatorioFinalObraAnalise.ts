@@ -62,6 +62,11 @@ function pushDestaque(
 
 export function analisarRelatorioFinalObra(dados: RelatorioFinalObraDados): AnaliseRelatorioFinalObra {
   const destaques: DestaqueRelatorioFinalObra[] = [];
+  const recebimentosComRnc = new Set(
+    dados.rnc
+      .filter((r) => r.status !== 'cancelado' && r.recebimentoId.trim())
+      .map((r) => r.recebimentoId.trim()),
+  );
 
   const totalRegistros =
     dados.documentos.length +
@@ -134,11 +139,17 @@ export function analisarRelatorioFinalObra(dados: RelatorioFinalObraDados): Anal
         severidade: 'critico',
       });
     } else if (r.laudo === 'reprovado') {
+      const semRnc =
+        r.status !== 'tratado' &&
+        Boolean(r.recebimentoId?.trim()) &&
+        !recebimentosComRnc.has(r.recebimentoId.trim());
       pushDestaque(destaques, {
         dataIso: r.dataRegistro,
         modulo: 'RIR',
         referencia: r.codigo,
-        motivo: 'Laudo reprovado na inspeção de recebimento',
+        motivo: semRnc
+          ? 'Laudo reprovado sem RNC vinculada ao recebimento'
+          : 'Laudo reprovado na inspeção de recebimento',
         severidade: 'critico',
       });
     } else if (r.laudo === 'observacoes' || r.status === 'aberto' || r.status === 'em_analise') {

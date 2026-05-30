@@ -5,11 +5,14 @@ import { AtendimentoOperacaoGuardProvider } from '../modules/atendimento/context
 import { useAtendimentoOperacaoGuard } from '../modules/atendimento/context/atendimentoOperacaoGuard.hooks';
 import { getTitularSistemaLinhaResumo } from '../lib/titularSistemaCodigo';
 import { useAuth } from '../modules/auth/hooks/useAuth';
+import { useMenuBadgeCounts } from '../modules/dashboard/hooks/useMenuBadgeCounts';
+import { MENU_BADGE_BY_ROUTE } from '../modules/dashboard/utils/pendenciasOperacionais.utils';
 import { getModuleTitleForPath, moduleNavigation } from '../routes/navigation';
 
 function MainLayoutInner() {
   const { user, logout, canAccessModule } = useAuth();
   const operacaoGuard = useAtendimentoOperacaoGuard();
+  const { counts: menuBadges } = useMenuBadgeCounts();
   const navigate = useNavigate();
   const location = useLocation();
   const moduleTitle = getModuleTitleForPath(location.pathname);
@@ -48,16 +51,25 @@ function MainLayoutInner() {
         </div>
 
         <nav className="sidebar-nav">
-          {visibleMenuItems.map((item) => (
+          {visibleMenuItems.map((item) => {
+            const badgeKey = MENU_BADGE_BY_ROUTE[item.to];
+            const badgeCount = badgeKey ? menuBadges[badgeKey] : 0;
+            return (
             <NavLink
               key={item.to}
               className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
               onClick={(event) => handleSidebarNav(event, item.to)}
               to={item.to}
             >
-              {item.label}
+              <span className="sidebar-link__label">{item.label}</span>
+              {badgeCount > 0 ? (
+                <span aria-label={`${badgeCount} pendencia(s)`} className="sidebar-link__badge" title={`${badgeCount} pendencia(s)`}>
+                  {badgeCount > 99 ? '99+' : badgeCount}
+                </span>
+              ) : null}
             </NavLink>
-          ))}
+            );
+          })}
         </nav>
 
         {titularLinha ? (

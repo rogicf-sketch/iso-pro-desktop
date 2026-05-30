@@ -138,6 +138,37 @@
   border-radius: 12px;
   color: var(--text-primary);
   padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-link__label {
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-link__badge {
+  flex-shrink: 0;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35rem;
+  text-align: center;
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fcd34d;
+}
+
+body.theme-escuro .sidebar-link__badge,
+body.theme-neon .sidebar-link__badge {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.35);
 }
 
 .sidebar-link.active,

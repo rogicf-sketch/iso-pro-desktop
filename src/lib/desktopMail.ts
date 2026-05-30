@@ -69,6 +69,29 @@ export function configEmailEstoquePronta(config: Pick<
   return true;
 }
 
+export function configEmailOperacionalPronta(config: Pick<
+  ConfiguracaoSistema,
+  | 'alertaOperacionalEmailHabilitado'
+  | 'alertaOperacionalEmailDestinatarios'
+  | 'alertaOperacionalConferenciaHabilitado'
+  | 'alertaOperacionalRirHabilitado'
+  | 'alertaOperacionalRncHabilitado'
+  | 'alertaOperacionalInventarioHabilitado'
+  | 'smtpHost'
+  | 'smtpPort'
+  | 'smtpRemetente'
+>): boolean {
+  if (!config.alertaOperacionalEmailHabilitado) return false;
+  if (!config.smtpHost.trim() || !config.smtpRemetente.trim()) return false;
+  if (parseDestinatariosEmail(config.alertaOperacionalEmailDestinatarios).length === 0) return false;
+  const algumTipo =
+    config.alertaOperacionalConferenciaHabilitado === true ||
+    config.alertaOperacionalRirHabilitado === true ||
+    config.alertaOperacionalRncHabilitado === true ||
+    config.alertaOperacionalInventarioHabilitado === true;
+  return algumTipo;
+}
+
 export async function enviarEmailDesktop(payload: DesktopMailPayload): Promise<{ ok: true } | { ok: false; error: string }> {
   const api = window.isoProDesktop?.sendMail;
   if (!api) {

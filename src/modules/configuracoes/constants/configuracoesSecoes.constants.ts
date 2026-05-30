@@ -33,8 +33,8 @@ export const CONFIGURACOES_SECOES: ConfiguracaoSecaoMeta[] = [
   {
     id: 'alertas',
     rotulo: 'Alertas',
-    resumo: 'E-mail de estoque crítico (desktop)',
-    intro: 'SMTP e destinatários para aviso automático quando materiais entram em estoque crítico. Disponível no aplicativo desktop.',
+    resumo: 'E-mail de estoque crítico e pendências operacionais',
+    intro: 'SMTP, destinatários e prazos para avisos automáticos de estoque crítico, conferência, RIR, RNC e inventário.',
     adminOnly: true,
   },
   {

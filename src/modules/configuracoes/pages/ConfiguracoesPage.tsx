@@ -12,6 +12,7 @@ import { logout as authLogout, verifyCurrentUserPassword } from '../../auth/serv
 import { RIR_NUMERACAO_LABELS, descricaoModoNumeracaoRir } from '../../qualidade/utils/rirNumeracaoCopy';
 import { ConfiguracaoRelatorioFinalIaPanel } from '../components/ConfiguracaoRelatorioFinalIaPanel';
 import { ConfiguracaoAlertaEstoqueEmailPanel } from '../components/ConfiguracaoAlertaEstoqueEmailPanel';
+import { ConfiguracaoAlertaOperacionalEmailPanel } from '../components/ConfiguracaoAlertaOperacionalEmailPanel';
 import { ConfiguracaoBackupOraclePanel } from '../components/ConfiguracaoBackupOraclePanel';
 import { ConfiguracoesSecaoIntro } from '../components/ConfiguracoesSecaoIntro';
 import { ConfiguracoesSecaoNav } from '../components/ConfiguracoesSecaoNav';
@@ -923,6 +924,11 @@ export function ConfiguracoesPage() {
           role="tabpanel"
         >
           <ConfiguracaoAlertaEstoqueEmailPanel
+            canAdminister={canAdminister}
+            form={form}
+            onChange={(next) => setForm(next)}
+          />
+          <ConfiguracaoAlertaOperacionalEmailPanel
             canAdminister={canAdminister}
             form={form}
             onChange={(next) => setForm(next)}

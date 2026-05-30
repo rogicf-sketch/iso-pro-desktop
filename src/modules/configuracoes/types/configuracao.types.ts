@@ -66,6 +66,20 @@ export type ConfiguracaoSistema = {
   alertaEstoqueEmailHabilitado: boolean;
   /** Destinatarios separados por virgula ou ponto-e-virgula. */
   alertaEstoqueEmailDestinatarios: string;
+  /** E-mail automatico para pendencias operacionais (conferencia, RIR, RNC, inventario). */
+  alertaOperacionalEmailHabilitado: boolean;
+  alertaOperacionalEmailDestinatarios: string;
+  alertaOperacionalConferenciaHabilitado: boolean;
+  /** Dias corridos desde a data do recebimento. */
+  alertaOperacionalConferenciaPrazoDias: number;
+  alertaOperacionalRirHabilitado: boolean;
+  alertaOperacionalRirPrazoDias: number;
+  alertaOperacionalRncHabilitado: boolean;
+  alertaOperacionalRncPrazoDias: number;
+  alertaOperacionalInventarioHabilitado: boolean;
+  alertaOperacionalInventarioPrazoDias: number;
+  /** Minimo entre reenvios quando a lista de pendencias nao muda (horas). */
+  alertaOperacionalIntervaloMinimoHoras: number;
   smtpHost: string;
   smtpPort: number;
   /** true = TLS directo (ex. porta 465); false = STARTTLS (ex. 587). */

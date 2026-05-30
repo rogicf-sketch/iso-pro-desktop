@@ -1,12 +1,17 @@
+import { collectAllPages } from '../../../lib/collectAllPages';
 import { getDesktopLicenseRegistrySummary } from '../../configuracoes/services/desktopLicenseRegistry.service';
 import { listarDocumentos } from '../../documentos/services/documentos.service';
 import { listarInventarios } from '../../inventario/services/inventario.service';
-import { collectAllPages } from '../../../lib/collectAllPages';
 import { getMobileDeviceIndicators } from '../../mobile/services/mobileDevices.service';
 import { listarRecebimentos } from '../../recebimentos/services/recebimentos.service';
 import { listarRir, listarRnc } from '../../qualidade/services/qualidade.service';
 import { getRuntimeSupabaseConfig, getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { listarMateriaisCriticosEstoque } from '../../materiais/services/materiaisEstoqueCritico.service';
+import {
+  contarRecebimentosDivergentes,
+  listarRirReprovadosSemRnc,
+} from '../utils/pendenciasOperacionais.utils';
+import { diasCorridosDesde } from '../utils/alertaOperacional.utils';
 import type {
   DashboardAlert,
   DashboardAlertSeverity,
@@ -75,7 +80,12 @@ export async function getDashboardIndicators(): Promise<DashboardIndicator[]> {
 
   const docsPendentes = documentos.filter((item) => item.status === 'pendente' || item.status === 'parcial').length;
   const recebimentosPendentes = recebimentos.filter((item) => item.status === 'aguardando_conferencia').length;
-  const inventariosAbertos = inventarios.filter((item) => item.status === 'aberto').length;
+  const inventariosAbertosLista = inventarios.filter((item) => item.status === 'aberto');
+  const inventariosAbertos = inventariosAbertosLista.length;
+  const diasInventarioMaisAntigo =
+    inventariosAbertosLista.length > 0
+      ? Math.max(...inventariosAbertosLista.map((item) => diasCorridosDesde(item.dataInventario)))
+      : 0;
   const licencasAtivas = desktopLicenses.data?.active ?? 0;
   const licencasExpiradas = desktopLicenses.data?.expired ?? 0;
   const licencasExpirando = desktopLicenses.data?.expiringSoon ?? 0;
@@ -105,7 +115,10 @@ export async function getDashboardIndicators(): Promise<DashboardIndicator[]> {
       label: 'Inventarios',
       value: String(inventariosAbertos),
       numericValue: inventariosAbertos,
-      helper: 'Inventarios ainda em aberto',
+      helper:
+        inventariosAbertos > 0 && diasInventarioMaisAntigo > 0
+          ? `Inventarios ainda em aberto (mais antigo: ${diasInventarioMaisAntigo} dia(s))`
+          : 'Inventarios ainda em aberto',
       route: '/inventario',
       tone: indicatorTone(inventariosAbertos),
     },
@@ -148,6 +161,8 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
   const inventariosComDivergencia = inventarios.filter((item) => item.divergencias > 0 && item.status !== 'cancelado').length;
   const rirAbertos = rir.filter((item) => item.status !== 'tratado' && item.status !== 'cancelado').length;
   const rncAbertas = rnc.filter((item) => item.status !== 'concluido' && item.status !== 'cancelado').length;
+  const rirReprovadosSemRnc = listarRirReprovadosSemRnc(rir, rnc);
+  const recebimentosDivergentes = contarRecebimentosDivergentes(recebimentos);
 
   const cloud = getDashboardCloudPanel();
   const alerts: DashboardAlert[] = [];
@@ -202,6 +217,24 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
       title: 'Recebimentos aguardando conferencia',
       detail: `${recebimentosPendentes} recebimento(s) no fluxo de conferencia.`,
       route: '/recebimentos',
+    });
+  }
+
+  if (recebimentosDivergentes > 0) {
+    alerts.push({
+      severity: 'critical',
+      title: 'Recebimentos com divergencia',
+      detail: `${recebimentosDivergentes} recebimento(s) com status divergente ou itens pendentes de regularizacao na conferencia.`,
+      route: '/conferencia',
+    });
+  }
+
+  if (rirReprovadosSemRnc.length > 0) {
+    alerts.push({
+      severity: 'critical',
+      title: 'RIR reprovado sem RNC',
+      detail: `${rirReprovadosSemRnc.length} RIR com laudo reprovado sem nao conformidade (RNC) vinculada ao recebimento.`,
+      route: '/rnc',
     });
   }
 
