@@ -43,5 +43,7 @@ BEGIN
   END LOOP;
 END $$;
 
+DROP INDEX IF EXISTS public.materiais_codigo_lower_idx;
+
 CREATE UNIQUE INDEX IF NOT EXISTS materiais_tenant_id_codigo_lower_uidx
   ON public.materiais (tenant_id, lower(trim(codigo)));

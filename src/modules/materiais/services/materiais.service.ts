@@ -287,6 +287,7 @@ async function getNextMaterialId() {
     throw new Error('Supabase nao configurado.');
   }
 
+  // Sequencia por tenant; PK na base e (tenant_id, id) — ver migracao 20260530220000.
   const { data, error } = await supabase
     .from('materiais')
     .select('id')
