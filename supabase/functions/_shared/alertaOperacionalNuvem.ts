@@ -168,12 +168,15 @@ export function montarRelatorioOperacionalNuvem(
       const prio = (m: string) => (m === 'plano_acao_vencido' ? 0 : 1);
       return prio(a.motivo) - prio(b.motivo) || b.dias - a.dias;
     });
-    const prazo = Math.max(1, cfg.alertaOperacionalInventarioPrazoDias ?? 7);
+  }
+
+  if (cfg.alertaOperacionalInventarioHabilitado === true) {
+    const prazoInv = Math.max(1, cfg.alertaOperacionalInventarioPrazoDias ?? 7);
     for (const raw of payload.inventarios ?? []) {
       const i = raw as Record<string, unknown>;
       if (str(i.status).toLowerCase() !== 'aberto') continue;
       const dias = diasCorridosDesde(str(i.dataInventario ?? i.data_inventario), ref);
-      if (dias < prazo) continue;
+      if (dias < prazoInv) continue;
       rel.inventarios.push({
         id: str(i.id),
         codigo: str(i.codigo),

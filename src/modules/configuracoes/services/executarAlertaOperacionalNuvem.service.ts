@@ -15,19 +15,30 @@ type AlertaOperacionalResponse = {
   pendencias?: number;
 };
 
-async function extrairMensagemErroFunctionsInvoke(error: unknown): Promise<string> {
+async function extrairMensagemErroFunctionsInvoke(error: unknown, nomeFuncao: string): Promise<string> {
   if (error && typeof error === 'object' && 'context' in error) {
     const ctx = (error as { context?: Response }).context;
     if (ctx instanceof Response) {
       try {
-        const body = (await ctx.json()) as { message?: string };
-        if (body.message) return body.message;
+        const body = (await ctx.json()) as { message?: string; error?: string };
+        const msg = body.message ?? body.error ?? '';
+        if (/not found|nao encontrad/i.test(msg)) {
+          return `Funcao "${nomeFuncao}" ainda nao publicada na nuvem. Peça ao administrador: npx supabase functions deploy ${nomeFuncao} --no-verify-jwt --project-ref SEU_REF`;
+        }
+        if (msg) return msg;
       } catch {
         /* ignore */
       }
+      if (ctx.status === 404) {
+        return `Funcao "${nomeFuncao}" nao encontrada na nuvem (404). Publique com: npx supabase functions deploy ${nomeFuncao} --no-verify-jwt`;
+      }
     }
   }
-  return error instanceof Error ? error.message : 'Falha ao invocar funcao na nuvem.';
+  const bruto = error instanceof Error ? error.message : 'Falha ao invocar funcao na nuvem.';
+  if (/requested function was not found/i.test(bruto)) {
+    return `Funcao "${nomeFuncao}" ainda nao publicada na nuvem. Publique com: npx supabase functions deploy ${nomeFuncao} --no-verify-jwt`;
+  }
+  return bruto;
 }
 
 export async function executarAlertaOperacionalNuvem(
@@ -51,7 +62,7 @@ export async function executarAlertaOperacionalNuvem(
   });
 
   if (error) {
-    return { success: false, error: await extrairMensagemErroFunctionsInvoke(error) };
+    return { success: false, error: await extrairMensagemErroFunctionsInvoke(error, 'alerta_operacional') };
   }
 
   if (!data?.ok) {
