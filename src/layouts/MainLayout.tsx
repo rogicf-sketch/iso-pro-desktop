@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LocalStorageCorruptoBanner } from '@/components/LocalStorageCorruptoBanner';
 import { GlobalConsultaRapida } from '@/components/GlobalConsultaRapida';
 import { AtendimentoOperacaoGuardProvider } from '../modules/atendimento/context/AtendimentoOperacaoGuard';
@@ -10,12 +10,21 @@ import { getModuleTitleForPath, moduleNavigation } from '../routes/navigation';
 function MainLayoutInner() {
   const { user, logout, canAccessModule } = useAuth();
   const operacaoGuard = useAtendimentoOperacaoGuard();
+  const navigate = useNavigate();
   const location = useLocation();
   const moduleTitle = getModuleTitleForPath(location.pathname);
   const visibleMenuItems = moduleNavigation.filter(
     (item) => canAccessModule(item.modulo) && !('hideInSidebar' in item && item.hideInSidebar),
   );
   const titularLinha = getTitularSistemaLinhaResumo();
+
+  function handleSidebarNav(event: React.MouseEvent, to: string) {
+    if (!operacaoGuard?.isActive) return;
+    const destino = to.split('?')[0] ?? to;
+    if (destino === location.pathname) return;
+    event.preventDefault();
+    operacaoGuard.requestLeaveConfirm(() => navigate(to));
+  }
 
   function handleLogout() {
     operacaoGuard?.requestLeaveConfirm(logout);
@@ -43,6 +52,7 @@ function MainLayoutInner() {
             <NavLink
               key={item.to}
               className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+              onClick={(event) => handleSidebarNav(event, item.to)}
               to={item.to}
             >
               {item.label}

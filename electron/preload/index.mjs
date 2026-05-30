@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('isoProDesktop', {
   platform: 'desktop',
-  version: '0.1.16',
+  version: '0.1.17',
   /** Grava cliente/projeto para o script `upload-backup-to-oci.ps1` ler (userData/oci-upload-context.json). */
   writeOciUploadContext: (payload) => ipcRenderer.invoke('desktop-backup:write-oci-context', payload),
   syncBackupOracleSettings: (payload) => ipcRenderer.invoke('desktop-backup-oracle:sync-settings', payload),

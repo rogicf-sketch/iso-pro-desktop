@@ -46,7 +46,7 @@ export function AtendimentoOperacaoGuardProvider({ children }: { children: React
     if (blocker.state === 'blocked') {
       openModal({ routerBlocked: true });
     }
-  }, [blocker.state, openModal]);
+  }, [blocker.state, blocker.location, openModal]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -102,16 +102,16 @@ export function AtendimentoOperacaoGuardProvider({ children }: { children: React
   return (
     <AtendimentoOperacaoGuardContext.Provider value={api}>
       {children}
-      <Modal onClose={continuarAtendimento} open={modalOpen} title="Retirada em andamento" wide>
+      <Modal onClose={continuarAtendimento} open={modalOpen} title="Retirada em andamento — confirmar saida" wide>
         {registration ? (
           <div className="editor-block stack-grid">
             <OperationalNotice tone="warning">
-              Ha uma sessao de retirada em andamento no modulo Atendimento (
+              Voce ainda tem uma <strong>sessao de retirada em andamento</strong> no modulo Atendimento (
               <strong>{registration.documentoCount}</strong> desenho(s), <strong>{registration.itemCount}</strong>{' '}
-              item(ns), <strong>{registration.totalUnidades}</strong> unidade(s)). Se sair agora sem confirmar, os
-              materiais bipados serao perdidos.
+              item(ns), <strong>{registration.totalUnidades}</strong> unidade(s)). Nao e possivel mudar de modulo sem
+              escolher uma opcao abaixo — os materiais bipados ainda nao foram confirmados no sistema.
             </OperationalNotice>
-            <p className="panel-copy">O que deseja fazer?</p>
+            <p className="panel-copy">Deseja continuar o atendimento, confirmar a retirada ou descartar e sair?</p>
             <div className="form-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
               <Button onClick={continuarAtendimento} type="button">
                 Continuar atendimento
