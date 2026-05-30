@@ -4,7 +4,9 @@ import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStorage
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
+import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { findMaterialComCodigoDuplicado } from '../utils/materiaisCodigoDuplicado';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import {
   IMPORT_COOPERATIVE_MIN_CSV_ROWS,
@@ -216,17 +218,23 @@ async function listRemoteMaterials(): Promise<Material[]> {
     throw new Error('Supabase nao configurado.');
   }
 
-  const { data, error } = await supabase
-    .from('materiais')
-    .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
-    .eq('tenant_id', getActiveTenantId())
-    .order('codigo', { ascending: true });
+  const tenantId = getActiveTenantId();
+  const selectCols = 'id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo';
 
-  if (error) {
-    throw new Error(error.message);
-  }
+  const items = await fetchAllPagesFromSupabase(async (offset, pageSize) => {
+    const { data, error } = await supabase
+      .from('materiais')
+      .select(selectCols)
+      .eq('tenant_id', tenantId)
+      .order('codigo', { ascending: true })
+      .range(offset, offset + pageSize - 1);
 
-  const items = (data ?? []).map((row) => mapRemoteMaterial(row as RemoteMaterialRow));
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return (data ?? []).map((row) => mapRemoteMaterial(row as RemoteMaterialRow));
+  }, SUPABASE_FETCH_PAGE_SIZE);
   let next = items;
   let alterou = false;
 
@@ -563,6 +571,11 @@ export async function salvarMaterial(
   }
   const codigoBarras = codigoBarrasResolvido.codigoBarras;
 
+  const duplicated = findMaterialComCodigoDuplicado(base, payload.codigo, currentId);
+  if (duplicated) {
+    return { success: false, error: 'Ja existe um material com esse codigo.' };
+  }
+
   if (shouldUseCloudMaterials()) {
     try {
       const supabase = getSupabase();
@@ -608,14 +621,6 @@ export async function salvarMaterial(
   }
 
   const items = readAll();
-  const duplicated = items.find(
-    (item) => item.codigo.toLowerCase() === payload.codigo.trim().toLowerCase() && item.id !== currentId,
-  );
-
-  if (duplicated) {
-    return { success: false, error: 'Ja existe um material com esse codigo.' };
-  }
-
   const blockedMat = whenBusinessWriteBlockedResult<Material>();
   if (blockedMat) return blockedMat;
 

@@ -20,14 +20,20 @@ const supabaseMock = vi.hoisted(() => {
       ativo: true,
     },
   ];
-  const order = vi.fn().mockResolvedValue({ data: remoteRows, error: null });
+  const range = vi.fn((from: number, to: number) =>
+    Promise.resolve({
+      data: remoteRows.slice(from, to + 1),
+      error: null,
+    }),
+  );
+  const order = vi.fn().mockReturnValue({ range });
   const eqTenantUpdate = vi.fn().mockResolvedValue({ error: null });
   const eqIdUpdate = vi.fn().mockReturnValue({ eq: eqTenantUpdate });
   const update = vi.fn().mockReturnValue({ eq: eqIdUpdate });
   const eqTenant = vi.fn().mockReturnValue({ order });
   const select = vi.fn().mockReturnValue({ eq: eqTenant });
   const from = vi.fn().mockReturnValue({ select, update });
-  return { from, select, eqTenant, order, update };
+  return { from, select, eqTenant, order, range, update, remoteRows };
 });
 
 vi.mock('../../../lib/supabase', () => ({

@@ -48,8 +48,8 @@ Devem coincidir com `src/modules/configuracoes/constants/purgeCloud.constants.ts
 ## `purge_cloud_cadastros`
 
 Limpa **apenas cadastros** na nuvem **para o `tenantId` indicado**: apaga linhas em `materiais` e `dispositivos_mobile` desse tenant, zera no JSON `iso_pro_snapshot` (linha `id='default'` e esse `tenant_id`) as listas
-`materiais`, `fornecedores`, `colaboradores`, `recebimentos`, `documentos` (planejamento), `atendimentoHistorico`, `atendimentoLotes`,
-`rirRegistros`, `rncRegistros`, `inventarios`, `equipamentos`, `estoqueAjustes`, `disciplinas`, `unidades`, e mantem `configuracoesSistema`.
+`materiais`, `fornecedores`, `colaboradores`, `recebimentos`, `documentos` (planejamento), `atendimentos`, `atendimentoHistorico`, `atendimentoLotes`,
+`rirRegistros`, `rncRegistros`, `inventarios`, `equipamentos`, `etiquetas`, `estoqueAjustes`, `disciplinas`, `unidades`, e mantem `configuracoesSistema`.
 Repoe `iso_pro_relatorio_snapshot` vazio para o mesmo tenant. **Nao** remove `usuarios_sistema`, perfis, permissoes nem `desktop_licencas`.
 
 ### Corpo JSON (POST)

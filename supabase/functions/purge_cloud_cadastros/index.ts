@@ -2,7 +2,8 @@
  * Remove apenas cadastros operacionais na nuvem para **um tenant** (`tenantId`),
  * mantendo `configuracoesSistema` no snapshot, contas (`usuarios_sistema` / perfis) e `desktop_licencas`.
  *
- * Frase: manter em sync com `src/modules/configuracoes/constants/limparCadastros.constants.ts`.
+ * Frase: manter em sync com `src/modules/configuracoes/constants/limparCadastros.constants.ts`
+ * e `src/lib/montarPayloadCadastrosLimpos.ts` (`SNAPSHOT_CHAVES_LIMPAR_CADASTROS`).
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 import { verifyPassword } from '../_shared/passwordHash.ts';
@@ -48,10 +49,12 @@ const CHAVES_LISTAS_CADASTRO = [
   'rirRegistros',
   'rncRegistros',
   'documentos',
+  'atendimentos',
   'atendimentoHistorico',
   'atendimentoLotes',
   'inventarios',
   'equipamentos',
+  'etiquetas',
   'estoqueAjustes',
   'disciplinas',
   'unidades',

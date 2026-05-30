@@ -5,6 +5,8 @@
 -- Pre-requisito: migracao multi-tenant ja aplicada (cole_uma_vez ou 20260205120000).
 -- Erro perfis_acesso_codigo_key / codigo=(admin): executar primeiro
 --   snippets/fix_perfis_acesso_codigo_por_tenant.sql
+-- Erro materiais_codigo_key ao cadastrar material na nova empresa: executar
+--   snippets/fix_materiais_codigo_por_tenant.sql
 -- Pre-requisito: perfil codigo=admin no tenant default (00000000-0000-0000-0000-000000000001).
 --
 -- Ajuste: v_slug, v_nome_empresa, v_login, v_nome_user, v_senha.
