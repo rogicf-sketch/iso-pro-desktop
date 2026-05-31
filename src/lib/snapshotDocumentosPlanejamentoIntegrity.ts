@@ -90,5 +90,47 @@ export function mensagemSePlanejamentoIncompativelComRefsAtendimento(
     return `Gravacao bloqueada: existem ${keys.size} referencia(s) distintas a documentos no historico de atendimento, mas o planejamento a gravar tem apenas ${nextDocs.length} desenho(s). Carregue a lista completa ou corrija o snapshot antes de gravar.`;
   }
 
-  return `Gravacao bloqueada: referencias de atendimento na nuvem nao batem com o planejamento a gravar (amostra: ${amostra}). Corrija o snapshot, restaure backup, ou alinhe o planejamento completo antes de gravar.`;
+  return `Gravacao bloqueada: referencias de atendimento na nuvem nao batem com o planejamento a gravar (amostra: ${amostra}). Corrija o snapshot, restaure backup, alinhe o planejamento completo, ou use a opcao de substituir e limpar historico incompatible na importacao.`;
+}
+
+export type LimpezaHistoricoPlanejamentoResultado = {
+  atendimentoHistorico: Record<string, unknown>[];
+  atendimentos: Record<string, unknown>[];
+  removidosHistorico: number;
+  removidosAtendimentos: number;
+};
+
+/** Remove linhas de atendimento cujo documento nao consta no planejamento a gravar. */
+export function limparRefsAtendimentoIncompativeisComPlanejamento(
+  payload: PayloadComRefsAtendimento,
+  nextDocs: DocumentoPlanejamentoMinimo[],
+): LimpezaHistoricoPlanejamentoResultado {
+  const hist = asObjArray(payload.atendimentoHistorico);
+  const atds = asObjArray(payload.atendimentos);
+
+  const histFiltrado = hist.filter((row) => {
+    const id = row.documentoId != null ? String(row.documentoId).trim() : '';
+    const num = row.documento != null ? String(row.documento).trim().toLowerCase() : '';
+    if (!id && !num) return true;
+    return refCobertaPorDocumentos({ id, num }, nextDocs);
+  });
+
+  const atdsFiltrado = atds.filter((row) => {
+    const id = row.documentoId != null ? String(row.documentoId).trim() : '';
+    const num = row.documentoNumero != null ? String(row.documentoNumero).trim().toLowerCase() : '';
+    if (!id && !num) return true;
+    return refCobertaPorDocumentos({ id, num }, nextDocs);
+  });
+
+  return {
+    atendimentoHistorico: histFiltrado,
+    atendimentos: atdsFiltrado,
+    removidosHistorico: hist.length - histFiltrado.length,
+    removidosAtendimentos: atds.length - atdsFiltrado.length,
+  };
+}
+
+/** Indica bloqueio de gravacao por integridade entre planejamento e historico de atendimento. */
+export function isErroIntegridadePlanejamentoRefsAtendimento(message: string): boolean {
+  return message.includes('Gravacao bloqueada');
 }

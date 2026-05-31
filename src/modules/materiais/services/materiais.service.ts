@@ -6,6 +6,8 @@ import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { getErrorMessage } from '../../../lib/service-result';
+import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { findMaterialComCodigoDuplicado } from '../utils/materiaisCodigoDuplicado';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import {
@@ -347,7 +349,12 @@ function formParaPayloadNuvem(form: MaterialFormData, codigoBarras: string) {
 }
 
 async function loadMateriaisBase(): Promise<Material[]> {
-  return shouldUseCloudMaterials() ? await listRemoteMaterials().catch(() => readAll()) : readAll();
+  if (!shouldUseCloudMaterials()) return readAll();
+  try {
+    return await listRemoteMaterials();
+  } catch (error) {
+    throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
+  }
 }
 
 /**
@@ -810,11 +817,7 @@ export async function obterMapeamentoCodigoPorIdMaterial(ids: string[]): Promise
 }
 
 function mensagemErroExclusaoMateriais(message: string): string {
-  const m = message.toLowerCase();
-  if (m.includes('23503') || m.includes('foreign key') || m.includes('violates foreign key')) {
-    return 'Nao foi possivel excluir: um ou mais materiais estao referenciados em outros registros.';
-  }
-  return message;
+  return traduzirErroOperacionalIsoPro(message);
 }
 
 /** Remove linhas do cadastro (Supabase ou local). Requer confirmacao de senha na UI; apenas perfil com permissao administrar. */
@@ -911,7 +914,7 @@ function mergeDominiosComValoresEmUso(dominio: string[], emUso: string[]): strin
 
 /** Disciplinas: lista configurada + valores ja usados em materiais (filtros e formulario). */
 export async function listarDisciplinas(): Promise<string[]> {
-  const items = shouldUseCloudMaterials() ? await listRemoteMaterials().catch(() => readAll()) : readAll();
+  const items = await loadMateriaisBase();
   const emUso = items.map((item) => item.disciplina);
   const dom = readMateriaisDominiosListas();
   return mergeDominiosComValoresEmUso(dom.disciplinas, emUso);
@@ -919,7 +922,7 @@ export async function listarDisciplinas(): Promise<string[]> {
 
 /** Unidades: lista configurada + valores ja usados em materiais. */
 export async function listarUnidadesCadastro(): Promise<string[]> {
-  const items = shouldUseCloudMaterials() ? await listRemoteMaterials().catch(() => readAll()) : readAll();
+  const items = await loadMateriaisBase();
   const emUso = items.map((m) => m.unidade);
   const dom = readMateriaisDominiosListas();
   return mergeDominiosComValoresEmUso(dom.unidades, emUso);
@@ -1235,7 +1238,7 @@ async function importarMateriaisCsvNuvemEmLotes(
   let atualizados = 0;
   let ignorados = 0;
 
-  const base = await listRemoteMaterials().catch(() => readAll());
+  const base = await loadMateriaisBase();
   const working = base.map((m) => ({ ...m }));
   const byCodigo = new Map(working.map((m) => [m.codigo.toLowerCase(), m]));
   let nextId = (await fetchMaxMaterialIdRemote()) + 1;

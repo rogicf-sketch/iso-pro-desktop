@@ -83,6 +83,15 @@ export function DocumentosPage() {
     confirmImportDocumentosStaging,
     closeImportDocumentosResultado,
     reloadAfterImportSnapshotConflict,
+    importHistoricoBloqueio,
+    importSubstituirPasso,
+    importSubstituirSenha,
+    setImportSubstituirSenha,
+    importSubstituirBusy,
+    fecharImportHistoricoBloqueio,
+    avancarImportSubstituirComLimpeza,
+    voltarImportSubstituirComLimpeza,
+    confirmarImportSubstituirComLimpezaHistorico,
     viewDocument,
     closeViewDocument,
     openViewDocumento,
@@ -547,6 +556,100 @@ export function DocumentosPage() {
                 OK
               </Button>
             </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        onClose={fecharImportHistoricoBloqueio}
+        open={Boolean(importHistoricoBloqueio) && canAdminister}
+        title="Importacao bloqueada — historico incompatible"
+        wide
+      >
+        {importHistoricoBloqueio ? (
+          <div className="editor-block">
+            {importSubstituirPasso === 1 ? (
+              <>
+                <OperationalNotice tone="critical">
+                  A nuvem tem registos de atendimento ligados a desenhos que nao constam no ficheiro importado. Por
+                  seguranca, a gravacao foi bloqueada para evitar historico orfao.
+                </OperationalNotice>
+                <p className="panel-copy" style={{ marginTop: 12 }}>
+                  {importHistoricoBloqueio.error}
+                </p>
+                <p className="panel-copy" style={{ marginTop: 12 }}>
+                  Opcoes: (1) importar a lista completa de desenhos; (2) usar{' '}
+                  <strong>Limpar cadastros local + nuvem</strong> em Configuracoes se for recomeco total; (3){' '}
+                  <strong>substituir planejamento e limpar historico incompatible</strong> — remove da nuvem apenas
+                  atendimentos/historico que referenciam desenhos fora do ficheiro importado.
+                </p>
+                {importHistoricoBloqueio.resumo ? (
+                  <p className="panel-copy" style={{ marginTop: 8 }}>
+                    Pre-visualizacao do ficheiro: {importHistoricoBloqueio.resumo.criados} novo(s),{' '}
+                    {importHistoricoBloqueio.resumo.atualizados} atualizado(s),{' '}
+                    {importHistoricoBloqueio.resumo.ignorados} ignorado(s).
+                  </p>
+                ) : null}
+                <div className="form-actions" style={{ marginTop: 16 }}>
+                  <Button disabled={importSubstituirBusy} onClick={fecharImportHistoricoBloqueio} type="button" variant="ghost">
+                    Cancelar
+                  </Button>
+                  <Button disabled={importSubstituirBusy} onClick={avancarImportSubstituirComLimpeza} type="button" variant="danger">
+                    Substituir e limpar historico incompatible
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <OperationalNotice tone="critical">
+                  Confirmacao final: o planejamento na nuvem sera substituido pelo ficheiro{' '}
+                  <strong>{importHistoricoBloqueio.staging.fileName}</strong> e linhas de atendimento/historico que
+                  referenciam desenhos fora deste planejamento serao removidas. Esta accao e irreversivel.
+                </OperationalNotice>
+                <div style={{ marginTop: 12 }}>
+                  <label className="form-label" htmlFor="documento-import-substituir-senha">
+                    Senha do administrador
+                  </label>
+                  <input
+                    autoComplete="current-password"
+                    className="form-input"
+                    id="documento-import-substituir-senha"
+                    onChange={(e) => setImportSubstituirSenha(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter') return;
+                      e.preventDefault();
+                      if (importSubstituirBusy || !importSubstituirSenha.trim()) return;
+                      void confirmarImportSubstituirComLimpezaHistorico();
+                    }}
+                    type="password"
+                    value={importSubstituirSenha}
+                  />
+                </div>
+                {importSubstituirBusy ? (
+                  <div style={{ marginTop: 12 }}>
+                    <OperationalNotice>A importar e limpar historico...</OperationalNotice>
+                  </div>
+                ) : null}
+                <div className="form-actions" style={{ marginTop: 16 }}>
+                  <Button
+                    disabled={importSubstituirBusy}
+                    onClick={voltarImportSubstituirComLimpeza}
+                    type="button"
+                    variant="ghost"
+                  >
+                    Voltar
+                  </Button>
+                  <Button
+                    disabled={importSubstituirBusy || !importSubstituirSenha.trim()}
+                    onClick={() => void confirmarImportSubstituirComLimpezaHistorico()}
+                    type="button"
+                    variant="danger"
+                  >
+                    Confirmar substituicao
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         ) : null}
       </Modal>

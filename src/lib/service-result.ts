@@ -1,7 +1,7 @@
 import type { ServiceResult } from '../types/common.types';
 import { isIsoProSnapshotConflictError } from './isoProSnapshot';
 import { businessWriteBlockedFailure, isBusinessLocalWriteBlocked } from './writePolicy';
-
+import { traduzirErroOperacionalIsoPro } from './traduzirErroOperacionalIsoPro';
 export function getErrorMessage(error: unknown, fallbackMessage: string) {
   return error instanceof Error ? error.message : fallbackMessage;
 }
@@ -68,7 +68,7 @@ export async function executeWrite<T>(options: {
         },
       };
     } catch (error) {
-      const message = getErrorMessage(error, options.fallbackMessage);
+      const message = traduzirErroOperacionalIsoPro(getErrorMessage(error, options.fallbackMessage));
       return {
         success: false,
         error: message,

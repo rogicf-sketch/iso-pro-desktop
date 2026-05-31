@@ -18,7 +18,8 @@ import {
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
 import { roundPesoKg } from '../../../lib/parseDecimal';
-import { executeWrite, withLocalFallback } from '../../../lib/service-result';
+import { executeWrite, getErrorMessage } from '../../../lib/service-result';
+import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { validateDocumento } from '../schemas/documento.schema';
@@ -47,6 +48,7 @@ import {
   type PayloadPlanejamentoReconcile,
 } from '../../../lib/snapshotDocumentosReconciliacao';
 import {
+  limparRefsAtendimentoIncompativeisComPlanejamento,
   mensagemSePlanejamentoIncompativelComRefsAtendimento,
   type PayloadComRefsAtendimento,
 } from '../../../lib/snapshotDocumentosPlanejamentoIntegrity';
@@ -255,8 +257,28 @@ function writeAll(items: Documento[]) {
 }
 
 async function loadDocumentos(): Promise<Documento[]> {
-  const base = hasSupabaseConfig() ? await readSnapshotDocumentos().catch(() => readAll()) : readAll();
+  let base: Documento[];
+  if (hasSupabaseConfig()) {
+    try {
+      base = await readSnapshotDocumentos();
+    } catch (error) {
+      throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
+    }
+  } else {
+    base = readAll();
+  }
   return persistirLimpezaItensSemCadastroMaterial(base);
+}
+
+async function carregarDocumentosBase(): Promise<{
+  data: Documento[];
+  meta: NonNullable<ServiceResult<Documento[]>['meta']>;
+}> {
+  const data = await loadDocumentos();
+  return {
+    data,
+    meta: { source: hasSupabaseConfig() ? 'supabase' : 'local' },
+  };
 }
 
 type SnapshotPayload = PayloadPlanejamentoReconcile & {
@@ -381,22 +403,50 @@ export async function sincronizarPlanejamentoLocalComNuvem(): Promise<ServiceRes
 
 async function writeSnapshotDocumentos(
   items: Documento[],
-  opcoes?: { dispensarValidacaoRefsAtendimento?: boolean },
+  opcoes?: {
+    dispensarValidacaoRefsAtendimento?: boolean;
+    limparHistoricoIncompativel?: boolean;
+    actorLogin?: string;
+  },
 ): Promise<void> {
   await commitIsoProSnapshotWrite(async () => {
     const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
-    const integridade = mensagemSePlanejamentoIncompativelComRefsAtendimento(
-      currentPayload as PayloadComRefsAtendimento,
-      items.map((d) => ({ id: d.id, numero: d.numero })),
-      { dispensarValidacao: opcoes?.dispensarValidacaoRefsAtendimento === true },
-    );
+    let payloadTrabalho = currentPayload as PayloadComRefsAtendimento;
+    let removidosHistorico = 0;
+    let removidosAtendimentos = 0;
+
+    const nextDocsMin = items.map((d) => ({ id: d.id, numero: d.numero }));
+
+    if (opcoes?.limparHistoricoIncompativel) {
+      const limpo = limparRefsAtendimentoIncompativeisComPlanejamento(payloadTrabalho, nextDocsMin);
+      payloadTrabalho = {
+        ...payloadTrabalho,
+        atendimentoHistorico: limpo.atendimentoHistorico,
+        atendimentos: limpo.atendimentos,
+      };
+      removidosHistorico = limpo.removidosHistorico;
+      removidosAtendimentos = limpo.removidosAtendimentos;
+    }
+
+    const integridade = mensagemSePlanejamentoIncompativelComRefsAtendimento(payloadTrabalho, nextDocsMin, {
+      dispensarValidacao: opcoes?.dispensarValidacaoRefsAtendimento === true,
+    });
     if (integridade) {
       throw new Error(integridade);
     }
+
+    if (opcoes?.limparHistoricoIncompativel && (removidosHistorico > 0 || removidosAtendimentos > 0)) {
+      appendAuthAuditEvent({
+        type: 'planejamento_substituicao_limpou_historico',
+        actorLogin: opcoes.actorLogin?.trim() || 'desconhecido',
+        detail: `Substituicao de planejamento removeu ${removidosHistorico} linha(s) de atendimentoHistorico e ${removidosAtendimentos} atendimento(s) incompativeis com o novo planejamento.`,
+      });
+    }
+
     return {
       baselineUpdatedAt,
       nextPayload: {
-        ...currentPayload,
+        ...payloadTrabalho,
         documentos: items.map((item) => ({
           id: item.id,
           numero: item.numero,
@@ -462,47 +512,46 @@ function toListItem(item: Documento): DocumentoListItem {
 export async function listarDocumentos(
   filtro: DocumentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<DocumentoListItem>>> {
-  const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
-    loadRemote: async () => persistirLimpezaItensSemCadastroMaterial(await readSnapshotDocumentos()),
-    loadLocal: async () => persistirLimpezaItensSemCadastroMaterial(readAll()),
-    fallbackMessage: 'Falha ao consultar documentos no Supabase.',
-  });
-  const recebimentos = await carregarRecebimentosCompletos();
-  const comStatusPlanejamento = aplicarStatusPlanejamentoEmDocumentos(fallbackResult.data, recebimentos);
-  const items = aplicarFiltrosListaDocumentos(comStatusPlanejamento, filtro);
-  const { meta } = fallbackResult;
+  try {
+    const { data: rawItems, meta } = await carregarDocumentosBase();
+    const recebimentos = await carregarRecebimentosCompletos();
+    const comStatusPlanejamento = aplicarStatusPlanejamentoEmDocumentos(rawItems, recebimentos);
+    const items = aplicarFiltrosListaDocumentos(comStatusPlanejamento, filtro);
 
-  const start = (filtro.page - 1) * filtro.pageSize;
-  const end = start + filtro.pageSize;
+    const start = (filtro.page - 1) * filtro.pageSize;
+    const end = start + filtro.pageSize;
 
-  return {
-    success: true,
-    data: {
-      items: items.slice(start, end).map(toListItem),
-      total: items.length,
-      page: filtro.page,
-      pageSize: filtro.pageSize,
-    },
-    meta,
-  };
+    return {
+      success: true,
+      data: {
+        items: items.slice(start, end).map(toListItem),
+        total: items.length,
+        page: filtro.page,
+        pageSize: filtro.pageSize,
+      },
+      meta,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+    };
+  }
 }
 
 /** IDs de todos os documentos que correspondem ao filtro (ignora paginacao). */
 export async function obterIdsDocumentosFiltrados(filtro: DocumentoFiltro): Promise<ServiceResult<string[]>> {
   try {
-    const fallbackResult = await withLocalFallback({
-      shouldTryRemote: hasSupabaseConfig(),
-      loadRemote: async () => persistirLimpezaItensSemCadastroMaterial(await readSnapshotDocumentos()),
-      loadLocal: async () => persistirLimpezaItensSemCadastroMaterial(readAll()),
-      fallbackMessage: 'Falha ao consultar documentos no Supabase.',
-    });
+    const { data: rawItems } = await carregarDocumentosBase();
     const recebimentos = await carregarRecebimentosCompletos();
-    const comStatus = aplicarStatusPlanejamentoEmDocumentos(fallbackResult.data, recebimentos);
+    const comStatus = aplicarStatusPlanejamentoEmDocumentos(rawItems, recebimentos);
     const filtered = aplicarFiltrosListaDocumentos(comStatus, filtro);
     return { success: true, data: filtered.map((d) => d.id) };
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : 'Falha ao listar documentos.' };
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+    };
   }
 }
 
@@ -513,14 +562,9 @@ export async function obterResumosDocumentosParaExclusao(
   const unique = [...new Set(ids)].filter(Boolean);
   if (!unique.length) return { success: true, data: [] };
   try {
-    const fallbackResult = await withLocalFallback({
-      shouldTryRemote: hasSupabaseConfig(),
-      loadRemote: async () => persistirLimpezaItensSemCadastroMaterial(await readSnapshotDocumentos()),
-      loadLocal: async () => persistirLimpezaItensSemCadastroMaterial(readAll()),
-      fallbackMessage: 'Falha ao consultar documentos no Supabase.',
-    });
+    const { data: rawItems } = await carregarDocumentosBase();
     const recebimentos = await carregarRecebimentosCompletos();
-    const enriched = aplicarStatusPlanejamentoEmDocumentos(fallbackResult.data, recebimentos);
+    const enriched = aplicarStatusPlanejamentoEmDocumentos(rawItems, recebimentos);
     const idSet = new Set(unique);
     const res = enriched
       .filter((d) => idSet.has(d.id))
@@ -528,7 +572,10 @@ export async function obterResumosDocumentosParaExclusao(
       .sort((a, b) => a.numero.localeCompare(b.numero) || a.revisao.localeCompare(b.revisao));
     return { success: true, data: res };
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : 'Falha ao carregar resumo dos documentos.' };
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+    };
   }
 }
 
@@ -808,14 +855,9 @@ export async function excluirDocumentoDefinitivamente(
 }
 
 async function obterDocumentosEnriquecidosParaLookup(): Promise<Documento[]> {
-  const fallback = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
-    loadRemote: async () => persistirLimpezaItensSemCadastroMaterial(await readSnapshotDocumentos()),
-    loadLocal: async () => persistirLimpezaItensSemCadastroMaterial(readAll()),
-    fallbackMessage: 'Falha ao consultar documentos no Supabase.',
-  });
+  const { data } = await carregarDocumentosBase();
   const recebimentos = await carregarRecebimentosCompletos();
-  return aplicarStatusPlanejamentoEmDocumentos(fallback.data, recebimentos);
+  return aplicarStatusPlanejamentoEmDocumentos(data, recebimentos);
 }
 
 function normalizarNumeroDocumentoBusca(numero: string): string {
@@ -881,32 +923,29 @@ export async function buscarDocumentoPorId(id: string): Promise<ServiceResult<Do
 }
 
 export async function carregarTodosDocumentosOrdenados(): Promise<ServiceResult<Documento[]>> {
-  const fallback = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
-    loadRemote: async () => persistirLimpezaItensSemCadastroMaterial(await readSnapshotDocumentos()),
-    loadLocal: async () => persistirLimpezaItensSemCadastroMaterial(readAll()),
-    fallbackMessage: 'Falha ao consultar documentos no Supabase.',
-  });
-  const recebimentos = await carregarRecebimentosCompletos();
-  const enriched = aplicarStatusPlanejamentoEmDocumentos(fallback.data, recebimentos);
-  const items = [...enriched].sort(
-    (a, b) => b.dataDocumento.localeCompare(a.dataDocumento) || a.numero.localeCompare(b.numero),
-  );
-  return { success: true, data: items, meta: fallback.meta };
+  try {
+    const { data, meta } = await carregarDocumentosBase();
+    const recebimentos = await carregarRecebimentosCompletos();
+    const enriched = aplicarStatusPlanejamentoEmDocumentos(data, recebimentos);
+    const items = [...enriched].sort(
+      (a, b) => b.dataDocumento.localeCompare(a.dataDocumento) || a.numero.localeCompare(b.numero),
+    );
+    return { success: true, data: items, meta };
+  } catch (error) {
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+    };
+  }
 }
 
 async function carregarDocumentosERecebimentosBasePlanejamento(): Promise<{
   documentos: Documento[];
   recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>>;
 }> {
-  const fallback = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
-    loadRemote: async () => persistirLimpezaItensSemCadastroMaterial(await readSnapshotDocumentos()),
-    loadLocal: async () => persistirLimpezaItensSemCadastroMaterial(readAll()),
-    fallbackMessage: 'Falha ao consultar documentos no Supabase.',
-  });
+  const { data } = await carregarDocumentosBase();
   const recebimentos = await carregarRecebimentosCompletos();
-  return { documentos: fallback.data, recebimentos };
+  return { documentos: data, recebimentos };
 }
 
 /** Metragens globais por codigo (documentos + recebimentos) para colunas de status no editor e na visualizacao. */
@@ -1237,8 +1276,15 @@ export async function montarExportacaoDocumentosCsvResumo(
   return { success: true, data: { csv, fileName }, meta: loaded.meta };
 }
 
+export type ImportarDocumentosOpcoes = {
+  /** Remove atendimentos/historico que referenciam desenhos fora do planejamento importado. */
+  substituirELimparHistoricoIncompativel?: boolean;
+  actorLogin?: string;
+};
+
 export async function importarDocumentosDoArquivoJson(
   text: string,
+  opcoes?: ImportarDocumentosOpcoes,
 ): Promise<ServiceResult<DocumentosImportacaoResumo>> {
   let parsed: unknown;
   try {
@@ -1392,7 +1438,11 @@ export async function importarDocumentosDoArquivoJson(
     }
     return executeWrite({
       shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotDocumentos(working),
+      writeRemote: () =>
+        writeSnapshotDocumentos(working, {
+          limparHistoricoIncompativel: opcoes?.substituirELimparHistoricoIncompativel === true,
+          actorLogin: opcoes?.actorLogin,
+        }),
       writeLocal: () => writeAll(working),
       successData: resumo,
       fallbackMessage: 'Falha ao importar documentos no Supabase.',
@@ -1478,10 +1528,11 @@ export function montarModeloCsvImportacaoDocumentos(): { csv: string; fileName: 
 /** Importacao a partir de planilha Excel (CSV): uma linha por item; converte para JSON e reutiliza a mesma regra do import JSON. */
 export async function importarDocumentosDoArquivoCsv(
   text: string,
+  opcoes?: ImportarDocumentosOpcoes,
 ): Promise<ServiceResult<DocumentosImportacaoResumo>> {
   const built = await construirJsonImportacaoDocumentosPlanoCsv(text);
   if (!built.ok) {
     return { success: false, error: built.error };
   }
-  return importarDocumentosDoArquivoJson(built.json);
+  return importarDocumentosDoArquivoJson(built.json, opcoes);
 }

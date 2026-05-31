@@ -114,4 +114,36 @@ describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', ()
     expect(String(result.error)).toMatch(/Gravacao bloqueada|nao batem com o planejamento/i);
     expect(mockCommitWrite).toHaveBeenCalled();
   });
+
+  it('importa na nuvem quando substituirELimparHistoricoIncompativel remove historico orfao', async () => {
+    const json = JSON.stringify({
+      documentos: [
+        {
+          numero: 'NOVO-001',
+          revisao: 'A',
+          descricao: 'Teste',
+          responsavel: 'R',
+          dataDocumento: '2026-05-01',
+          itens: [
+            {
+              codigoMaterial: 'MAT-1',
+              descricaoMaterial: 'M',
+              unidade: 'UN',
+              quantidadeProjeto: 1,
+              quantidadeAtendida: 0,
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await importarDocumentosDoArquivoJson(json, {
+      substituirELimparHistoricoIncompativel: true,
+      actorLogin: 'admin',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.criados).toBe(1);
+    expect(mockCommitWrite).toHaveBeenCalled();
+  });
 });

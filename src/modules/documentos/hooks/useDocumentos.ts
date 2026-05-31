@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
+import { isErroIntegridadePlanejamentoRefsAtendimento } from '../../../lib/snapshotDocumentosPlanejamentoIntegrity';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -71,6 +72,14 @@ export function useDocumentos() {
   } | null>(null);
   const [importingDocumentos, setImportingDocumentos] = useState(false);
   const [importResultado, setImportResultado] = useState<DocumentosImportacaoResumo | null>(null);
+  const [importHistoricoBloqueio, setImportHistoricoBloqueio] = useState<{
+    staging: { fileName: string; text: string; linhaCount: number };
+    resumo?: DocumentosImportacaoResumo;
+    error: string;
+  } | null>(null);
+  const [importSubstituirPasso, setImportSubstituirPasso] = useState<1 | 2>(1);
+  const [importSubstituirSenha, setImportSubstituirSenha] = useState('');
+  const [importSubstituirBusy, setImportSubstituirBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [cancelDocAlvo, setCancelDocAlvo] = useState<DocumentoListItem | null>(null);
   const [cancelMotivo, setCancelMotivo] = useState('');
@@ -533,7 +542,8 @@ export function useDocumentos() {
     setSuccess('');
     setImportSnapshotConflict(false);
     setImportingDocumentos(true);
-    const text = importStaging.text;
+    const stagingAtual = importStaging;
+    const text = stagingAtual.text;
 
     const result = await importarDocumentosDoArquivoCsv(text);
     setImportingDocumentos(false);
@@ -541,6 +551,22 @@ export function useDocumentos() {
 
     if (!result.success) {
       setImportSnapshotConflict(isSnapshotConflictResult(result));
+      if (isErroIntegridadePlanejamentoRefsAtendimento(result.error ?? '')) {
+        if (canAccessAction('documentos', 'administrar')) {
+          setImportHistoricoBloqueio({
+            staging: stagingAtual,
+            resumo: result.data,
+            error: result.error ?? 'Importacao bloqueada por historico de atendimento incompatible.',
+          });
+          setImportSubstituirPasso(1);
+          setImportSubstituirSenha('');
+        } else {
+          setError(
+            `${result.error ?? 'Importacao bloqueada.'} Contacte um administrador para substituir o planejamento ou limpar o historico.`,
+          );
+        }
+        return;
+      }
       if (result.data?.detalhes.length) {
         setError(`${result.error ?? 'Importacao nao concluida.'} Detalhes: ${result.data.detalhes.join(' | ')}`);
       } else {
@@ -556,6 +582,64 @@ export function useDocumentos() {
     }
     await invalidateDocumentosLista();
     setImportResultado(r);
+  }
+
+  function fecharImportHistoricoBloqueio() {
+    if (importSubstituirBusy) return;
+    setImportHistoricoBloqueio(null);
+    setImportSubstituirPasso(1);
+    setImportSubstituirSenha('');
+  }
+
+  function avancarImportSubstituirComLimpeza() {
+    setImportSubstituirPasso(2);
+    setImportSubstituirSenha('');
+  }
+
+  function voltarImportSubstituirComLimpeza() {
+    setImportSubstituirPasso(1);
+    setImportSubstituirSenha('');
+  }
+
+  async function confirmarImportSubstituirComLimpezaHistorico() {
+    if (!importHistoricoBloqueio) return;
+    if (!canAccessAction('documentos', 'administrar')) {
+      setError('Substituir planejamento e limpar historico exige perfil administrador.');
+      return;
+    }
+    const senhaOk = await verifyCurrentUserPassword(importSubstituirSenha);
+    if (!senhaOk.success) {
+      setError(senhaOk.error ?? 'Senha incorrecta.');
+      return;
+    }
+
+    setError('');
+    setSuccess('');
+    setImportSubstituirBusy(true);
+    const result = await importarDocumentosDoArquivoCsv(importHistoricoBloqueio.staging.text, {
+      substituirELimparHistoricoIncompativel: true,
+      actorLogin: user?.login,
+    });
+    setImportSubstituirBusy(false);
+
+    if (!result.success) {
+      setImportSnapshotConflict(isSnapshotConflictResult(result));
+      setError(result.error ?? 'Importacao nao concluida apos limpeza de historico.');
+      return;
+    }
+
+    const r = result.data;
+    if (!r) {
+      setError('Resumo da importacao indisponivel.');
+      return;
+    }
+
+    setImportHistoricoBloqueio(null);
+    setImportSubstituirPasso(1);
+    setImportSubstituirSenha('');
+    await invalidateDocumentosLista();
+    setImportResultado(r);
+    setSuccess('Planejamento importado. Historico de atendimento incompatible foi removido da nuvem.');
   }
 
   async function reloadAfterImportSnapshotConflict() {
@@ -642,6 +726,15 @@ export function useDocumentos() {
     confirmImportDocumentosStaging,
     closeImportDocumentosResultado,
     reloadAfterImportSnapshotConflict,
+    importHistoricoBloqueio,
+    importSubstituirPasso,
+    importSubstituirSenha,
+    setImportSubstituirSenha,
+    importSubstituirBusy,
+    fecharImportHistoricoBloqueio,
+    avancarImportSubstituirComLimpeza,
+    voltarImportSubstituirComLimpeza,
+    confirmarImportSubstituirComLimpezaHistorico,
     cancelDocAlvo,
     cancelMotivo,
     setCancelMotivo,

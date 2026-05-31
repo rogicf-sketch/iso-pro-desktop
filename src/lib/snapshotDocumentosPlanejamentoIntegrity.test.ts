@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { mensagemSePlanejamentoIncompativelComRefsAtendimento } from './snapshotDocumentosPlanejamentoIntegrity';
+import {
+  limparRefsAtendimentoIncompativeisComPlanejamento,
+  mensagemSePlanejamentoIncompativelComRefsAtendimento,
+} from './snapshotDocumentosPlanejamentoIntegrity';
 
 describe('mensagemSePlanejamentoIncompativelComRefsAtendimento', () => {
   it('permite quando nao ha referencias de atendimento', () => {
@@ -74,6 +77,24 @@ describe('mensagemSePlanejamentoIncompativelComRefsAtendimento', () => {
       mensagemSePlanejamentoIncompativelComRefsAtendimento(payload, [{ id: 'd1', numero: 'DOC-1' }], {
         dispensarValidacao: true,
       }),
+    ).toBeNull();
+  });
+
+  it('limparRefs remove historico orfao e permite gravacao', () => {
+    const payload = {
+      documentos: [{ id: 'd1', numero: 'DOC-1' }],
+      atendimentoHistorico: [{ documentoId: 'orphan-id', documento: 'DESENHO-ANTIGO' }],
+      atendimentos: [{ documentoId: 'orphan-id', documentoNumero: 'DESENHO-ANTIGO' }],
+    };
+    const nextDocs = [{ id: 'new-1', numero: 'NOVO-001' }];
+    const limpo = limparRefsAtendimentoIncompativeisComPlanejamento(payload, nextDocs);
+    expect(limpo.removidosHistorico).toBe(1);
+    expect(limpo.removidosAtendimentos).toBe(1);
+    expect(
+      mensagemSePlanejamentoIncompativelComRefsAtendimento(
+        { ...payload, atendimentoHistorico: limpo.atendimentoHistorico, atendimentos: limpo.atendimentos },
+        nextDocs,
+      ),
     ).toBeNull();
   });
 });

@@ -32,17 +32,17 @@ Scripts úteis: `supabase/snippets/auditar_multi_tenant_iso_pro.sql`
 
 ### 1.2 Import planejamento — UX quando bloqueia
 
-- [ ] Opção explícita: *“Substituir planejamento e limpar histórico incompatible”* (com confirmação dupla).
-- [ ] Mensagem com passos: limpar cadastros, SQL auditoria, ou contactar admin.
+- [x] Opção explícita: *“Substituir planejamento e limpar histórico incompatible”* (confirmação dupla + senha admin).
+- [x] Mensagem com passos: limpar cadastros, SQL auditoria, ou contactar admin.
 
 ### 1.3 Falhas silenciosas na nuvem
 
-- [ ] Em modo nuvem, **não** fazer `.catch(() => readAll())` em `loadDocumentos()` / import materiais.
-- [ ] Mostrar erro: “Não foi possível ler a nuvem; verifique ligação.”
+- [x] Em modo nuvem, **não** fazer `.catch(() => readAll())` em `loadDocumentos()` / import materiais.
+- [x] Mostrar erro: “Não foi possível ler a nuvem; verifique ligação.”
 
 ### 1.4 Mensagens de erro amigáveis (PT)
 
-- [ ] Mapear `duplicate key`, `materiais_pkey`, `materiais_tenant_id_codigo_lower_uidx`, `Gravacao bloqueada…` para texto operacional.
+- [x] Mapear `duplicate key`, `materiais_pkey`, `materiais_tenant_id_codigo_lower_uidx`, `Gravacao bloqueada…` para texto operacional (`traduzirErroOperacionalIsoPro.ts`).
 
 ### 1.5 Testes
 
