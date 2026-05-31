@@ -608,8 +608,8 @@ export function useDocumentos() {
       return;
     }
     const senhaOk = await verifyCurrentUserPassword(importSubstituirSenha);
-    if (!senhaOk.success) {
-      setError(senhaOk.error ?? 'Senha incorrecta.');
+    if (!senhaOk) {
+      setError('Senha incorreta.');
       return;
     }
 
