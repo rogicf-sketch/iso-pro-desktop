@@ -46,6 +46,62 @@ function mkIns(on: boolean): string {
     : '<span class="rir-pill off">—</span>';
 }
 
+/** Mesmo HTML do topo do RIR — entra no thead para repetir em cada folha na impressao (visual inalterado). */
+function montarBlocoCabecalhoRirParaImpressao(params: {
+  logoBlock: string;
+  escopoLinha: string;
+  localCfg: string;
+  codigo: string;
+  dataRegistro: string;
+  emitidoEm: string;
+  uoExibir: string;
+  localExibir: string;
+  contratoExibir: string;
+  fornecedor: string;
+  nf: string;
+  romaneio: string;
+  procedimento: string;
+  solCompra: string;
+  obsCurta: string;
+  inspecaoQuantitativa: boolean;
+  inspecaoQualitativa: boolean;
+  inspecaoDimensional: boolean;
+}): string {
+  return `<header class="rir-classic-top">
+    <div class="rir-brand">${params.logoBlock}</div>
+    <div class="rir-title-block">
+      <h1 class="rir-title-main">Relatório de inspeção de recebimento (RIR)</h1>
+      <p class="rir-title-sub">${escapeHtmlRelatorio(params.escopoLinha)}${params.localCfg ? ` · ${escapeHtmlRelatorio(params.localCfg)}` : ''}</p>
+    </div>
+    <div class="rir-meta-box">
+      <div><strong>Nº RIR</strong>${escapeHtmlRelatorio(params.codigo)}</div>
+      <div style="margin-top:8px;"><strong>Data</strong>${escapeHtmlRelatorio(params.dataRegistro)}</div>
+      <div style="margin-top:8px;"><strong>Emitido</strong>${escapeHtmlRelatorio(params.emitidoEm)}</div>
+    </div>
+  </header>
+  <div class="rir-classic-grid">
+    <div class="rir-fld"><label>UO (Obra / Depto)</label><span>${escapeHtmlRelatorio(params.uoExibir) || '—'}</span></div>
+    <div class="rir-fld"><label>Local</label><span>${escapeHtmlRelatorio(params.localExibir) || '—'}</span></div>
+    <div class="rir-fld"><label>Contrato Nº</label><span>${escapeHtmlRelatorio(params.contratoExibir) || '—'}</span></div>
+  </div>
+  <div class="rir-ins-row">
+    <span class="rir-ins-label">Inspeção:</span>
+    ${mkIns(params.inspecaoQuantitativa)} <span>Quantitativa</span>
+    ${mkIns(params.inspecaoQualitativa)} <span>Qualitativa</span>
+    ${mkIns(params.inspecaoDimensional)} <span>Dimensional</span>
+  </div>
+  <div class="rir-classic-bar">Documentos</div>
+  <div class="rir-doc-campos">
+    <div class="rir-fld rir-doc-campos__nf"><label>Nº Nota Fiscal</label><span>${escapeHtmlRelatorio(params.nf) || '—'}</span></div>
+    <div class="rir-fld rir-doc-campos__forn"><label>Fornecedor</label><span>${escapeHtmlRelatorio(params.fornecedor)}</span></div>
+    <div class="rir-fld rir-doc-campos__proc"><label>Nº Procedimento</label><span>${escapeHtmlRelatorio(params.procedimento)}</span></div>
+    <div class="rir-fld rir-doc-campos__rom"><label>Nº Romaneio</label><span>${escapeHtmlRelatorio(params.romaneio) || '—'}</span></div>
+    <div class="rir-fld rir-doc-campos__sol"><label>Sol. compra / Pack-list</label><span>${params.solCompra ? escapeHtmlRelatorio(params.solCompra) : '—'}</span></div>
+    <div class="rir-fld rir-doc-campos__full"><label>Obs.</label><span>${escapeHtmlRelatorio(params.obsCurta) || '—'}</span></div>
+  </div>
+  <div class="rir-classic-bar rir-classic-bar--material">Material recebido (nota fiscal)</div>`;
+}
+
 /**
  * Relatorio RIR — layout inspirado no formulario em papel (bordas, faixas cinza, tabela material + certificado).
  */
@@ -84,6 +140,27 @@ export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
 
   const escopoLinha = [clienteNome, projetoNome].filter(Boolean).join(' · ') || '—';
   const refReceb = r.recebimentoId ? escapeHtmlRelatorio(r.recebimentoId) : '—';
+  const emitidoEm = formatDateTimePt();
+  const cabecalhoImpressao = montarBlocoCabecalhoRirParaImpressao({
+    logoBlock,
+    escopoLinha,
+    localCfg,
+    codigo: r.codigo,
+    dataRegistro: formatDatePt(r.dataRegistro),
+    emitidoEm,
+    uoExibir,
+    localExibir,
+    contratoExibir,
+    fornecedor: r.fornecedorNome,
+    nf: r.recebimentoNotaFiscal ?? '',
+    romaneio: r.recebimentoRomaneio ?? '',
+    procedimento: r.procedimentoNumero,
+    solCompra,
+    obsCurta: r.obsCurta,
+    inspecaoQuantitativa: !!r.inspecaoQuantitativa,
+    inspecaoQualitativa: !!r.inspecaoQualitativa,
+    inspecaoDimensional: !!r.inspecaoDimensional,
+  });
   return `<div class="rir-doc rir-doc--classic" lang="pt-BR">
 <style>
 /* Margens de página para impressão/PDF: ver @media print { @page { ... } } */
@@ -249,10 +326,19 @@ body.rir-print-body {
 .rir-pill.ok { color: #047857; }
 .rir-pill.off { color: #94a3b8; }
 .rir-classic-table-wrap {
-  margin: 10px 0 14px;
-  overflow: hidden;
+  margin: 0 0 14px;
+  overflow: visible;
   border: none;
   background: transparent;
+}
+.rir-thead-repeat-cell {
+  padding: 0 !important;
+  border: none !important;
+  background: #fff !important;
+  vertical-align: top;
+}
+.rir-classic-bar--material {
+  margin-bottom: 0;
 }
 /* Uma unica malha de bordas (evita linhas duplicadas / “sobrando” no PDF) */
 .rir-classic-table {
@@ -260,7 +346,7 @@ body.rir-print-body {
   border-collapse: collapse;
   border-spacing: 0;
   font-size: 10.5px;
-  border: 1px solid #334155;
+  border: none;
   table-layout: auto;
   font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
 }
@@ -274,15 +360,15 @@ body.rir-print-body {
   font-size: 10px;
   border: 1px solid #64748b;
 }
-/* Alinhamento igual ao PDF de referência: centro nas colunas curtas; esquerda em Código e Descrição */
-.rir-classic-table thead th:nth-child(1),
-.rir-classic-table thead th:nth-child(3),
-.rir-classic-table thead th:nth-child(4),
-.rir-classic-table thead th:nth-child(6) {
+/* Alinhamento: so na linha de colunas do material (nao no bloco repetido do cabecalho) */
+.rir-classic-table thead tr.rir-thead-cols th:nth-child(1),
+.rir-classic-table thead tr.rir-thead-cols th:nth-child(3),
+.rir-classic-table thead tr.rir-thead-cols th:nth-child(4),
+.rir-classic-table thead tr.rir-thead-cols th:nth-child(6) {
   text-align: center;
 }
-.rir-classic-table thead th:nth-child(2),
-.rir-classic-table thead th:nth-child(5) {
+.rir-classic-table thead tr.rir-thead-cols th:nth-child(2),
+.rir-classic-table thead tr.rir-thead-cols th:nth-child(5) {
   text-align: left;
 }
 .rir-classic-table td {
@@ -437,6 +523,10 @@ body.rir-print-body {
   .rir-classic-table thead {
     display: table-header-group;
   }
+  .rir-thead-repeat-cell {
+    border: none !important;
+    padding: 0 !important;
+  }
   .rir-classic-table tbody tr {
     break-inside: avoid;
     page-break-inside: avoid;
@@ -449,7 +539,7 @@ body.rir-print-body {
     width: 100% !important;
     border-collapse: collapse !important;
     border-spacing: 0 !important;
-    border: 1px solid #334155 !important;
+    border: none !important;
     font-size: 10.5px !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -498,47 +588,14 @@ body.rir-print-body {
 }
 </style>
 <div class="rir-doc-inner">
-  <header class="rir-classic-top">
-    <div class="rir-brand">${logoBlock}</div>
-    <div class="rir-title-block">
-      <h1 class="rir-title-main">Relatório de inspeção de recebimento (RIR)</h1>
-      <p class="rir-title-sub">${escapeHtmlRelatorio(escopoLinha)}${localCfg ? ` · ${escapeHtmlRelatorio(localCfg)}` : ''}</p>
-    </div>
-    <div class="rir-meta-box">
-      <div><strong>Nº RIR</strong>${escapeHtmlRelatorio(r.codigo)}</div>
-      <div style="margin-top:8px;"><strong>Data</strong>${escapeHtmlRelatorio(formatDatePt(r.dataRegistro))}</div>
-      <div style="margin-top:8px;"><strong>Emitido</strong>${escapeHtmlRelatorio(formatDateTimePt())}</div>
-    </div>
-  </header>
   <div class="rir-print-main">
-  <div class="rir-classic-grid">
-    <div class="rir-fld"><label>UO (Obra / Depto)</label><span>${escapeHtmlRelatorio(uoExibir) || '—'}</span></div>
-    <div class="rir-fld"><label>Local</label><span>${escapeHtmlRelatorio(localExibir) || '—'}</span></div>
-    <div class="rir-fld"><label>Contrato Nº</label><span>${escapeHtmlRelatorio(contratoExibir) || '—'}</span></div>
-  </div>
-
-  <div class="rir-ins-row">
-    <span class="rir-ins-label">Inspeção:</span>
-    ${mkIns(!!r.inspecaoQuantitativa)} <span>Quantitativa</span>
-    ${mkIns(!!r.inspecaoQualitativa)} <span>Qualitativa</span>
-    ${mkIns(!!r.inspecaoDimensional)} <span>Dimensional</span>
-  </div>
-
-  <div class="rir-classic-bar">Documentos</div>
-  <div class="rir-doc-campos">
-    <div class="rir-fld rir-doc-campos__nf"><label>Nº Nota Fiscal</label><span>${escapeHtmlRelatorio(r.recebimentoNotaFiscal ?? '') || '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__forn"><label>Fornecedor</label><span>${escapeHtmlRelatorio(r.fornecedorNome)}</span></div>
-    <div class="rir-fld rir-doc-campos__proc"><label>Nº Procedimento</label><span>${escapeHtmlRelatorio(r.procedimentoNumero)}</span></div>
-    <div class="rir-fld rir-doc-campos__rom"><label>Nº Romaneio</label><span>${escapeHtmlRelatorio(r.recebimentoRomaneio ?? '') || '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__sol"><label>Sol. compra / Pack-list</label><span>${solCompra ? escapeHtmlRelatorio(solCompra) : '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__full"><label>Obs.</label><span>${escapeHtmlRelatorio(r.obsCurta) || '—'}</span></div>
-  </div>
-
-  <div class="rir-classic-bar">Material recebido (nota fiscal)</div>
   <div class="rir-classic-table-wrap">
     <table class="rir-classic-table">
       <thead>
-        <tr>
+        <tr class="rir-thead-repeat">
+          <td colspan="6" class="rir-thead-repeat-cell">${cabecalhoImpressao}</td>
+        </tr>
+        <tr class="rir-thead-cols">
           <th>Item</th>
           <th>Código</th>
           <th>Qtd.</th>
