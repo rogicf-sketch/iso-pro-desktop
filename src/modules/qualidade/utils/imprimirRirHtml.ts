@@ -11,7 +11,7 @@ import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoI
 import type { RirRegistro } from '../types/qualidade.types';
 import { rirObraDefaultsFromConfig } from './rirConfigDefaults';
 
-const DOC_VERSION = '24';
+const DOC_VERSION = '22';
 
 function formatDatePt(iso: string): string {
   if (!iso) return '—';
@@ -41,68 +41,13 @@ function statusTratativaLabel(s: RirRegistro['status']): string {
 }
 
 function mkIns(on: boolean): string {
-  return on ? '<span class="rir-pill ok">✓</span>' : '<span class="rir-pill off">—</span>';
-}
-
-/** Bloco superior original do RIR — repetido em cada folha via thead da tabela de itens. */
-function montarBlocoCabecalhoRirRepetivel(params: {
-  logoBlock: string;
-  escopoLinha: string;
-  localCfg: string;
-  codigo: string;
-  dataRegistro: string;
-  emitidoEm: string;
-  uoExibir: string;
-  localExibir: string;
-  contratoExibir: string;
-  fornecedor: string;
-  nf: string;
-  romaneio: string;
-  procedimento: string;
-  solCompra: string;
-  obsCurta: string;
-  inspecaoQuantitativa: boolean;
-  inspecaoQualitativa: boolean;
-  inspecaoDimensional: boolean;
-}): string {
-  return `<header class="rir-classic-top">
-    <div class="rir-brand">${params.logoBlock}</div>
-    <div class="rir-title-block">
-      <h1 class="rir-title-main">Relatório de inspeção de recebimento (RIR)</h1>
-      <p class="rir-title-sub">${escapeHtmlRelatorio(params.escopoLinha)}${params.localCfg ? ` · ${escapeHtmlRelatorio(params.localCfg)}` : ''}</p>
-    </div>
-    <div class="rir-meta-box">
-      <div><strong>Nº RIR</strong>${escapeHtmlRelatorio(params.codigo)}</div>
-      <div class="rir-meta-line"><strong>Data</strong>${escapeHtmlRelatorio(params.dataRegistro)}</div>
-      <div class="rir-meta-line"><strong>Folha</strong><span class="rir-pagenum"></span></div>
-      <div class="rir-meta-line"><strong>Emitido</strong>${escapeHtmlRelatorio(params.emitidoEm)}</div>
-    </div>
-  </header>
-  <div class="rir-classic-grid">
-    <div class="rir-fld"><label>UO (Obra / Depto)</label><span>${escapeHtmlRelatorio(params.uoExibir) || '—'}</span></div>
-    <div class="rir-fld"><label>Local</label><span>${escapeHtmlRelatorio(params.localExibir) || '—'}</span></div>
-    <div class="rir-fld"><label>Contrato Nº</label><span>${escapeHtmlRelatorio(params.contratoExibir) || '—'}</span></div>
-  </div>
-  <div class="rir-ins-row">
-    <span class="rir-ins-label">Inspeção:</span>
-    ${mkIns(params.inspecaoQuantitativa)} <span>Quantitativa</span>
-    ${mkIns(params.inspecaoQualitativa)} <span>Qualitativa</span>
-    ${mkIns(params.inspecaoDimensional)} <span>Dimensional</span>
-  </div>
-  <div class="rir-classic-bar">Documentos</div>
-  <div class="rir-doc-campos">
-    <div class="rir-fld rir-doc-campos__nf"><label>Nº Nota Fiscal</label><span>${escapeHtmlRelatorio(params.nf) || '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__forn"><label>Fornecedor</label><span>${escapeHtmlRelatorio(params.fornecedor)}</span></div>
-    <div class="rir-fld rir-doc-campos__proc"><label>Nº Procedimento</label><span>${escapeHtmlRelatorio(params.procedimento)}</span></div>
-    <div class="rir-fld rir-doc-campos__rom"><label>Nº Romaneio</label><span>${escapeHtmlRelatorio(params.romaneio) || '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__sol"><label>Sol. compra / Pack-list</label><span>${params.solCompra ? escapeHtmlRelatorio(params.solCompra) : '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__full"><label>Obs.</label><span>${escapeHtmlRelatorio(params.obsCurta) || '—'}</span></div>
-  </div>
-  <div class="rir-classic-bar">Material recebido (nota fiscal)</div>`;
+  return on
+    ? '<span class="rir-pill ok">✓</span>'
+    : '<span class="rir-pill off">—</span>';
 }
 
 /**
- * Relatorio RIR — layout original; cabecalho sobe levemente e repete em cada folha na impressao.
+ * Relatorio RIR — layout inspirado no formulario em papel (bordas, faixas cinza, tabela material + certificado).
  */
 export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
   const cfg = readConfiguracoes();
@@ -119,7 +64,6 @@ export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
   const laudoTxt = laudoLabel(laudo);
   const statusTxt = statusTratativaLabel(r.status);
   const solCompra = (r.solCompraPackList ?? '').trim();
-  const emitidoEm = formatDateTimePt();
 
   let rows = '';
   (r.itensRir ?? []).forEach((it, i) => {
@@ -140,30 +84,9 @@ export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
 
   const escopoLinha = [clienteNome, projetoNome].filter(Boolean).join(' · ') || '—';
   const refReceb = r.recebimentoId ? escapeHtmlRelatorio(r.recebimentoId) : '—';
-
-  const cabecalhoRepetivel = montarBlocoCabecalhoRirRepetivel({
-    logoBlock,
-    escopoLinha,
-    localCfg,
-    codigo: r.codigo,
-    dataRegistro: formatDatePt(r.dataRegistro),
-    emitidoEm,
-    uoExibir,
-    localExibir,
-    contratoExibir,
-    fornecedor: r.fornecedorNome,
-    nf: r.recebimentoNotaFiscal ?? '',
-    romaneio: r.recebimentoRomaneio ?? '',
-    procedimento: r.procedimentoNumero,
-    solCompra,
-    obsCurta: r.obsCurta,
-    inspecaoQuantitativa: !!r.inspecaoQuantitativa,
-    inspecaoQualitativa: !!r.inspecaoQualitativa,
-    inspecaoDimensional: !!r.inspecaoDimensional,
-  });
-
   return `<div class="rir-doc rir-doc--classic" lang="pt-BR">
 <style>
+/* Margens de página para impressão/PDF: ver @media print { @page { ... } } */
 html {
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
@@ -173,6 +96,10 @@ body.rir-print-body {
   padding: 0;
 }
 .rir-doc--classic {
+  /*
+   * Tahoma/Segoe: no Windows imprimem com peso mais uniforme que Arial em negrito+caps no motor do Chromium.
+   * Evitar text-transform:uppercase em CSS nos títulos — combinação com faux-bold gerava “barras” em I/l.
+   */
   font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
   color: #0f172a;
   font-size: 10.5pt;
@@ -190,15 +117,16 @@ body.rir-print-body {
 .rir-doc-inner {
   background: #fff;
   border: 1px solid #334155;
-  padding: 14px 18px 18px;
+  padding: 18px 20px 22px;
 }
 .rir-classic-top {
   display: grid;
+  /* Coluna esquerda fixa para o logo: sem isso o texto central invade por cima no grid */
   grid-template-columns: minmax(120px, 210px) minmax(0, 1fr) minmax(108px, 168px);
-  gap: 10px 14px;
+  gap: 14px 16px;
   align-items: start;
   border-bottom: 2px solid #0f172a;
-  padding-bottom: 8px;
+  padding-bottom: 12px;
   margin-bottom: 0;
 }
 .rir-brand {
@@ -210,7 +138,7 @@ body.rir-print-body {
 }
 .rir-logo {
   display: block;
-  max-height: 58px;
+  max-height: 64px;
   max-width: 100%;
   width: auto;
   height: auto;
@@ -219,7 +147,7 @@ body.rir-print-body {
 .rir-brand-fallback { font-size: 16px; font-weight: 700; color: #0f172a; letter-spacing: normal; }
 .rir-title-block {
   text-align: center;
-  padding: 2px 4px;
+  padding: 4px 4px;
   min-width: 0;
   overflow-wrap: anywhere;
   word-wrap: break-word;
@@ -234,7 +162,7 @@ body.rir-print-body {
   line-height: 1.3;
 }
 .rir-title-sub {
-  margin: 4px 0 0 0;
+  margin: 6px 0 0 0;
   font-size: 11px;
   color: #475569;
   line-height: 1.35;
@@ -244,7 +172,7 @@ body.rir-print-body {
 .rir-meta-box {
   font-size: 11px;
   text-align: right;
-  line-height: 1.45;
+  line-height: 1.5;
   color: #334155;
   min-width: 0;
 }
@@ -254,18 +182,17 @@ body.rir-print-body {
   letter-spacing: 0.02em;
   text-transform: none;
   color: #64748b;
-  margin-bottom: 1px;
+  margin-bottom: 2px;
   font-weight: 600;
 }
-.rir-meta-line { margin-top: 5px; }
-.rir-pagenum::before { content: "—"; }
 .rir-classic-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 6px 12px;
-  margin-top: 8px;
+  gap: 8px 12px;
+  margin-top: 12px;
   font-size: 11px;
 }
+.rir-classic-grid--2 { grid-template-columns: repeat(2, 1fr); }
 .rir-fld label {
   display: block;
   font-size: 9px;
@@ -282,10 +209,11 @@ body.rir-print-body {
   word-break: break-word;
   line-height: 1.4;
 }
+/* Documentos: linha1 NF | Fornecedor; linha2 Procedimento | Romaneio; linha3 Sol.compra (esq.); Obs em largura total */
 .rir-doc-campos {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 5px 18px;
+  gap: 6px 18px;
   margin-top: 0;
   font-size: 11px;
   align-items: start;
@@ -299,8 +227,8 @@ body.rir-print-body {
 .rir-doc-campos__sol { grid-column: 1; grid-row: 3; }
 .rir-doc-campos__full { grid-column: 1 / -1; grid-row: 4; }
 .rir-classic-bar {
-  margin: 10px 0 6px 0;
-  padding: 6px 10px;
+  margin: 14px 0 8px 0;
+  padding: 7px 10px;
   background: #e5e7eb;
   border: 1px solid #94a3b8;
   font-size: 10px;
@@ -310,7 +238,7 @@ body.rir-print-body {
   color: #1e293b;
   font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
 }
-.rir-ins-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 6px; font-size: 11px; }
+.rir-ins-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 8px; font-size: 11px; }
 .rir-ins-label {
   font-weight: 600;
   font-size: 10px;
@@ -321,11 +249,12 @@ body.rir-print-body {
 .rir-pill.ok { color: #047857; }
 .rir-pill.off { color: #94a3b8; }
 .rir-classic-table-wrap {
-  margin: 0 0 12px;
+  margin: 10px 0 14px;
   overflow: hidden;
   border: none;
   background: transparent;
 }
+/* Uma unica malha de bordas (evita linhas duplicadas / “sobrando” no PDF) */
 .rir-classic-table {
   width: 100%;
   border-collapse: collapse;
@@ -335,22 +264,17 @@ body.rir-print-body {
   table-layout: auto;
   font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
 }
-.rir-thead-repeat-cell {
-  padding: 0 0 4px 0 !important;
-  border: none !important;
-  background: #fff !important;
-  vertical-align: top;
-}
 .rir-classic-table th {
   background: #e5e7eb;
   color: #0f172a;
-  padding: 6px 8px;
+  padding: 7px 8px;
   font-weight: 600;
   text-transform: none;
   letter-spacing: normal;
   font-size: 10px;
   border: 1px solid #64748b;
 }
+/* Alinhamento igual ao PDF de referência: centro nas colunas curtas; esquerda em Código e Descrição */
 .rir-classic-table thead th:nth-child(1),
 .rir-classic-table thead th:nth-child(3),
 .rir-classic-table thead th:nth-child(4),
@@ -362,7 +286,7 @@ body.rir-print-body {
   text-align: left;
 }
 .rir-classic-table td {
-  padding: 6px 8px;
+  padding: 7px 8px;
   vertical-align: top;
   border: 1px solid #94a3b8;
   font-weight: 400;
@@ -433,18 +357,14 @@ body.rir-print-body {
   background: #f8fafc;
   border: 1px dashed #cbd5e1;
 }
+/* Fluxo em blocos (sem tabela externa): o Chrome imprime/PDF melhor do que com td unico envolvendo tudo. */
 .rir-print-main { display: block; width: 100%; }
+/* Mantém assinaturas + nota legal na mesma página (evita 2ª folha só com rodapé) */
 .rir-print-sign-foot { display: block; }
 @media print {
   @page {
     size: A4;
-    margin: 10mm 11mm 14mm 11mm;
-    @bottom-center {
-      content: "Página " counter(page) " de " counter(pages);
-      font-size: 8pt;
-      font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
-      color: #64748b;
-    }
+    margin: 12mm;
   }
   html,
   body.rir-print-body {
@@ -460,17 +380,12 @@ body.rir-print-body {
     padding: 0 !important;
     max-width: none !important;
     width: 100% !important;
+    /* Mesma base tipográfica da pré-visualização (evita “encolher” no PDF) */
     font-size: 10.5pt !important;
     font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif !important;
     text-rendering: geometricPrecision !important;
     font-synthesis: none !important;
     margin: 0 !important;
-  }
-  .rir-pagenum::before {
-    content: counter(page) " / " counter(pages);
-  }
-  .rir-classic-table thead {
-    display: table-header-group;
   }
   .rir-classic-table td {
     font-weight: 400 !important;
@@ -483,14 +398,15 @@ body.rir-print-body {
   }
   .rir-doc-inner {
     border: none !important;
-    padding: 14px 14px 10px !important;
+    /* Mantém respiro como na tela; padding 0 deixava o PDF “espremido” e diferente da prévia */
+    padding: 18px 16px 12px !important;
     box-shadow: none !important;
     width: 100% !important;
     max-width: none !important;
   }
   .rir-classic-top {
     grid-template-columns: minmax(120px, 210px) minmax(0, 1fr) minmax(108px, 168px) !important;
-    gap: 10px 14px !important;
+    gap: 14px 16px !important;
   }
   .rir-title-block {
     min-width: 0 !important;
@@ -513,9 +429,13 @@ body.rir-print-body {
   .rir-classic-grid {
     width: 100%;
   }
+  /* Não forçar largura total: na tela usa max-width 32rem; no PDF tem que ser igual */
   .rir-doc-campos {
     max-width: 32rem;
     width: 100%;
+  }
+  .rir-classic-table thead {
+    display: table-header-group;
   }
   .rir-classic-table tbody tr {
     break-inside: avoid;
@@ -524,6 +444,7 @@ body.rir-print-body {
   .rir-classic-table-wrap {
     overflow: visible !important;
   }
+  /* Tabela: mesmas bordas da tela — collapse evita linhas duplicadas no motor de impressao */
   .rir-classic-table {
     width: 100% !important;
     border-collapse: collapse !important;
@@ -540,12 +461,10 @@ body.rir-print-body {
   .rir-classic-table th {
     border-color: #64748b !important;
   }
-  .rir-thead-repeat-cell {
-    border: none !important;
-  }
+  /* Menos “respiro” vertical no PDF: evita ultrapassar 1 página por poucos mm */
   .rir-classic-bar {
-    margin: 8px 0 5px 0 !important;
-    padding: 5px 8px !important;
+    margin: 10px 0 6px 0 !important;
+    padding: 6px 8px !important;
   }
   .rir-block {
     margin: 6px 0 !important;
@@ -579,13 +498,46 @@ body.rir-print-body {
 }
 </style>
 <div class="rir-doc-inner">
+  <header class="rir-classic-top">
+    <div class="rir-brand">${logoBlock}</div>
+    <div class="rir-title-block">
+      <h1 class="rir-title-main">Relatório de inspeção de recebimento (RIR)</h1>
+      <p class="rir-title-sub">${escapeHtmlRelatorio(escopoLinha)}${localCfg ? ` · ${escapeHtmlRelatorio(localCfg)}` : ''}</p>
+    </div>
+    <div class="rir-meta-box">
+      <div><strong>Nº RIR</strong>${escapeHtmlRelatorio(r.codigo)}</div>
+      <div style="margin-top:8px;"><strong>Data</strong>${escapeHtmlRelatorio(formatDatePt(r.dataRegistro))}</div>
+      <div style="margin-top:8px;"><strong>Emitido</strong>${escapeHtmlRelatorio(formatDateTimePt())}</div>
+    </div>
+  </header>
   <div class="rir-print-main">
+  <div class="rir-classic-grid">
+    <div class="rir-fld"><label>UO (Obra / Depto)</label><span>${escapeHtmlRelatorio(uoExibir) || '—'}</span></div>
+    <div class="rir-fld"><label>Local</label><span>${escapeHtmlRelatorio(localExibir) || '—'}</span></div>
+    <div class="rir-fld"><label>Contrato Nº</label><span>${escapeHtmlRelatorio(contratoExibir) || '—'}</span></div>
+  </div>
+
+  <div class="rir-ins-row">
+    <span class="rir-ins-label">Inspeção:</span>
+    ${mkIns(!!r.inspecaoQuantitativa)} <span>Quantitativa</span>
+    ${mkIns(!!r.inspecaoQualitativa)} <span>Qualitativa</span>
+    ${mkIns(!!r.inspecaoDimensional)} <span>Dimensional</span>
+  </div>
+
+  <div class="rir-classic-bar">Documentos</div>
+  <div class="rir-doc-campos">
+    <div class="rir-fld rir-doc-campos__nf"><label>Nº Nota Fiscal</label><span>${escapeHtmlRelatorio(r.recebimentoNotaFiscal ?? '') || '—'}</span></div>
+    <div class="rir-fld rir-doc-campos__forn"><label>Fornecedor</label><span>${escapeHtmlRelatorio(r.fornecedorNome)}</span></div>
+    <div class="rir-fld rir-doc-campos__proc"><label>Nº Procedimento</label><span>${escapeHtmlRelatorio(r.procedimentoNumero)}</span></div>
+    <div class="rir-fld rir-doc-campos__rom"><label>Nº Romaneio</label><span>${escapeHtmlRelatorio(r.recebimentoRomaneio ?? '') || '—'}</span></div>
+    <div class="rir-fld rir-doc-campos__sol"><label>Sol. compra / Pack-list</label><span>${solCompra ? escapeHtmlRelatorio(solCompra) : '—'}</span></div>
+    <div class="rir-fld rir-doc-campos__full"><label>Obs.</label><span>${escapeHtmlRelatorio(r.obsCurta) || '—'}</span></div>
+  </div>
+
+  <div class="rir-classic-bar">Material recebido (nota fiscal)</div>
   <div class="rir-classic-table-wrap">
     <table class="rir-classic-table">
       <thead>
-        <tr class="rir-thead-repeat">
-          <td colspan="6" class="rir-thead-repeat-cell">${cabecalhoRepetivel}</td>
-        </tr>
         <tr>
           <th>Item</th>
           <th>Código</th>
