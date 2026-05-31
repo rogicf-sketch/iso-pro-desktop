@@ -88,7 +88,7 @@ async function deleteAllMateriaisForTenant(admin: ReturnType<typeof createClient
     if (!data?.length) break;
     const ids = data.map((r) => r.id as number).filter((n) => Number.isFinite(n));
     if (!ids.length) break;
-    const { error: delErr } = await admin.from('materiais').delete().in('id', ids);
+    const { error: delErr } = await admin.from('materiais').delete().eq('tenant_id', tenantId).in('id', ids);
     if (delErr) throw new Error(`materiais(delete): ${delErr.message}`);
   }
 }
@@ -100,7 +100,7 @@ async function deleteAllDispositivosMobileForTenant(admin: ReturnType<typeof cre
     if (!data?.length) break;
     const ids = data.map((r) => (r as { id?: unknown }).id).filter((v) => v != null && String(v) !== '');
     if (!ids.length) break;
-    const { error: delErr } = await admin.from('dispositivos_mobile').delete().in('id', ids as never[]);
+    const { error: delErr } = await admin.from('dispositivos_mobile').delete().eq('tenant_id', tenantId).in('id', ids as never[]);
     if (delErr) throw new Error(`dispositivos_mobile(delete): ${delErr.message}`);
   }
 }

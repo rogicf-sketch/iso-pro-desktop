@@ -48,6 +48,20 @@ describe('mensagemSePlanejamentoIncompativelComRefsAtendimento', () => {
     expect(msg).toContain('referencia(s) distintas');
   });
 
+  it('bloqueia historico orfao (ref nao esta no planejamento anterior nem no novo)', () => {
+    const payload = {
+      documentos: [{ id: 'd1', numero: 'DOC-1' }],
+      atendimentoHistorico: [{ documentoId: 'orphan-id', documento: 'DESENHO-ANTIGO' }],
+    };
+    const nextDocs = Array.from({ length: 551 }, (_, i) => ({
+      id: `new-${i}`,
+      numero: `DOC-${i}`,
+    }));
+    const msg = mensagemSePlanejamentoIncompativelComRefsAtendimento(payload, nextDocs);
+    expect(msg).toContain('Gravacao bloqueada');
+    expect(msg).toContain('orphan-id');
+  });
+
   it('dispensar validacao ignora bloqueio (exclusao definitiva controlada)', () => {
     const payload = {
       documentos: [
