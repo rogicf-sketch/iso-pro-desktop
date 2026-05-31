@@ -37,8 +37,12 @@ export function getActiveTenantId(): string {
 
 export function setActiveTenantId(id: string): void {
   if (!isUuid(id)) return;
+  if (id === getActiveTenantId()) return;
   const next: TenantEstadoV1 = { version: 1, activeTenantId: id };
   localStorage.setItem(ISO_PRO_TENANT_CONTEXT_STORAGE_KEY, JSON.stringify(next));
+  if (typeof window !== 'undefined') {
+    void import('./isoProSnapshot').then((m) => m.invalidateIsoProSnapshotCache());
+  }
 }
 
 /** Troca empresa na nuvem e recarrega (sessão será revalidada contra o novo tenant). */

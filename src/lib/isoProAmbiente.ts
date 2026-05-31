@@ -1,7 +1,12 @@
 /**
  * Ambientes de obra no desktop: isolamento de `localStorage` (e IndexedDB de media) por obra/projeto,
  * mantendo o ambiente `padrao` sem sufixo para compatibilidade com instalações existentes.
+ *
+ * Chaves operacionais incluem também `::tenant:<uuid>` quando a empresa activa nao e a default
+ * (ver `getActiveTenantId()` em `isoProTenant.ts`).
  */
+
+import { getActiveTenantId, ISO_PRO_DEFAULT_TENANT_ID } from './isoProTenant';
 
 export const ISO_PRO_AMBIENTE_ESTADO_KEY = 'iso-pro-desktop-ambientes-estado-v1';
 
@@ -86,33 +91,86 @@ export function resumoCentroCustoAmbiente(centro: IsoProCentroCustoAmbiente | un
   return [centro.cliente, centro.projeto, centro.contrato, centro.local].filter((v) => v.trim()).join(' · ');
 }
 
+/** Partes opcionais de uma chave ISO PRO com sufixos `::tenant:` e `::ambiente:`. */
+export function parseIsoProStorageKey(fullKey: string): {
+  base: string;
+  tenantId: string | null;
+  ambienteId: string | null;
+} {
+  let rest = fullKey;
+  let tenantId: string | null = null;
+  let ambienteId: string | null = null;
+
+  const ambIdx = rest.indexOf('::ambiente:');
+  if (ambIdx !== -1) {
+    ambienteId = rest.slice(ambIdx + '::ambiente:'.length).trim() || null;
+    rest = rest.slice(0, ambIdx);
+  }
+  const tenIdx = rest.indexOf('::tenant:');
+  if (tenIdx !== -1) {
+    tenantId = rest.slice(tenIdx + '::tenant:'.length).trim() || null;
+    rest = rest.slice(0, tenIdx);
+  }
+  return { base: rest, tenantId, ambienteId };
+}
+
+/** Chave `localStorage` / IndexedDB para ambiente e tenant concretos (sem depender do activo). */
+export function getScopedIsoProStorageKeyForAmbienteIdAndTenant(
+  baseKey: string,
+  ambienteId: string,
+  tenantId: string,
+): string {
+  let key = baseKey.trim();
+  const tenant = tenantId.trim();
+  const ambiente = ambienteId.trim();
+  if (tenant && tenant !== ISO_PRO_DEFAULT_TENANT_ID) {
+    key = `${key}::tenant:${tenant}`;
+  }
+  if (ambiente && ambiente !== 'padrao') {
+    key = `${key}::ambiente:${ambiente}`;
+  }
+  return key;
+}
+
 /** Chave `localStorage` / IndexedDB para um ambiente concreto (sem depender do activo). */
 export function getScopedIsoProStorageKeyForAmbienteId(baseKey: string, ambienteId: string): string {
-  const id = ambienteId.trim();
-  if (!id || id === 'padrao') return baseKey;
-  return `${baseKey}::ambiente:${id}`;
+  return getScopedIsoProStorageKeyForAmbienteIdAndTenant(baseKey, ambienteId, getActiveTenantId());
 }
 
-/** Chave `localStorage` / IndexedDB com isolamento por ambiente activo. */
+/** Chave `localStorage` / IndexedDB com isolamento por empresa (tenant) e ambiente activos. */
 export function getScopedIsoProStorageKey(baseKey: string): string {
-  return getScopedIsoProStorageKeyForAmbienteId(baseKey, getAmbienteAtivoId());
+  return getScopedIsoProStorageKeyForAmbienteIdAndTenant(baseKey, getAmbienteAtivoId(), getActiveTenantId());
 }
 
-/** Sufixo estável para nome da base IndexedDB de blobs (evita misturar fotos entre obras). */
+/** Sufixo estável para nome da base IndexedDB de blobs (evita misturar fotos entre empresas/obras). */
 export function getAmbienteMediaDbSuffix(): string {
-  const id = getAmbienteAtivoId();
-  if (!id || id === 'padrao') return '';
-  return `::ambiente:${id}`;
+  const parts: string[] = [];
+  const tenant = getActiveTenantId();
+  if (tenant && tenant !== ISO_PRO_DEFAULT_TENANT_ID) {
+    parts.push(`tenant:${tenant}`);
+  }
+  const ambiente = getAmbienteAtivoId();
+  if (ambiente && ambiente !== 'padrao') {
+    parts.push(`ambiente:${ambiente}`);
+  }
+  return parts.length ? `::${parts.join('::')}` : '';
 }
 
 /**
- * `padrao`: chaves sem `::ambiente:`.
- * Outros: chaves que terminam com `::ambiente:<id>`.
+ * `padrao` + tenant default: chaves legadas sem sufixos.
+ * Outros tenants: `::tenant:<uuid>`; outras obras: `::ambiente:<id>` (combinavel).
  */
 export function isStorageKeyForAmbienteAtivo(fullKey: string): boolean {
-  const id = getAmbienteAtivoId();
-  if (!id || id === 'padrao') return !fullKey.includes('::ambiente:');
-  return fullKey.endsWith(`::ambiente:${id}`);
+  const { tenantId, ambienteId } = parseIsoProStorageKey(fullKey);
+  const activeTenant = getActiveTenantId();
+  const activeAmbiente = getAmbienteAtivoId();
+
+  const tenantOk =
+    activeTenant === ISO_PRO_DEFAULT_TENANT_ID ? tenantId === null : tenantId === activeTenant;
+  const ambienteOk =
+    !activeAmbiente || activeAmbiente === 'padrao' ? ambienteId === null : ambienteId === activeAmbiente;
+
+  return tenantOk && ambienteOk;
 }
 
 export function isIsoProManagedStorageKey(k: string): boolean {
@@ -175,10 +233,15 @@ export function removerAmbienteObra(id: string): boolean {
 
 export function limparChavesLocalStorageDoAmbienteId(ambienteId: string): void {
   const suffix = `::ambiente:${ambienteId}`;
+  const activeTenant = getActiveTenantId();
   const toRemove: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
-    if (k && k.endsWith(suffix)) toRemove.push(k);
+    if (!k || !k.endsWith(suffix)) continue;
+    const { tenantId } = parseIsoProStorageKey(k);
+    const tenantOk =
+      activeTenant === ISO_PRO_DEFAULT_TENANT_ID ? tenantId === null : tenantId === activeTenant;
+    if (tenantOk) toRemove.push(k);
   }
   for (const k of toRemove) localStorage.removeItem(k);
 }
