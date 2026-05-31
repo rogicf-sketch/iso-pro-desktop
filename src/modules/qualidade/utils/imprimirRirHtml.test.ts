@@ -39,21 +39,16 @@ function rirMinimo(overrides: Partial<RirRegistro> = {}): RirRegistro {
 }
 
 describe('montarHtmlRelatorioRirCompleto', () => {
-  it('usa cabecalho compacto em grelha com numeracao de folha', () => {
+  it('mantem layout classico original com folha e repeticao na impressao', () => {
     const html = montarHtmlRelatorioRirCompleto(rirMinimo());
-    expect(html).toContain('rir-hform');
+    expect(html).toContain('rir-classic-top');
+    expect(html).toContain('rir-classic-bar">Documentos');
+    expect(html).toContain('Material recebido (nota fiscal)');
+    expect(html).not.toContain('rir-hform');
     expect(html).toContain('rir-pagenum');
-    expect(html).toContain('Folha');
-    expect(html).toContain('rir-sheet-table');
+    expect(html).toContain('rir-thead-repeat');
     expect(html).toContain('display: table-header-group');
     expect(html).toContain('counter(page)');
     expect(html).toContain('Relatório de inspeção de recebimento (RIR)');
-  });
-
-  it('repete thead com colunas de material', () => {
-    const html = montarHtmlRelatorioRirCompleto(rirMinimo());
-    expect(html).toContain('rir-thead-banner');
-    expect(html).toContain('rir-thead-cols');
-    expect(html).toContain('Certificado');
   });
 });
