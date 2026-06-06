@@ -1,6 +1,9 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
-import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import {
+  avisarPreservacaoLocalStorageCorrupto,
+  notificarReparacaoLocalStorage,
+} from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
@@ -116,11 +119,35 @@ function cacheMateriaisLocalLegivel(): boolean {
   }
 }
 
+/** Com materiais na nuvem, o cadastro remoto e autoridade — nao alarmar por cache local legado/corrupto. */
+function deveExibirAvisoCacheMateriaisCorrupto(): boolean {
+  return !(shouldUseCloudMaterials() && hasSupabaseConfig());
+}
+
 /** Regrava a copia local quando o JSON esta corrupto mas a nuvem respondeu. */
 function repararCacheMateriaisLocalDesdeNuvem(items: Material[]): void {
   if (cacheMateriaisLocalLegivel()) return;
   writeAll(items);
+  notificarReparacaoLocalStorage(materiaisStorageKey());
   console.info('[I.S.O PRO] Cache local de materiais reparado automaticamente a partir da nuvem.');
+}
+
+/**
+ * Ao entrar na aplicacao (apos login), tenta reparar cache local ilegivel antes de outros modulos lerem `readAll()`.
+ */
+export async function tentarRepararCacheMateriaisLocalNaEntrada(): Promise<boolean> {
+  if (!shouldUseCloudMaterials() || !hasSupabaseConfig()) return false;
+  if (cacheMateriaisLocalLegivel()) return false;
+
+  try {
+    const remoto = shouldTryRemoteRead()
+      ? await withRemoteReadTimeout(() => listRemoteMaterials())
+      : await listRemoteMaterials();
+    repararCacheMateriaisLocalDesdeNuvem(remoto);
+    return cacheMateriaisLocalLegivel();
+  } catch {
+    return false;
+  }
 }
 
 function readAll(opts?: { silenciarAvisoCorrupto?: boolean }): Material[] {
@@ -143,12 +170,8 @@ function readAll(opts?: { silenciarAvisoCorrupto?: boolean }): Material[] {
     const parsed: unknown = JSON.parse(raw);
     const validated = parseMateriaisPersistidos(parsed);
     if (!validated) {
-      if (!opts?.silenciarAvisoCorrupto) {
-        const detalhe =
-          shouldUseCloudMaterials() && hasSupabaseConfig()
-            ? 'Com materiais na nuvem activos, o sistema tentara ler o cadastro no servidor; em Materiais use «Gravar copia local a partir da nuvem» se o aviso persistir.'
-            : undefined;
-        avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey(), detalhe);
+      if (!opts?.silenciarAvisoCorrupto && deveExibirAvisoCacheMateriaisCorrupto()) {
+        avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey());
       }
       return [];
     }
@@ -173,12 +196,8 @@ function readAll(opts?: { silenciarAvisoCorrupto?: boolean }): Material[] {
     }
     return next;
   } catch {
-    if (!opts?.silenciarAvisoCorrupto) {
-      const detalhe =
-        shouldUseCloudMaterials() && hasSupabaseConfig()
-          ? 'Com materiais na nuvem activos, o sistema tentara ler o cadastro no servidor; em Materiais use «Gravar copia local a partir da nuvem» se o aviso persistir.'
-          : undefined;
-      avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey(), detalhe);
+    if (!opts?.silenciarAvisoCorrupto && deveExibirAvisoCacheMateriaisCorrupto()) {
+      avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey());
     }
     return [];
   }
@@ -468,6 +487,7 @@ export async function sincronizarMateriaisNuvemParaArmazenamentoLocal(
       }
     }
     writeAll(items);
+    notificarReparacaoLocalStorage(materiaisStorageKey());
     invalidateIsoProSnapshotCache();
     const actor = opcoes?.actorLogin?.trim() || getCurrentUser()?.login || 'desconhecido';
     appendAuthAuditEvent({

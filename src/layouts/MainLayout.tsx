@@ -1,5 +1,9 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { tentarRepararCacheMateriaisLocalNaEntrada } from '../modules/materiais/services/materiais.service';
 import { LocalStorageCorruptoBanner } from '@/components/LocalStorageCorruptoBanner';
+import { SnapshotSessionBanner } from '@/components/SnapshotSessionBanner';
+import { SessionCloudStaleBanner } from '@/components/SessionCloudStaleBanner';
 import { GlobalConsultaRapida } from '@/components/GlobalConsultaRapida';
 import { AtendimentoOperacaoGuardProvider } from '../modules/atendimento/context/AtendimentoOperacaoGuard';
 import { useAtendimentoOperacaoGuard } from '../modules/atendimento/context/atendimentoOperacaoGuard.hooks';
@@ -20,6 +24,10 @@ function MainLayoutInner() {
     (item) => canAccessModule(item.modulo) && !('hideInSidebar' in item && item.hideInSidebar),
   );
   const titularLinha = getTitularSistemaLinhaResumo();
+
+  useEffect(() => {
+    void tentarRepararCacheMateriaisLocalNaEntrada();
+  }, []);
 
   function handleSidebarNav(event: React.MouseEvent, to: string) {
     if (!operacaoGuard?.isActive) return;
@@ -101,6 +109,8 @@ function MainLayoutInner() {
 
         <section className="page-content">
           <LocalStorageCorruptoBanner />
+          <SnapshotSessionBanner />
+          <SessionCloudStaleBanner />
           <GlobalConsultaRapida />
           <Outlet />
         </section>

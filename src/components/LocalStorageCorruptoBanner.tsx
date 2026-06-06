@@ -1,7 +1,9 @@
 import { useCallback, useLayoutEffect, useState } from 'react';
 import {
   ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT,
+  ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT,
   type LocalStorageInvalidoDetail,
+  type LocalStorageReparadoDetail,
 } from '@/lib/localStoragePreservacao';
 import { OperationalNotice } from '@/components/ui/OperationalNotice';
 
@@ -19,12 +21,22 @@ export function LocalStorageCorruptoBanner() {
   }, []);
 
   useLayoutEffect(() => {
-    const handler = (e: Event) => {
+    const onInvalido = (e: Event) => {
       const ce = e as CustomEvent<LocalStorageInvalidoDetail>;
       if (ce.detail) append(ce.detail);
     };
-    window.addEventListener(ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT, handler as EventListener);
-    return () => window.removeEventListener(ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT, handler as EventListener);
+    const onReparado = (e: Event) => {
+      const ce = e as CustomEvent<LocalStorageReparadoDetail>;
+      const key = ce.detail?.storageKey?.trim();
+      if (!key) return;
+      setItems((prev) => prev.filter((x) => x.storageKey !== key));
+    };
+    window.addEventListener(ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT, onInvalido as EventListener);
+    window.addEventListener(ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT, onReparado as EventListener);
+    return () => {
+      window.removeEventListener(ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT, onInvalido as EventListener);
+      window.removeEventListener(ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT, onReparado as EventListener);
+    };
   }, [append]);
 
   const dispensar = (id: string) => {

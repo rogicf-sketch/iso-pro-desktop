@@ -1,6 +1,13 @@
 /** Disparado quando uma chave do `localStorage` existente falha parse/validacao (UI pode avisar o utilizador). */
 export const ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT = 'iso-pro-local-storage-invalido';
 
+/** Disparado quando o cache local foi reparado (ex.: copia da nuvem) — a UI pode dispensar avisos dessa chave. */
+export const ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT = 'iso-pro-local-storage-reparado';
+
+export type LocalStorageReparadoDetail = {
+  storageKey: string;
+};
+
 export type LocalStorageInvalidoDetail = {
   modulo: string;
   storageKey: string;
@@ -22,4 +29,10 @@ export function avisarPreservacaoLocalStorageCorrupto(modulo: string, storageKey
     const detail: LocalStorageInvalidoDetail = { modulo, storageKey, detalhe };
     window.dispatchEvent(new CustomEvent(ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT, { detail }));
   }
+}
+
+export function notificarReparacaoLocalStorage(storageKey: string) {
+  if (typeof window === 'undefined' || !storageKey.trim()) return;
+  const detail: LocalStorageReparadoDetail = { storageKey };
+  window.dispatchEvent(new CustomEvent(ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT, { detail }));
 }
