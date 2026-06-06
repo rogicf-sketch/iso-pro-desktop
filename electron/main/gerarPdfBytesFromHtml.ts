@@ -1,0 +1,120 @@
+import { BrowserWindow, type WebContents } from 'electron';
+import { escreverRelatorioHtmlTemp } from './reportHtmlTemp';
+import { lerMetadadosPdfRelatorio, montarOpcoesPrintToPdfRelatorio } from './pdfPrintOptions';
+
+const LOAD_TIMEOUT_MS = 90_000;
+
+let pdfGenWindow: BrowserWindow | null = null;
+
+/** Pré-inicializa a janela oculta de PDF (reduz latência na primeira pré-visualização). */
+export function preaquecerGeradorPdf(): void {
+  if (pdfGenWindow && !pdfGenWindow.isDestroyed()) return;
+  obterJanelaGeracaoPdf();
+}
+
+/** Bloqueia pedidos HTTP externos na janela oculta (evita hang em logos/CDN). */
+function bloquearRedeExternaPdf(win: BrowserWindow): void {
+  win.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => {
+    callback({ cancel: true });
+  });
+}
+
+function obterJanelaGeracaoPdf(): BrowserWindow {
+  if (pdfGenWindow && !pdfGenWindow.isDestroyed()) {
+    return pdfGenWindow;
+  }
+  pdfGenWindow = new BrowserWindow({
+    show: false,
+    backgroundColor: '#ffffff',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  bloquearRedeExternaPdf(pdfGenWindow);
+  return pdfGenWindow;
+}
+
+/** Aguarda Paged.js concluir layout antes de gerar PDF. */
+export async function aguardarLayoutRelatorioHtml(
+  webContents: WebContents,
+  timeoutMs = 60_000,
+): Promise<void> {
+  await webContents.executeJavaScript(`
+    new Promise(function (resolve) {
+      if (!window.__relatorioUsaPagedJs) { resolve(); return; }
+      if (window.__relatorioPaginadoPronto) { resolve(); return; }
+      var t = setTimeout(function () { resolve(); }, ${timeoutMs});
+      document.addEventListener('relatorio-paginado-pronto', function () {
+        clearTimeout(t);
+        resolve();
+      }, { once: true });
+    })
+  `);
+}
+
+async function carregarHtmlNoBrowserWindow(win: BrowserWindow, htmlPath: string): Promise<void> {
+  const wc = win.webContents;
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          'Timeout ao carregar HTML para PDF. Verifique imagens externas ou tente sem «PDF na nuvem».',
+        ),
+      );
+    }, LOAD_TIMEOUT_MS);
+
+    const fail = (_e: unknown, code: number, desc: string) => {
+      clearTimeout(timer);
+      reject(new Error(`Falha ao carregar HTML (${code}): ${desc}`));
+    };
+
+    const finish = () => {
+      clearTimeout(timer);
+      wc.removeListener('did-fail-load', fail);
+      resolve();
+    };
+
+    wc.once('did-fail-load', fail);
+    wc.once('did-finish-load', finish);
+
+    void wc.loadFile(htmlPath).catch((err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+/** Gera bytes PDF a partir de HTML (Chromium printToPDF, fundos incluídos). Reutiliza janela oculta. */
+export async function gerarPdfBytesFromHtml(html: string): Promise<Buffer> {
+  if (!html.trim()) {
+    throw new Error('HTML inválido ou vazio.');
+  }
+
+  let bundle: Awaited<ReturnType<typeof escreverRelatorioHtmlTemp>> | null = null;
+  const win = obterJanelaGeracaoPdf();
+
+  try {
+    bundle = await escreverRelatorioHtmlTemp(html);
+    await carregarHtmlNoBrowserWindow(win, bundle.htmlPath);
+    await aguardarLayoutRelatorioHtml(win.webContents, 60_000);
+
+    const pdfMeta = await lerMetadadosPdfRelatorio(win.webContents);
+    if (pdfMeta) {
+      await win.webContents.executeJavaScript(`document.body.classList.add('iso-pdf-header-native')`);
+    }
+    try {
+      return await win.webContents.printToPDF(montarOpcoesPrintToPdfRelatorio(pdfMeta));
+    } finally {
+      if (pdfMeta) {
+        await win.webContents
+          .executeJavaScript(`document.body.classList.remove('iso-pdf-header-native')`)
+          .catch(() => undefined);
+      }
+    }
+  } finally {
+    await bundle?.remove();
+  }
+}

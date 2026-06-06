@@ -5,7 +5,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { AtendimentoBuscaDocumento } from '../components/AtendimentoBuscaDocumento';
@@ -102,6 +102,7 @@ export function AtendimentoPage() {
     reciboSessaoOpcional,
     dispensarImpressaoReciboSessao,
     imprimirReciboSessaoEfechar,
+    reciboImprimindo,
   } = useAtendimento();
   const canEdit = canAccessAction('atendimento', 'editar');
   const canAdminister = canAccessAction('atendimento', 'administrar');
@@ -237,7 +238,12 @@ export function AtendimentoPage() {
     try {
       const dados = await montarDadosReciboParaAtendimento(item);
       const html = montarHtmlRecibo(dados);
-      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      const res = await preVisualizarRelatorioProfissional({
+        html,
+        fileName: nomeArquivoRelatorioPdf(item.numero, 'recibo'),
+        titulo: `Recibo ${item.numero}`,
+        tipoNuvem: 'recibo_atendimento',
+      });
       if (!res.ok) {
         window.alert(
           res.error ??
@@ -254,7 +260,12 @@ export function AtendimentoPage() {
     setReciboSessaoPreviewLoading(true);
     try {
       const html = montarHtmlReciboConsolidado(reciboSessaoOpcional);
-      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      const res = await preVisualizarRelatorioProfissional({
+        html,
+        fileName: nomeArquivoRelatorioPdf(reciboSessaoOpcional.referencia, 'recibo-consolidado'),
+        titulo: `Recibo consolidado ${reciboSessaoOpcional.referencia}`,
+        tipoNuvem: 'recibo_sessao',
+      });
       if (!res.ok) {
         window.alert(
           res.error ??
@@ -546,15 +557,19 @@ export function AtendimentoPage() {
                 Nao
               </Button>
               <Button
-                disabled={reciboSessaoPreviewLoading}
+                disabled={reciboSessaoPreviewLoading || reciboImprimindo}
                 onClick={() => void handleVisualizarReciboSessaoConsolidada()}
                 type="button"
                 variant="ghost"
               >
                 {reciboSessaoPreviewLoading ? 'Abrindo...' : 'Visualizar recibo'}
               </Button>
-              <Button onClick={imprimirReciboSessaoEfechar} type="button">
-                Sim, imprimir recibo unico
+              <Button
+                disabled={reciboImprimindo}
+                onClick={() => void imprimirReciboSessaoEfechar()}
+                type="button"
+              >
+                {reciboImprimindo ? 'A gerar PDF…' : 'Sim, imprimir recibo unico'}
               </Button>
             </div>
           </div>
@@ -720,8 +735,13 @@ export function AtendimentoPage() {
                   <Button onClick={fecharModalEstorno} type="button" variant="ghost">
                     Cancelar
                   </Button>
-                  <Button onClick={() => void executarImpressaoReciboEstorno()} type="button" variant="ghost">
-                    Imprimir recibo de estorno
+                  <Button
+                    disabled={reciboImprimindo}
+                    onClick={() => void executarImpressaoReciboEstorno()}
+                    type="button"
+                    variant="ghost"
+                  >
+                    {reciboImprimindo ? 'A gerar PDF…' : 'Imprimir recibo de estorno'}
                   </Button>
                   <Button onClick={() => void confirmarEstornoFinal()} ref={estornoConfirmarRef} type="button" variant="danger">
                     Confirmar estorno
@@ -748,8 +768,8 @@ export function AtendimentoPage() {
               <Button onClick={dispensarImpressaoRecibo} type="button" variant="ghost">
                 Nao
               </Button>
-              <Button onClick={imprimirReciboEfechar} type="button">
-                Sim, imprimir
+              <Button disabled={reciboImprimindo} onClick={() => void imprimirReciboEfechar()} type="button">
+                {reciboImprimindo ? 'A gerar PDF…' : 'Sim, imprimir'}
               </Button>
             </div>
           </div>
@@ -771,8 +791,8 @@ export function AtendimentoPage() {
               <Button onClick={dispensarImpressaoReciboEstorno} type="button" variant="ghost">
                 Nao
               </Button>
-              <Button onClick={imprimirReciboEstornoEfechar} type="button">
-                Sim, imprimir
+              <Button disabled={reciboImprimindo} onClick={() => void imprimirReciboEstornoEfechar()} type="button">
+                {reciboImprimindo ? 'A gerar PDF…' : 'Sim, imprimir'}
               </Button>
             </div>
           </div>

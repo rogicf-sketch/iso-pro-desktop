@@ -1,13 +1,13 @@
 import {
-  abrirImpressaoHtmlRelatorio,
   cssBarraPreVisualizacaoImpressaoHtml,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
   htmlBarraPreVisualizacaoImpressao,
   htmlBlocoLogoInstitucional,
-  segmentoInstituicaoRodapeEletronico,
   scriptBarraPreVisualizacaoImpressao,
+  segmentoInstituicaoRodapeEletronico,
 } from '../../../lib/htmlRelatorioInstitucional';
+import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { DadosReciboEstorno } from '../types/atendimento.types';
@@ -158,6 +158,11 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
 </html>`;
 }
 
-export function imprimirReciboEstorno(dados: DadosReciboEstorno): boolean {
-  return abrirImpressaoHtmlRelatorio(montarHtmlReciboEstorno(dados));
+export async function imprimirReciboEstorno(dados: DadosReciboEstorno): Promise<boolean> {
+  return imprimirRelatorioProfissional({
+    html: montarHtmlReciboEstorno(dados),
+    fileName: nomeArquivoRelatorioPdf(dados.atendimento.numero, 'estorno'),
+    titulo: `Recibo estorno ${dados.atendimento.numero}`,
+    tipoNuvem: 'recibo_estorno',
+  });
 }

@@ -21,8 +21,62 @@ declare global {
       printHtml?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       /** IPC: gera PDF com fundos (`printToPDF`), mais fiável que «Guardar como PDF» na impressão. */
       saveHtmlAsPdf?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: PDF da janela de pré-visualização (já paginada pelo Paged.js). */
+      savePdfJanelaAtual?: () => Promise<{ ok: true } | { ok: false; error: string }>;
       /** IPC: pré-visualização de HTML numa janela (evita pop-up bloqueado / `window.open` null). */
       previewHtml?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: RIR em PDF programático (pdf-lib) — guardar, imprimir, pré-visualizar. */
+      saveRirPdf?: (base64: string, defaultName: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      printRirPdf?: (base64: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      previewRirPdf?: (
+        base64: string,
+        titulo: string,
+        defaultName: string,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: gera PDF + abre preview no processo principal (mais rápido). */
+      previewRirPdfFromHtml?: (
+        html: string,
+        titulo: string,
+        defaultName: string,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      openRirPdfExterno?: (base64: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: PDF genérico (HTML → bytes → preview/guardar/imprimir). */
+      gerarPdfBytesFromHtml?: (
+        html: string,
+      ) => Promise<
+        | { ok: true; base64: string; bytes?: number }
+        | { ok: false; error: string }
+      >;
+      saveReportPdf?: (
+        base64: string,
+        defaultName: string,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      printReportPdf?: (base64: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      previewReportPdf?: (
+        base64: string,
+        titulo: string,
+        defaultName: string,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** IPC: gera PDF + abre preview no processo principal (mais rápido; todos os relatórios HTML). */
+      previewReportPdfFromHtml?: (
+        html: string,
+        titulo: string,
+        defaultName: string,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      gerarRirPdfBytes?: (
+        ctx: unknown,
+      ) => Promise<
+        | { ok: true; base64: string; fonteFamilia?: string; fontRegularBytes?: number; fontBoldBytes?: number }
+        | { ok: false; error: string }
+      >;
+      diagnosticarRirPdfFontes?: () => Promise<
+        | { ok: true; regularBytes: number; boldBytes: number; dirs: unknown }
+        | { ok: false; error: string; dirs?: unknown }
+      >;
+      loadRirPdfFontesEmbutidas?: () => Promise<
+        | { ok: true; familia: string; regular: string; bold: string }
+        | { ok: false; reason?: string }
+      >;
       /** IPC: contexto OCI backup (cliente/projeto das Configurações → ficheiro em userData). */
       writeOciUploadContext?: (payload: { cliente: string; projeto: string }) => Promise<
         { ok: true; path: string } | { ok: false; error: string }

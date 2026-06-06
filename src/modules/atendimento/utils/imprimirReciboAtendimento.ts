@@ -1,16 +1,20 @@
 import {
-  abrirImpressaoHtmlRelatorio,
+  cssBarraPreVisualizacaoImpressaoHtml,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
+  htmlBarraPreVisualizacaoImpressao,
   htmlBlocoLogoInstitucional,
+  scriptBarraPreVisualizacaoImpressao,
   segmentoInstituicaoRodapeEletronico,
 } from '../../../lib/htmlRelatorioInstitucional';
+import {
+  guardarRelatorioProfissional,
+  imprimirRelatorioProfissional,
+  nomeArquivoRelatorioPdf,
+} from '../../../lib/relatorioProfissional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { resolverUrlLogoInstitucional, resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { Atendimento, DadosReciboAtendimento, DadosReciboSessaoConsolidada } from '../types/atendimento.types';
-
-/** @deprecated Use LEGACY_LOGO_STORAGE_KEY em `logoInstitucional.ts`. Mantido para compatibilidade de import. */
-export { LEGACY_LOGO_STORAGE_KEY as RECIBO_LOGO_STORAGE_KEY } from '../../../lib/logoInstitucional';
 
 function totalQuantidadeItens(at: Atendimento): number {
   return at.itens.reduce((acc, it) => acc + (Number(it.quantidadeAtendida) || 0), 0);
@@ -103,10 +107,12 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   <title>Recibo ${escapeHtmlRelatorio(at.numero)}</title>
   <style>
     ${cssInstitucionalRelatorio()}
+    ${cssBarraPreVisualizacaoImpressaoHtml()}
     ${extraRecibo}
   </style>
 </head>
 <body class="recibo-body">
+  ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
   <div class="inst-topbar recibo-topbar">
     <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
@@ -176,6 +182,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   </section>
   <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(at.numero)}.</p>
   </div>
+  ${scriptBarraPreVisualizacaoImpressao()}
 </body>
 </html>`;
 }
@@ -191,9 +198,24 @@ export function criarBlobUrlVisualizacaoRecibo(dados: DadosReciboAtendimento): s
   return URL.createObjectURL(blob);
 }
 
-/** @returns false se o navegador bloqueou a nova janela (popup). */
-export function imprimirReciboAtendimento(dados: DadosReciboAtendimento): boolean {
-  return abrirImpressaoHtmlRelatorio(montarHtmlRecibo(dados));
+/** Abre pré-visualização do recibo (aguarda geração do PDF). */
+export async function imprimirReciboAtendimento(dados: DadosReciboAtendimento): Promise<boolean> {
+  return imprimirRelatorioProfissional({
+    html: montarHtmlRecibo(dados),
+    fileName: nomeArquivoRelatorioPdf(dados.atendimento.numero, 'recibo'),
+    titulo: `Recibo ${dados.atendimento.numero}`,
+    tipoNuvem: 'recibo_atendimento',
+  });
+}
+
+export async function guardarReciboAtendimentoPdf(
+  dados: DadosReciboAtendimento,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return guardarRelatorioProfissional({
+    html: montarHtmlRecibo(dados),
+    fileName: nomeArquivoRelatorioPdf(dados.atendimento.numero, 'recibo'),
+    tipoNuvem: 'recibo_atendimento',
+  });
 }
 
 function totalQuantidadeSecao(at: Atendimento): number {
@@ -491,10 +513,12 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
   <title>Recibo consolidado ${escapeHtmlRelatorio(dados.referencia)}</title>
   <style>
     ${cssInstitucionalRelatorio()}
+    ${cssBarraPreVisualizacaoImpressaoHtml()}
     ${extraRecibo}
   </style>
 </head>
 <body class="recibo-body">
+  ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
   <div class="inst-topbar recibo-topbar">
     <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
@@ -548,10 +572,16 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
   </section>
   <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Lotes: ${lotesRodape}.</p>
   </div>
+  ${scriptBarraPreVisualizacaoImpressao()}
 </body>
 </html>`;
 }
 
-export function imprimirReciboSessaoConsolidada(dados: DadosReciboSessaoConsolidada): boolean {
-  return abrirImpressaoHtmlRelatorio(montarHtmlReciboConsolidado(dados));
+export async function imprimirReciboSessaoConsolidada(dados: DadosReciboSessaoConsolidada): Promise<boolean> {
+  return imprimirRelatorioProfissional({
+    html: montarHtmlReciboConsolidado(dados),
+    fileName: nomeArquivoRelatorioPdf(dados.referencia, 'recibo-consolidado'),
+    titulo: `Recibo consolidado ${dados.referencia}`,
+    tipoNuvem: 'recibo_sessao',
+  });
 }

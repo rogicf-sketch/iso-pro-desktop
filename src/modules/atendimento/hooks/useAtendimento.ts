@@ -278,6 +278,8 @@ export function useAtendimento() {
   const [reciboOpcional, setReciboOpcional] = useState<DadosReciboAtendimento | null>(null);
   /** Apos estorno confirmado: oferecer impressao do recibo de estorno. */
   const [reciboEstornoOpcional, setReciboEstornoOpcional] = useState<DadosReciboEstorno | null>(null);
+  /** Geração/abertura de recibo em curso (evita fechar modal antes do PDF abrir). */
+  const [reciboImprimindo, setReciboImprimindo] = useState(false);
 
   /** Modal de estorno: dados do documento + campos obrigatorios + recibo de estorno. */
   const [estornoAlvo, setEstornoAlvo] = useState<Atendimento | null>(null);
@@ -850,16 +852,22 @@ export function useAtendimento() {
     setReciboSessaoOpcional(null);
   }
 
-  function imprimirReciboSessaoEfechar() {
-    if (reciboSessaoOpcional) {
-      const ok = imprimirReciboSessaoConsolidada(reciboSessaoOpcional);
+  async function imprimirReciboSessaoEfechar() {
+    if (!reciboSessaoOpcional) return;
+    setReciboImprimindo(true);
+    setError('');
+    try {
+      const ok = await imprimirReciboSessaoConsolidada(reciboSessaoOpcional);
       if (!ok) {
         setError(
           'Nao foi possivel abrir a janela do recibo. Desative o bloqueador de popups para este site e tente de novo.',
         );
+        return;
       }
+      setReciboSessaoOpcional(null);
+    } finally {
+      setReciboImprimindo(false);
     }
-    setReciboSessaoOpcional(null);
   }
 
   const continuarLeitorBipando = useCallback(() => {
@@ -1155,16 +1163,22 @@ export function useAtendimento() {
     setReciboOpcional(null);
   }
 
-  function imprimirReciboEfechar() {
-    if (reciboOpcional) {
-      const ok = imprimirReciboAtendimento(reciboOpcional);
+  async function imprimirReciboEfechar() {
+    if (!reciboOpcional) return;
+    setReciboImprimindo(true);
+    setError('');
+    try {
+      const ok = await imprimirReciboAtendimento(reciboOpcional);
       if (!ok) {
         setError(
           'Nao foi possivel abrir a janela do recibo. Desative o bloqueador de popups para este site e tente de novo.',
         );
+        return;
       }
+      setReciboOpcional(null);
+    } finally {
+      setReciboImprimindo(false);
     }
-    setReciboOpcional(null);
   }
 
   function submitAtendimento() {
@@ -1236,14 +1250,20 @@ export function useAtendimento() {
     setReciboEstornoOpcional(null);
   }
 
-  function imprimirReciboEstornoEfechar() {
-    if (reciboEstornoOpcional) {
-      const ok = imprimirReciboEstorno(reciboEstornoOpcional);
+  async function imprimirReciboEstornoEfechar() {
+    if (!reciboEstornoOpcional) return;
+    setReciboImprimindo(true);
+    setError('');
+    try {
+      const ok = await imprimirReciboEstorno(reciboEstornoOpcional);
       if (!ok) {
         setError('Nao foi possivel abrir a janela do recibo de estorno. Desative o bloqueador de popups.');
+        return;
       }
+      setReciboEstornoOpcional(null);
+    } finally {
+      setReciboImprimindo(false);
     }
-    setReciboEstornoOpcional(null);
   }
 
   async function iniciarEstorno(item: Atendimento) {
@@ -1291,11 +1311,15 @@ export function useAtendimento() {
         itensRecibo,
         parcial,
       );
-      if (!imprimirReciboEstorno(dados)) {
+      setReciboImprimindo(true);
+      const ok = await imprimirReciboEstorno(dados);
+      if (!ok) {
         setError('Nao foi possivel abrir a janela de impressao. Desative o bloqueador de popups.');
       }
     } catch {
       setError('Nao foi possivel montar o recibo de estorno.');
+    } finally {
+      setReciboImprimindo(false);
     }
   }
 
@@ -1426,6 +1450,7 @@ export function useAtendimento() {
     reciboSessaoOpcional,
     dispensarImpressaoReciboSessao,
     imprimirReciboSessaoEfechar,
+    reciboImprimindo,
   };
 }
 
