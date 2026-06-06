@@ -5,6 +5,7 @@ import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv
 import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
+import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { getErrorMessage } from '../../../lib/service-result';
 import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
@@ -105,7 +106,24 @@ const seedData: Material[] = [
   },
 ];
 
-function readAll(): Material[] {
+function cacheMateriaisLocalLegivel(): boolean {
+  const raw = localStorage.getItem(materiaisStorageKey());
+  if (!raw) return true;
+  try {
+    return parseMateriaisPersistidos(JSON.parse(raw) as unknown) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Regrava a copia local quando o JSON esta corrupto mas a nuvem respondeu. */
+function repararCacheMateriaisLocalDesdeNuvem(items: Material[]): void {
+  if (cacheMateriaisLocalLegivel()) return;
+  writeAll(items);
+  console.info('[I.S.O PRO] Cache local de materiais reparado automaticamente a partir da nuvem.');
+}
+
+function readAll(opts?: { silenciarAvisoCorrupto?: boolean }): Material[] {
   const raw = localStorage.getItem(materiaisStorageKey());
   if (!raw) {
     let initial = seedData.map(normalizarMaterialLeitura);
@@ -125,7 +143,13 @@ function readAll(): Material[] {
     const parsed: unknown = JSON.parse(raw);
     const validated = parseMateriaisPersistidos(parsed);
     if (!validated) {
-      avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey());
+      if (!opts?.silenciarAvisoCorrupto) {
+        const detalhe =
+          shouldUseCloudMaterials() && hasSupabaseConfig()
+            ? 'Com materiais na nuvem activos, o sistema tentara ler o cadastro no servidor; em Materiais use «Gravar copia local a partir da nuvem» se o aviso persistir.'
+            : undefined;
+        avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey(), detalhe);
+      }
       return [];
     }
     const withNorm = validated.map(normalizarMaterialLeitura);
@@ -149,7 +173,13 @@ function readAll(): Material[] {
     }
     return next;
   } catch {
-    avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey());
+    if (!opts?.silenciarAvisoCorrupto) {
+      const detalhe =
+        shouldUseCloudMaterials() && hasSupabaseConfig()
+          ? 'Com materiais na nuvem activos, o sistema tentara ler o cadastro no servidor; em Materiais use «Gravar copia local a partir da nuvem» se o aviso persistir.'
+          : undefined;
+      avisarPreservacaoLocalStorageCorrupto('Materiais', materiaisStorageKey(), detalhe);
+    }
     return [];
   }
 }
@@ -350,10 +380,20 @@ function formParaPayloadNuvem(form: MaterialFormData, codigoBarras: string) {
 
 async function loadMateriaisBase(): Promise<Material[]> {
   if (!shouldUseCloudMaterials()) return readAll();
+  if (!hasSupabaseConfig()) return readAll();
+
   try {
-    return await listRemoteMaterials();
+    const remoto = shouldTryRemoteRead()
+      ? await withRemoteReadTimeout(() => listRemoteMaterials())
+      : await listRemoteMaterials();
+    repararCacheMateriaisLocalDesdeNuvem(remoto);
+    return remoto;
   } catch (error) {
-    throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
+    if (shouldTryRemoteRead()) {
+      throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
+    }
+    console.warn('[I.S.O PRO] Materiais na nuvem indisponiveis; usando copia local.', error);
+    return readAll();
   }
 }
 
@@ -363,7 +403,7 @@ async function loadMateriaisBase(): Promise<Material[]> {
  * e o saldo ainda vem do movimento consolidado na nuvem (mesma regra do atendimento).
  */
 async function aplicarSaldoCalculadoNosMateriais(materiais: Material[]): Promise<Material[]> {
-  if (!hasSupabaseConfig()) {
+  if (!shouldTryRemoteRead()) {
     return materiais;
   }
   try {
