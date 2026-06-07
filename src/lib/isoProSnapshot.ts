@@ -1,6 +1,8 @@
 import { parseIsoSnapshotPayloadFromUnknown, type IsoSnapshotPayload } from 'iso-pro-shared';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase } from './supabase';
+import { invalidateSnapshotDerivedCaches } from './snapshotDerivedCache';
+import { notifySnapshotConflict, requestSnapshotRefresh } from './snapshotSessionSync';
 
 /** Intersecção para o genérico do snapshot (JSON em `iso_pro_snapshot.payload`). */
 type IsoSnapshotPayloadRecord = IsoSnapshotPayload & Record<string, unknown>;
@@ -17,6 +19,7 @@ export function invalidateIsoProSnapshotCache() {
   cachedPayload = null;
   cachedAt = 0;
   inflightRead = null;
+  invalidateSnapshotDerivedCaches();
 }
 
 function snapshotCopy<T extends Record<string, unknown>>(payload: Record<string, unknown>): T {
@@ -151,18 +154,25 @@ export async function commitIsoProSnapshotWrite(
   prepare: () => Promise<IsoProSnapshotWritePlan>,
   options?: { maxAttempts?: number },
 ): Promise<void> {
-  const maxAttempts = Math.max(1, options?.maxAttempts ?? 3);
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? 5);
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const { nextPayload, baselineUpdatedAt } = await prepare();
     try {
       await upsertIsoProSnapshotPayload(nextPayload, baselineUpdatedAt);
+      if (attempt > 0) {
+        requestSnapshotRefresh({ reason: 'Gravacao concluida apos sincronizacao com o servidor.' });
+      }
       return;
     } catch (error) {
       lastError = error;
       if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
         continue;
+      }
+      if (isIsoProSnapshotConflictError(error)) {
+        notifySnapshotConflict({ message: SNAPSHOT_CONFLICT_MESSAGE });
       }
       throw error;
     }

@@ -57,6 +57,8 @@ declare global {
         titulo: string,
         defaultName: string,
       ) => Promise<{ ok: true } | { ok: false; error: string }>;
+      /** Abre janela «A gerar PDF…» antes de montar HTML (feedback imediato ao utilizador). */
+      beginReportPdfPreviewLoading?: (titulo: string) => Promise<{ ok: true }>;
       /** IPC: gera PDF + abre preview no processo principal (mais rápido; todos os relatórios HTML). */
       previewReportPdfFromHtml?: (
         html: string,

@@ -3,6 +3,7 @@ import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStorage
 import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { parseDocumentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   contarRegistosArrayLocalStorage,
@@ -35,6 +36,7 @@ import type {
 } from '../types/documento.types';
 import { listarDocumentosComAtendimentoVinculado } from '../../atendimento/services/atendimento.service';
 import { construirJsonImportacaoDocumentosPlanoCsv } from './documentos.import.csv';
+import { imprimirPlanejamentoCampoHtml } from '../utils/imprimirPlanejamentoCampoHtml';
 import {
   aplicarStatusPlanejamentoEmDocumentos,
   montarLocalizacoesPorCodigoMaterial,
@@ -57,8 +59,54 @@ import {
   yieldCooperativeEveryRows,
   yieldToMain,
 } from '../../../lib/yieldCooperativeImport';
+import { registerSnapshotDerivedCacheInvalidator } from '../../../lib/snapshotDerivedCache';
 
 export { previewImportacaoDocumentosCsv } from './documentos.import.csv';
+
+type PlanejamentoDocumentosBundle = {
+  documentos: Documento[];
+  recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>>;
+  enriched: Documento[];
+  metricas: Map<string, MetricasPorCodigoMaterial>;
+  localizacoesRecebimentoPorCodigo: Map<string, string>;
+};
+
+let planejamentoBundleCache: PlanejamentoDocumentosBundle | null = null;
+let planejamentoBundleInflight: Promise<PlanejamentoDocumentosBundle> | null = null;
+
+function invalidatePlanejamentoDocumentosBundle(): void {
+  planejamentoBundleCache = null;
+  planejamentoBundleInflight = null;
+}
+
+registerSnapshotDerivedCacheInvalidator(invalidatePlanejamentoDocumentosBundle);
+
+/** Uma leitura partilhada (documentos + recebimentos + metricas) — evita recarregar tudo em cada «Visualizar». */
+async function obterBundlePlanejamentoDocumentos(): Promise<PlanejamentoDocumentosBundle> {
+  if (planejamentoBundleCache) return planejamentoBundleCache;
+  if (planejamentoBundleInflight) return planejamentoBundleInflight;
+
+  planejamentoBundleInflight = (async () => {
+    const { data: documentos } = await carregarDocumentosBase();
+    const recebimentos = await carregarRecebimentosCompletos();
+    const enriched = aplicarStatusPlanejamentoEmDocumentos(documentos, recebimentos);
+    const bundle: PlanejamentoDocumentosBundle = {
+      documentos,
+      recebimentos,
+      enriched,
+      metricas: montarMetricasPorCodigoMaterial(documentos, recebimentos),
+      localizacoesRecebimentoPorCodigo: montarLocalizacoesPorCodigoMaterial(recebimentos),
+    };
+    planejamentoBundleCache = bundle;
+    return bundle;
+  })();
+
+  try {
+    return await planejamentoBundleInflight;
+  } finally {
+    planejamentoBundleInflight = null;
+  }
+}
 
 function formatarErroExclusaoBloqueadaPorAtendimento(
   items: Awaited<ReturnType<typeof listarDocumentosComAtendimentoVinculado>>,
@@ -254,19 +302,14 @@ function readAll(): Documento[] {
 
 function writeAll(items: Documento[]) {
   localStorage.setItem(documentosStorageKey(), JSON.stringify(items));
+  invalidatePlanejamentoDocumentosBundle();
 }
 
 async function loadDocumentos(): Promise<Documento[]> {
-  let base: Documento[];
-  if (hasSupabaseConfig()) {
-    try {
-      base = await readSnapshotDocumentos();
-    } catch (error) {
-      throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
-    }
-  } else {
-    base = readAll();
-  }
+  const base = await readRemoteOrLocal({
+    readRemote: readSnapshotDocumentos,
+    readLocal: readAll,
+  });
   return persistirLimpezaItensSemCadastroMaterial(base);
 }
 
@@ -277,7 +320,7 @@ async function carregarDocumentosBase(): Promise<{
   const data = await loadDocumentos();
   return {
     data,
-    meta: { source: hasSupabaseConfig() ? 'supabase' : 'local' },
+    meta: { source: shouldTryRemoteRead() ? 'supabase' : 'local' },
   };
 }
 
@@ -513,9 +556,10 @@ export async function listarDocumentos(
   filtro: DocumentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<DocumentoListItem>>> {
   try {
-    const { data: rawItems, meta } = await carregarDocumentosBase();
-    const recebimentos = await carregarRecebimentosCompletos();
-    const comStatusPlanejamento = aplicarStatusPlanejamentoEmDocumentos(rawItems, recebimentos);
+    const { enriched: comStatusPlanejamento } = await obterBundlePlanejamentoDocumentos();
+    const meta: NonNullable<ServiceResult<Documento[]>['meta']> = {
+      source: shouldTryRemoteRead() ? 'supabase' : 'local',
+    };
     const items = aplicarFiltrosListaDocumentos(comStatusPlanejamento, filtro);
 
     const start = (filtro.page - 1) * filtro.pageSize;
@@ -542,9 +586,7 @@ export async function listarDocumentos(
 /** IDs de todos os documentos que correspondem ao filtro (ignora paginacao). */
 export async function obterIdsDocumentosFiltrados(filtro: DocumentoFiltro): Promise<ServiceResult<string[]>> {
   try {
-    const { data: rawItems } = await carregarDocumentosBase();
-    const recebimentos = await carregarRecebimentosCompletos();
-    const comStatus = aplicarStatusPlanejamentoEmDocumentos(rawItems, recebimentos);
+    const { enriched: comStatus } = await obterBundlePlanejamentoDocumentos();
     const filtered = aplicarFiltrosListaDocumentos(comStatus, filtro);
     return { success: true, data: filtered.map((d) => d.id) };
   } catch (error) {
@@ -562,9 +604,7 @@ export async function obterResumosDocumentosParaExclusao(
   const unique = [...new Set(ids)].filter(Boolean);
   if (!unique.length) return { success: true, data: [] };
   try {
-    const { data: rawItems } = await carregarDocumentosBase();
-    const recebimentos = await carregarRecebimentosCompletos();
-    const enriched = aplicarStatusPlanejamentoEmDocumentos(rawItems, recebimentos);
+    const { enriched } = await obterBundlePlanejamentoDocumentos();
     const idSet = new Set(unique);
     const res = enriched
       .filter((d) => idSet.has(d.id))
@@ -854,12 +894,6 @@ export async function excluirDocumentoDefinitivamente(
   return { success: true, data: { removido: true }, meta: r.meta };
 }
 
-async function obterDocumentosEnriquecidosParaLookup(): Promise<Documento[]> {
-  const { data } = await carregarDocumentosBase();
-  const recebimentos = await carregarRecebimentosCompletos();
-  return aplicarStatusPlanejamentoEmDocumentos(data, recebimentos);
-}
-
 function normalizarNumeroDocumentoBusca(numero: string): string {
   return numero
     .normalize('NFKC')
@@ -905,11 +939,10 @@ export async function buscarDocumentoPorIdOuNumero(
   id: string,
   numeroFallback?: string | null,
 ): Promise<ServiceResult<Documento>> {
-  const enriched = await obterDocumentosEnriquecidosParaLookup();
+  const { enriched, recebimentos } = await obterBundlePlanejamentoDocumentos();
   const foundClean = localizarDocumentoNaLista(enriched, id, numeroFallback);
   if (foundClean) return { success: true, data: foundClean };
 
-  const recebimentos = await carregarRecebimentosCompletos();
   const snapshotDocs = await readSnapshotDocumentos();
   const brutos = aplicarStatusPlanejamentoEmDocumentos(snapshotDocs, recebimentos);
   const foundRaw = localizarDocumentoNaLista(brutos, id, numeroFallback);
@@ -939,19 +972,10 @@ export async function carregarTodosDocumentosOrdenados(): Promise<ServiceResult<
   }
 }
 
-async function carregarDocumentosERecebimentosBasePlanejamento(): Promise<{
-  documentos: Documento[];
-  recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>>;
-}> {
-  const { data } = await carregarDocumentosBase();
-  const recebimentos = await carregarRecebimentosCompletos();
-  return { documentos: data, recebimentos };
-}
-
 /** Metragens globais por codigo (documentos + recebimentos) para colunas de status no editor e na visualizacao. */
 export async function carregarMetricasPlanejamentoPorCodigo(): Promise<Map<string, MetricasPorCodigoMaterial>> {
-  const { documentos, recebimentos } = await carregarDocumentosERecebimentosBasePlanejamento();
-  return montarMetricasPorCodigoMaterial(documentos, recebimentos);
+  const { metricas } = await obterBundlePlanejamentoDocumentos();
+  return metricas;
 }
 
 /** Metricas de status + mapa de localizacoes agregadas por codigo (recebimentos), numa unica leitura. */
@@ -959,11 +983,37 @@ export async function carregarMetricasELocalizacoesPlanejamentoPorCodigo(): Prom
   metricas: Map<string, MetricasPorCodigoMaterial>;
   localizacoesRecebimentoPorCodigo: Map<string, string>;
 }> {
-  const { documentos, recebimentos } = await carregarDocumentosERecebimentosBasePlanejamento();
-  return {
-    metricas: montarMetricasPorCodigoMaterial(documentos, recebimentos),
-    localizacoesRecebimentoPorCodigo: montarLocalizacoesPorCodigoMaterial(recebimentos),
-  };
+  const { metricas, localizacoesRecebimentoPorCodigo } = await obterBundlePlanejamentoDocumentos();
+  return { metricas, localizacoesRecebimentoPorCodigo };
+}
+
+/**
+ * Abre a folha de campo (PDF) numa janela separada — sem modal dentro do sistema.
+ * Usa cache partilhado e, no desktop, janela «A gerar PDF…» imediata.
+ */
+export async function visualizarPlanejamentoCampoPorId(
+  item: Pick<DocumentoListItem, 'id' | 'numero' | 'revisao'>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const titulo = `Planejamento — ${item.numero} Rev. ${item.revisao}`;
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+  void api?.beginReportPdfPreviewLoading?.(titulo);
+
+  const bundle = await obterBundlePlanejamentoDocumentos();
+  let doc = bundle.enriched.find((d) => d.id === item.id) ?? null;
+  if (!doc) {
+    const fallback = await buscarDocumentoPorId(item.id);
+    if (!fallback.success || !fallback.data) {
+      return { ok: false, error: fallback.error ?? 'Documento nao encontrado.' };
+    }
+    doc = fallback.data;
+  }
+
+  const ok = await imprimirPlanejamentoCampoHtml(
+    doc,
+    bundle.metricas,
+    bundle.localizacoesRecebimentoPorCodigo,
+  );
+  return ok ? { ok: true } : { ok: false, error: 'Nao foi possivel abrir a pre-visualizacao.' };
 }
 
 function extrairListaDocumentosDoImport(

@@ -1,5 +1,6 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -11,6 +12,7 @@ import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.cl
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { invalidateSnapshotDerivedCaches } from '../../../lib/snapshotDerivedCache';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { coerceRecebimentoQuantidade, roundPesoKg } from '../../../lib/parseDecimal';
 import { normalizarDataFlexivelParaIso } from '../../../lib/normalizeFlexibleDateToIso';
@@ -319,17 +321,18 @@ function readAll(): Recebimento[] {
 
 function writeAll(items: Recebimento[]) {
   localStorage.setItem(recebimentosStorageKey(), JSON.stringify(items));
+  invalidateSnapshotDerivedCaches();
 }
 
 async function loadRecebimentos(): Promise<Recebimento[]> {
-  const raw = hasSupabaseConfig() ? await readSnapshotRecebimentos().catch(() => readAll()) : readAll();
+  const raw = await readRemoteOrLocal({ readRemote: readSnapshotRecebimentos, readLocal: readAll });
   return enriquecerRecebimentosComPesoCadastroMateriais(raw);
 }
 
 /** Carrega todos os recebimentos (Supabase com fallback local) — usado no planejamento de documentos. */
 export async function carregarRecebimentosCompletos(): Promise<Recebimento[]> {
   const { data } = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotRecebimentos(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
@@ -677,7 +680,7 @@ export async function listarRecebimentos(
   filtro: RecebimentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<RecebimentoListItem>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotRecebimentos(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
@@ -705,7 +708,7 @@ export async function listarRecebimentos(
 export async function obterIdsRecebimentosFiltrados(filtro: RecebimentoFiltro): Promise<ServiceResult<string[]>> {
   try {
     const fallbackResult = await withLocalFallback({
-      shouldTryRemote: hasSupabaseConfig(),
+      shouldTryRemote: shouldTryRemoteRead(),
       loadRemote: () => readSnapshotRecebimentos(),
       loadLocal: () => readAll(),
       fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
@@ -725,7 +728,7 @@ export async function obterResumosRecebimentosParaExclusao(
   if (!unique.length) return { success: true, data: [] };
   try {
     const fallbackResult = await withLocalFallback({
-      shouldTryRemote: hasSupabaseConfig(),
+      shouldTryRemote: shouldTryRemoteRead(),
       loadRemote: () => readSnapshotRecebimentos(),
       loadLocal: () => readAll(),
       fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
@@ -1127,7 +1130,7 @@ export async function finalizarConferenciaRecebimento(payload: {
 
 async function carregarTodosRecebimentosOrdenados(): Promise<ServiceResult<Recebimento[]>> {
   const fallback = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotRecebimentos(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',

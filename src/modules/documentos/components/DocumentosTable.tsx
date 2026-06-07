@@ -10,8 +10,11 @@ import type { DocumentoListItem } from '../types/documento.types';
 type Props = {
   items: DocumentoListItem[];
   onEdit: (item: DocumentoListItem) => void;
-  /** Lista itens do documento (somente leitura), qualquer status. */
-  onView?: (item: DocumentoListItem) => void;
+  /** Folha de campo (PDF) numa janela separada. */
+  onVisualizar?: (item: DocumentoListItem) => void;
+  /** Itens do documento num modal dentro do sistema. */
+  onVerItens?: (item: DocumentoListItem) => void;
+  visualizarBusyId?: string | null;
   onCancel: (item: DocumentoListItem) => void;
   /** Remove o documento do planejamento (senha na pagina). */
   onExcluirDefinitivo?: (item: DocumentoListItem) => void;
@@ -37,7 +40,9 @@ function fmtQty(n: number) {
 export function DocumentosTable({
   items,
   onEdit,
-  onView,
+  onVisualizar,
+  onVerItens,
+  visualizarBusyId,
   onCancel,
   onExcluirDefinitivo,
   selectedIds,
@@ -124,9 +129,18 @@ export function DocumentosTable({
           header: 'Acoes',
           render: (item) => (
             <div className="table-actions">
-              {onView ? (
-                <Button onClick={() => onView(item)} type="button" variant="ghost">
-                  Visualizar
+              {onVisualizar ? (
+                <Button
+                  disabled={visualizarBusyId === item.id}
+                  onClick={() => onVisualizar(item)}
+                  type="button"
+                >
+                  {visualizarBusyId === item.id ? 'A abrir…' : 'Visualizar'}
+                </Button>
+              ) : null}
+              {onVerItens ? (
+                <Button onClick={() => onVerItens(item)} type="button" variant="ghost">
+                  Ver itens
                 </Button>
               ) : null}
               {canEdit ? (

@@ -23,6 +23,7 @@ import {
   salvarDocumento,
   sincronizarPlanejamentoLocalComNuvem,
   diagnosticarPlanejamentoLocalVersusNuvem,
+  visualizarPlanejamentoCampoPorId,
 } from '../services/documentos.service';
 import type {
   Documento,
@@ -64,6 +65,8 @@ export function useDocumentos() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Documento | null>(null);
   const [viewDocument, setViewDocument] = useState<Documento | null>(null);
+  const [viewDocumentLoading, setViewDocumentLoading] = useState(false);
+  const [visualizarPlanejamentoBusyId, setVisualizarPlanejamentoBusyId] = useState<string | null>(null);
   const [importSnapshotConflict, setImportSnapshotConflict] = useState(false);
   const [importStaging, setImportStaging] = useState<{
     fileName: string;
@@ -700,15 +703,39 @@ export function useDocumentos() {
       setIsModalOpen(false);
     },
     viewDocument,
-    closeViewDocument: () => setViewDocument(null),
-    openViewDocumento: async (item: DocumentoListItem) => {
-      const result = await buscarDocumentoPorId(item.id);
-      if (!result.success || !result.data) {
-        setError(result.error ?? 'Nao foi possivel carregar o documento.');
-        return;
-      }
+    viewDocumentLoading,
+    closeViewDocument: () => {
+      setViewDocument(null);
+      setViewDocumentLoading(false);
+    },
+    visualizarPlanejamentoBusyId,
+    visualizarPlanejamentoDireto: async (item: DocumentoListItem) => {
+      if (visualizarPlanejamentoBusyId) return;
       setError('');
-      setViewDocument(result.data);
+      setVisualizarPlanejamentoBusyId(item.id);
+      try {
+        const res = await visualizarPlanejamentoCampoPorId(item);
+        if (!res.ok) {
+          setError(res.error);
+        }
+      } finally {
+        setVisualizarPlanejamentoBusyId(null);
+      }
+    },
+    openViewDocumento: async (item: DocumentoListItem) => {
+      setError('');
+      setViewDocument(null);
+      setViewDocumentLoading(true);
+      try {
+        const result = await buscarDocumentoPorId(item.id);
+        if (!result.success || !result.data) {
+          setError(result.error ?? 'Nao foi possivel carregar o documento.');
+          return;
+        }
+        setViewDocument(result.data);
+      } finally {
+        setViewDocumentLoading(false);
+      }
     },
     submitDocumento,
     handleCancelar,

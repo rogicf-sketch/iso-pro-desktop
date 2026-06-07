@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   printReportPdf: (base64) => ipcRenderer.invoke('desktop-print:report-pdf', base64),
   previewReportPdf: (base64, titulo, defaultName) =>
     ipcRenderer.invoke('desktop-preview:report-pdf', base64, titulo, defaultName),
+  beginReportPdfPreviewLoading: (titulo) => ipcRenderer.invoke('desktop-preview:report-loading-begin', titulo),
   previewReportPdfFromHtml: (html, titulo, defaultName) =>
     ipcRenderer.invoke('desktop-preview:report-from-html', html, titulo, defaultName),
   /** Gera bytes do RIR no processo principal (pdf-lib + fontkit + fs). */

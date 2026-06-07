@@ -12,6 +12,14 @@ export function preaquecerGeradorPdf(): void {
   obterJanelaGeracaoPdf();
 }
 
+/** Fecha a janela oculta — sem isto o .exe continua na memória após fechar a janela principal. */
+export function destruirGeradorPdf(): void {
+  if (pdfGenWindow && !pdfGenWindow.isDestroyed()) {
+    pdfGenWindow.destroy();
+  }
+  pdfGenWindow = null;
+}
+
 /** Bloqueia pedidos HTTP externos na janela oculta (evita hang em logos/CDN). */
 function bloquearRedeExternaPdf(win: BrowserWindow): void {
   win.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => {

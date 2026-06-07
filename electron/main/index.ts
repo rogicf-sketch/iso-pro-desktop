@@ -9,7 +9,7 @@ import { registerReportPdfHandlers } from './reportPdfIpc';
 import { registerRirFontsHandlers } from './rirFontsIpc';
 import { registerRirPdfGenerateHandlers } from './rirPdfGenerateIpc';
 import { registerSecurityHandlers } from './security';
-import { preaquecerGeradorPdf } from './gerarPdfBytesFromHtml';
+import { destruirGeradorPdf, preaquecerGeradorPdf } from './gerarPdfBytesFromHtml';
 import { createMainWindow } from './window';
 
 /** Deve coincidir com `appId` em `electron-builder.yml` — ícone na barra de tarefas / notificações no Windows. */
@@ -32,7 +32,13 @@ function bootstrap() {
     registerReportPdfHandlers();
     registerRirFontsHandlers();
     registerRirPdfGenerateHandlers();
-    createMainWindow();
+    const mainWindow = createMainWindow();
+    mainWindow.on('closed', () => {
+      destruirGeradorPdf();
+      if (process.platform !== 'darwin') {
+        app.quit();
+      }
+    });
     void initBackupOracleAuto();
     setTimeout(() => {
       preaquecerGeradorPdf();
@@ -51,7 +57,12 @@ function bootstrap() {
 
 app.whenReady().then(bootstrap);
 
+app.on('before-quit', () => {
+  destruirGeradorPdf();
+});
+
 app.on('window-all-closed', () => {
+  destruirGeradorPdf();
   if (process.platform !== 'darwin') {
     app.quit();
   }

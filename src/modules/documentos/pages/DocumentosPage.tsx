@@ -7,7 +7,7 @@ import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { DocumentoFilters } from '../components/DocumentoFilters';
@@ -93,6 +93,9 @@ export function DocumentosPage() {
     voltarImportSubstituirComLimpeza,
     confirmarImportSubstituirComLimpezaHistorico,
     viewDocument,
+    viewDocumentLoading,
+    visualizarPlanejamentoBusyId,
+    visualizarPlanejamentoDireto,
     closeViewDocument,
     openViewDocumento,
     cancelDocAlvo,
@@ -194,7 +197,7 @@ export function DocumentosPage() {
           Planejamento de materiais com itens, revisao, status e pendencia por documento. Use <strong>Baixar modelo CSV</strong> para obter
           cabecalho e linhas de exemplo (um material por linha; repita numero/revisao/data por linha). Na importacao, se{' '}
           <strong>descricao_material</strong> estiver vazia mas o <strong>codigo</strong> existir no cadastro de materiais, o sistema completa
-          a descricao. Use <strong>Visualizar</strong> na lista para ver os itens de qualquer documento (inclusive parcial ou atendido).{' '}
+          a descricao. <strong>Visualizar</strong> abre a folha de campo em PDF (janela separada); <strong>Ver itens</strong> mostra a lista no ecra.{' '}
           <strong>Excel - itens</strong> gera uma linha por material: dados do documento (numero, revisao, descricao), do material (codigo,
           descricao, disciplina, saldo do cadastro), unidade, <strong>quantidade no documento</strong> (por desenho), atendida e pendente nesse
           documento, <strong>quantidade prevista</strong> (soma do codigo em todos os documentos ativos), totais <strong>atendido</strong> e{' '}
@@ -293,7 +296,9 @@ export function DocumentosPage() {
             onExcluirDefinitivo={canAdminister ? abrirExclusaoDefinitivaDocumento : undefined}
             onToggleSelect={canAdminister ? toggleSelectDocumentoId : undefined}
             onToggleSelectPagina={canAdminister ? toggleSelectDocumentosPaginaAtual : undefined}
-            onView={(item) => void openViewDocumento(item)}
+            onVerItens={(item) => void openViewDocumento(item)}
+            onVisualizar={(item) => void visualizarPlanejamentoDireto(item)}
+            visualizarBusyId={visualizarPlanejamentoBusyId}
             selectedIds={canAdminister ? selectedDocumentIdSet : undefined}
           />
           {canAdminister ? (
@@ -656,10 +661,21 @@ export function DocumentosPage() {
 
       <Modal
         onClose={closeViewDocument}
-        open={Boolean(viewDocument)}
-        title={viewDocument ? `${viewDocument.numero} Rev. ${viewDocument.revisao}` : 'Documento'}
+        open={Boolean(viewDocument) || viewDocumentLoading}
+        title={
+          viewDocument
+            ? `${viewDocument.numero} Rev. ${viewDocument.revisao}`
+            : viewDocumentLoading
+              ? 'A carregar documento…'
+              : 'Documento'
+        }
         wide
       >
+        {viewDocumentLoading && !viewDocument ? (
+          <p className="panel-copy" style={{ marginTop: 0 }}>
+            A preparar visualizacao…
+          </p>
+        ) : null}
         {viewDocument ? (
           <div className="editor-block">
             <p className="panel-copy" style={{ marginTop: 0 }}>
@@ -723,14 +739,21 @@ export function DocumentosPage() {
                 disabled={folhaCampoBusy}
                 onClick={() => {
                   if (!viewDocument) return;
-                  const ok = imprimirPlanejamentoCampoHtml(
-                    viewDocument,
-                    metricasVisualizacao,
-                    localizacoesRecebimentoVisualizacao,
-                  );
-                  if (!ok) {
-                    window.alert('Nao foi possivel abrir a impressao. Verifique pop-ups ou o ambiente desktop.');
-                  }
+                  setFolhaCampoBusy(true);
+                  void (async () => {
+                    try {
+                      const ok = await imprimirPlanejamentoCampoHtml(
+                        viewDocument,
+                        metricasVisualizacao,
+                        localizacoesRecebimentoVisualizacao,
+                      );
+                      if (!ok) {
+                        window.alert('Nao foi possivel abrir a pre-visualizacao. Verifique pop-ups ou o ambiente desktop.');
+                      }
+                    } finally {
+                      setFolhaCampoBusy(false);
+                    }
+                  })();
                 }}
                 type="button"
                 variant="ghost"
@@ -749,7 +772,12 @@ export function DocumentosPage() {
                         metricasVisualizacao,
                         localizacoesRecebimentoVisualizacao,
                       );
-                      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+                      const res = await preVisualizarRelatorioProfissional({
+                        html,
+                        fileName: nomeArquivoRelatorioPdf(viewDocument.numero || viewDocument.id, 'planejamento'),
+                        titulo: `Planejamento — ${viewDocument.numero}`,
+                        tipoNuvem: 'planejamento_campo',
+                      });
                       if (!res.ok && res.error) {
                         window.alert(res.error);
                       }
