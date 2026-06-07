@@ -994,10 +994,6 @@ export async function carregarMetricasELocalizacoesPlanejamentoPorCodigo(): Prom
 export async function visualizarPlanejamentoCampoPorId(
   item: Pick<DocumentoListItem, 'id' | 'numero' | 'revisao'>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const titulo = `Planejamento — ${item.numero} Rev. ${item.revisao}`;
-  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
-  void api?.beginReportPdfPreviewLoading?.(titulo);
-
   const bundle = await obterBundlePlanejamentoDocumentos();
   let doc = bundle.enriched.find((d) => d.id === item.id) ?? null;
   if (!doc) {

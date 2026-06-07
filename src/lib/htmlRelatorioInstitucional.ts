@@ -1,3 +1,5 @@
+import { substituirPagedJsPorInline } from './relatorioPagedJsBundle';
+
 export function escapeHtmlRelatorio(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -76,9 +78,41 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
   return `<script>
     (function () {
       function docHtml() {
+        if (window.__relatorioHtmlParaImpressao) {
+          return window.__relatorioHtmlParaImpressao;
+        }
         var dt = document.doctype;
         var dtStr = dt ? '<!DOCTYPE ' + dt.name + '>' : '<!DOCTYPE html>';
         return dtStr + '\\n' + document.documentElement.outerHTML;
+      }
+      function ativarCabecalhoPdfNativo() {
+        if (document.getElementById('iso-pdf-meta')) {
+          document.body.classList.add('iso-pdf-header-native');
+        }
+      }
+      function desativarCabecalhoPdfNativo() {
+        document.body.classList.remove('iso-pdf-header-native');
+      }
+      function guardarPdf() {
+        aguardarPaginacao(function () {
+          ativarCabecalhoPdfNativo();
+          if (window.isoProDesktop && window.isoProDesktop.savePdfJanelaAtual) {
+            void window.isoProDesktop.savePdfJanelaAtual();
+            return;
+          }
+          if (window.isoProDesktop && window.isoProDesktop.saveHtmlAsPdf) {
+            void window.isoProDesktop.saveHtmlAsPdf(docHtml());
+            return;
+          }
+          window.print();
+        });
+      }
+      function aguardarPaginacao(fn) {
+        if (!window.__relatorioUsaPagedJs || window.__relatorioPaginadoPronto) {
+          fn();
+          return;
+        }
+        document.addEventListener('relatorio-paginado-pronto', fn, { once: true });
       }
       var root = document.querySelector('.iso-pro-doc-preview-toolbar');
       if (!root) return;
@@ -86,18 +120,19 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
       var btnPdf = root.querySelector('[data-iso-pro-action="save-pdf"]');
       if (btnPrint) {
         btnPrint.addEventListener('click', function () {
-          if (window.isoProDesktop && window.isoProDesktop.printHtml) {
-            void window.isoProDesktop.printHtml(docHtml());
-          } else {
-            window.print();
-          }
+          desativarCabecalhoPdfNativo();
+          aguardarPaginacao(function () {
+            if (window.isoProDesktop && window.isoProDesktop.printHtml) {
+              void window.isoProDesktop.printHtml(docHtml());
+            } else {
+              window.print();
+            }
+          });
         });
       }
       if (btnPdf) {
-        if (window.isoProDesktop && window.isoProDesktop.saveHtmlAsPdf) {
-          btnPdf.addEventListener('click', function () {
-            void window.isoProDesktop.saveHtmlAsPdf(docHtml());
-          });
+        if (window.isoProDesktop && (window.isoProDesktop.savePdfJanelaAtual || window.isoProDesktop.saveHtmlAsPdf)) {
+          btnPdf.addEventListener('click', guardarPdf);
         } else {
           btnPdf.style.display = 'none';
         }
@@ -107,10 +142,31 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
 }
 
 /** Estilos compartilhados: cabecalho com logo + titulo (impressao HTML). */
+export function cssFontesNotoRelatorio(): string {
+  return `
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/noto-sans-regular.woff') format('woff'), url('./fonts/noto-sans-regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/noto-sans-bold.woff') format('woff'), url('./fonts/noto-sans-bold.ttf') format('truetype');
+}
+`;
+}
+
+/** Estilos compartilhados: cabecalho com logo + titulo (impressao HTML). */
 export function cssInstitucionalRelatorio(): string {
   return `
+    ${cssFontesNotoRelatorio()}
     * { box-sizing: border-box; }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 20px 24px; color: #111; font-size: 11pt; line-height: 1.4; }
+    body { font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 20px 24px; color: #111; font-size: 11pt; line-height: 1.4; }
     .inst-topbar { display: flex; justify-content: space-between; align-items: center; font-size: 9pt; color: #444; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
     .inst-topbar span:last-child { font-weight: 600; color: #111; }
     .inst-header { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 16px; }
@@ -166,6 +222,14 @@ export function htmlBlocoLogoInstitucional(logoUrl: string, compacto = false): s
       <span class="inst-logo-hint">Logo da empresa<br /><span class="inst-logo-sub">(opcional)</span></span>
     </div>
   </div>`;
+}
+
+/** Logo mínimo para cabeçalho corrido Paged.js (sem coluna alta). */
+export function htmlLogoCompactoRunningHeader(logoUrl: string): string {
+  if (logoUrl) {
+    return `<img class="inst-logo-img" src="${escapeHtmlRelatorio(logoUrl)}" alt="" />`;
+  }
+  return `<span class="inst-run-logo-text">I.S.O PRO</span>`;
 }
 
 /**
@@ -267,15 +331,14 @@ const ERRO_PREVISUALIZACAO_POPUP =
 
 const OVERLAY_PREVISUALIZACAO_ID = 'iso-pro-html-preview-overlay';
 
-/** Pré-visualização dentro da própria janela (iframe + blob) — não depende de `window.open` nem de IPC. */
+/** Pré-visualização dentro da própria janela (iframe + srcdoc) — só quando não há Electron. */
 function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
   if (typeof document === 'undefined' || !document.body) {
     return false;
   }
   document.getElementById(OVERLAY_PREVISUALIZACAO_ID)?.remove();
 
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
+  const htmlInline = substituirPagedJsPorInline(html);
 
   const root = document.createElement('div');
   root.id = OVERLAY_PREVISUALIZACAO_ID;
@@ -299,7 +362,7 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
   btnPrint.style.cssText =
     'padding:8px 16px;cursor:pointer;font-size:14px;border-radius:8px;border:1px solid #38bdf8;background:#0284c7;color:#fff;font-weight:600;';
   btnPrint.addEventListener('click', () => {
-    void abrirImpressaoHtmlRelatorio(html);
+    void abrirImpressaoHtmlRelatorio(htmlInline);
   });
   const btnPdf = document.createElement('button');
   btnPdf.type = 'button';
@@ -309,7 +372,7 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
   btnPdf.addEventListener('click', () => {
     const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
     if (api?.saveHtmlAsPdf) {
-      void api.saveHtmlAsPdf(html).then((res) => {
+      void api.saveHtmlAsPdf(htmlInline).then((res) => {
         if (!res.ok && typeof console !== 'undefined') {
           console.error('[I.S.O PRO] PDF:', res.error);
         }
@@ -331,16 +394,12 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
   bar.appendChild(btn);
 
   const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-modals');
   iframe.setAttribute('title', 'Pré-visualização do relatório');
-  iframe.style.cssText = 'flex:1;width:100%;min-height:0;border:0;border-radius:10px;background:#fff;';
+  iframe.style.cssText = 'flex:1;width:100%;min-height:0;border:0;border-radius:10px;background:#cbd5e1;';
 
   const cleanup = () => {
     document.removeEventListener('keydown', onKeyDown, true);
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      /* ignore */
-    }
     root.remove();
   };
 
@@ -359,41 +418,47 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
   root.appendChild(bar);
   root.appendChild(iframe);
   document.body.appendChild(root);
-  iframe.src = url;
+  iframe.srcdoc = htmlInline;
   btn.focus();
   return true;
 }
 
 /**
- * Abre pré-visualização do HTML. No **Electron** tenta IPC (`previewHtml`); se falhar ou não existir,
- * usa **overlay** na própria aplicação (sem `window.open`). Último recurso: janela nova + blob.
+ * Abre pré-visualização do HTML.
+ * - **Electron**: janela dedicada (IPC) com Paged.js externo — fiável para paginação A4.
+ * - **Browser**: overlay in-app com Paged.js inline (`srcdoc`).
  */
 export async function abrirPreVisualizacaoHtmlRelatorio(
   html: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (abrirPreVisualizacaoInAppOverlay(html)) {
+    return { ok: true };
+  }
+
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
-  let ipcFalhou = false;
 
   if (api?.previewHtml) {
     try {
       const res = await api.previewHtml(html);
       if (res.ok) return res;
-      ipcFalhou = true;
-    } catch {
-      ipcFalhou = true;
+      if (abrirPreVisualizacaoInAppOverlay(html)) {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error:
+          res.error ??
+          'Não foi possível abrir a pré-visualização. Reinicie a aplicação ou use «Imprimir / PDF».',
+      };
+    } catch (e) {
+      if (abrirPreVisualizacaoInAppOverlay(html)) {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : 'Falha ao abrir pré-visualização.',
+      };
     }
-  }
-
-  if (abrirPreVisualizacaoInAppOverlay(html)) {
-    return { ok: true };
-  }
-
-  if (ipcFalhou) {
-    return {
-      ok: false,
-      error:
-        'Não foi possível mostrar a pré-visualização na janela extra. Reconstrua a aplicação (`npm run dist:win`) ou use Editar e depois «Imprimir / PDF».',
-    };
   }
 
   const w = abrirJanelaPreVisualizacaoRelatorio();

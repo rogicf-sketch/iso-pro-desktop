@@ -397,22 +397,26 @@ function formParaPayloadNuvem(form: MaterialFormData, codigoBarras: string) {
   };
 }
 
+/** Cadastro na nuvem pode ter milhares de linhas — timeout curto deixava a lista vazia na web. */
+const MATERIAIS_NUVEM_READ_TIMEOUT_MS = 45_000;
+
 async function loadMateriaisBase(): Promise<Material[]> {
   if (!shouldUseCloudMaterials()) return readAll();
   if (!hasSupabaseConfig()) return readAll();
 
   try {
     const remoto = shouldTryRemoteRead()
-      ? await withRemoteReadTimeout(() => listRemoteMaterials())
+      ? await withRemoteReadTimeout(() => listRemoteMaterials(), MATERIAIS_NUVEM_READ_TIMEOUT_MS)
       : await listRemoteMaterials();
     repararCacheMateriaisLocalDesdeNuvem(remoto);
     return remoto;
   } catch (error) {
-    if (shouldTryRemoteRead()) {
-      throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
+    console.warn('[I.S.O PRO] Materiais na nuvem indisponiveis; tentando copia local.', error);
+    const local = readAll({ silenciarAvisoCorrupto: true });
+    if (local.length > 0) {
+      return local;
     }
-    console.warn('[I.S.O PRO] Materiais na nuvem indisponiveis; usando copia local.', error);
-    return readAll();
+    throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
   }
 }
 

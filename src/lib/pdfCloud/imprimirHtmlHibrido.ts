@@ -88,39 +88,29 @@ export async function preVisualizarHtmlRelatorioHibrido(
 
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
 
+  /** Pré-visualização no próprio ecrã — imediata na web (evita fila PDF na nuvem). */
+  const inApp = await abrirPreVisualizacaoHtmlRelatorio(html);
+  if (inApp.ok) return inApp;
+
   if (api?.previewReportPdfFromHtml) {
-
     try {
-
+      void api.beginReportPdfPreviewLoading?.(titulo);
       const direto = await api.previewReportPdfFromHtml(html, titulo, fileName);
-
       if (direto.ok) return direto;
-
       console.warn('[I.S.O PRO] Preview PDF direto falhou:', direto.error);
-
     } catch (e) {
-
       console.warn('[I.S.O PRO] Preview PDF direto (IPC) falhou:', e);
-
     }
-
   }
 
   try {
-
     const gerado = await gerarHtmlRelatorioPdfBytes(tipo, html, fileName);
-
     const entrega = await entregarPdfBytes(gerado.bytes, gerado.fileName, 'preview', titulo);
-
     if (entrega.ok) return entrega;
-
   } catch (e) {
-
     console.warn('[I.S.O PRO] Preview PDF bytes, fallback HTML:', e);
-
   }
 
-  return abrirPreVisualizacaoHtmlRelatorio(html);
-
+  return inApp;
 }
 
