@@ -1,0 +1,7 @@
+{
+  "name": "iso-pro-pdf-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependencias resolvidas pelo iso-pro-desktop raiz; ver build.mjs"
+}

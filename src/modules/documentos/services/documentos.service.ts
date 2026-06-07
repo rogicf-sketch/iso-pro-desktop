@@ -987,13 +987,62 @@ export async function carregarMetricasELocalizacoesPlanejamentoPorCodigo(): Prom
   return { metricas, localizacoesRecebimentoPorCodigo };
 }
 
+/** Aquece cache partilhado (documentos + recebimentos + metricas) ao entrar no modulo. */
+export async function precarregarBundlePlanejamentoDocumentos(): Promise<void> {
+  await obterBundlePlanejamentoDocumentos();
+}
+
+export type DocumentoPlanejamentoVisualizacao = {
+  documento: Documento;
+  metricas: Map<string, MetricasPorCodigoMaterial>;
+  localizacoesRecebimentoPorCodigo: Map<string, string>;
+};
+
+/** Uma unica leitura do bundle para modal «Visualizar» (documento + metricas + localizacoes). */
+export async function carregarDocumentoPlanejamentoParaVisualizacao(
+  id: string,
+): Promise<ServiceResult<DocumentoPlanejamentoVisualizacao>> {
+  const bundle = await obterBundlePlanejamentoDocumentos();
+  const foundClean = localizarDocumentoNaLista(bundle.enriched, id, null);
+  if (foundClean) {
+    return {
+      success: true,
+      data: {
+        documento: foundClean,
+        metricas: bundle.metricas,
+        localizacoesRecebimentoPorCodigo: bundle.localizacoesRecebimentoPorCodigo,
+      },
+    };
+  }
+
+  const snapshotDocs = await readSnapshotDocumentos();
+  const brutos = aplicarStatusPlanejamentoEmDocumentos(snapshotDocs, bundle.recebimentos);
+  const foundRaw = localizarDocumentoNaLista(brutos, id, null);
+  if (foundRaw) {
+    return {
+      success: true,
+      data: {
+        documento: foundRaw,
+        metricas: bundle.metricas,
+        localizacoesRecebimentoPorCodigo: bundle.localizacoesRecebimentoPorCodigo,
+      },
+    };
+  }
+
+  return { success: false, error: 'Documento nao encontrado.' };
+}
+
 /**
- * Abre a folha de campo (PDF) numa janela separada — sem modal dentro do sistema.
- * Usa cache partilhado e, no desktop, janela «A gerar PDF…» imediata.
+ * Abre a folha de campo numa janela de pre-visualizacao dedicada (desktop) ou overlay (web).
+ * A lista de planejamento permanece visivel na janela principal.
  */
 export async function visualizarPlanejamentoCampoPorId(
   item: Pick<DocumentoListItem, 'id' | 'numero' | 'revisao'>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const titulo = `Planejamento — ${item.numero || item.id || 'documento'}`;
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+  void api?.beginHtmlPreviewLoading?.(titulo);
+
   const bundle = await obterBundlePlanejamentoDocumentos();
   let doc = bundle.enriched.find((d) => d.id === item.id) ?? null;
   if (!doc) {

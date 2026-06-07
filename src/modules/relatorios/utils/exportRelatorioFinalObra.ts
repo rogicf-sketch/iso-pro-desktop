@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { escapeCsvCellSemicolon } from '../../../lib/csv';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { nomeArquivoRelatorioPdf, preVisualizarRelatorioProfissional } from '../../../lib/relatorioProfissional';
 import { montarExportacaoAtendimentosCsvItens } from '../../atendimento/services/atendimento.service';
 import { montarExportacaoDocumentosCsvResumo } from '../../documentos/services/documentos.service';
 import { montarExportacaoRecebimentosCsvResumo } from '../../recebimentos/services/recebimentos.service';
@@ -111,7 +111,13 @@ export async function preVisualizarRelatorioFinalObra(
   const limpo: RelatorioFinalObraDados = { ...dados, apresentacao: undefined, analiseEnriquecida: undefined };
   const enriquecido = await enriquecerRelatorioFinalObra(limpo);
   const html = montarHtmlRelatorioFinalObra(enriquecido);
-  const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+  const rotulo = rotuloNumeroRelatorioFinalObra(enriquecido.contexto);
+  const res = await preVisualizarRelatorioProfissional({
+    html,
+    fileName: nomeArquivoRelatorioPdf(rotulo, 'relatorio-final-obra'),
+    titulo: `Relatório Final de Obra — ${rotulo}`,
+    tipoNuvem: 'relatorio_final_obra',
+  });
   if (!res.ok) return res;
   return { ok: true, dados: enriquecido };
 }

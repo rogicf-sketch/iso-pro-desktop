@@ -8,6 +8,7 @@ import {
   isWriteBlockedResult,
   withLocalFallback,
 } from './service-result';
+import { MSG_ERRO_LEITURA_NUVEM } from './traduzirErroOperacionalIsoPro';
 
 describe('service-result', () => {
   describe('getErrorMessage', () => {
@@ -160,7 +161,7 @@ describe('service-result', () => {
       });
       expect(r.data).toEqual({ a: 3 });
       expect(r.meta.source).toBe('local');
-      expect(r.meta.fallbackReason).toBe('timeout');
+      expect(r.meta.fallbackReason).toBe(MSG_ERRO_LEITURA_NUVEM);
     });
   });
 });

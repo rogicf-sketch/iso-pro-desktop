@@ -1,23 +1,14 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { getScopedIsoProStorageKey } from './isoProAmbiente';
-import { parseSupabaseSavedConfigRoot } from './schemas/supabaseSavedConfig.zod';
+import { readIsoProCloudConnectionComMigracao } from './isoProCloudConnection';
+import { canUseDesktopSupabaseFetch, createDesktopSupabaseFetch } from './supabaseDesktopFetch';
 
 let client: SupabaseClient | null = null;
 let clientSignature = '';
-
-function configuracaoSistemaStorageKey(): string {
-  return getScopedIsoProStorageKey('iso-pro-desktop-configuracoes-sistema');
-}
 
 type RuntimeSupabaseConfig = {
   url: string;
   key: string;
   materiaisNuvem: boolean;
-};
-
-type SavedConfigShape = Partial<RuntimeSupabaseConfig> & {
-  supabaseUrl?: string;
-  supabaseAnonKey?: string;
 };
 
 export type SupabaseOperationalStatus = 'ready' | 'partial' | 'missing';
@@ -29,41 +20,29 @@ function isTruthyViteString(value: unknown): boolean {
   return s === 'true' || s === '1' || s === 'yes';
 }
 
-function readSavedConfig() {
-  if (typeof window === 'undefined') return null;
-
-  try {
-    const raw = window.localStorage.getItem(configuracaoSistemaStorageKey());
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    const obj = parseSupabaseSavedConfigRoot(parsed);
-    if (obj === null) return null;
-    return obj as SavedConfigShape;
-  } catch {
-    return null;
-  }
-}
+type CredentialSource = 'localStorage' | 'vite-env' | 'none';
 
 /**
- * Resolve URL + anon key.
+ * Resolve URL + anon key como par atomico (nunca mistura fontes).
  *
- * - Por omissão: se o build tiver `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY`, usam-se em
- *   prioridade ao localStorage (evita config antiga a anular o projecto do instalador).
- * - Com `VITE_SUPABASE_PREFER_SAVED_CONFIG=true` e URL+chave guardadas nas Configurações,
- *   volta a prevalecer o localStorage (testes / outro projecto sem rebuild).
+ * Prioridade:
+ * 1. `VITE_SUPABASE_PREFER_SAVED_CONFIG=true` + credenciais guardadas na instalacao
+ * 2. Par completo em `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (build)
+ * 3. Par completo em localStorage ao nivel da instalacao
+ * 4. Nao configurado (partial/missing) — nunca combina URL de uma fonte com chave de outra
  */
-function resolveSupabaseCredentials(): {
+export function resolveSupabaseCredentials(): {
   url: string;
   key: string;
-  urlFrom: 'localStorage' | 'vite-env' | 'none';
-  keyFrom: 'localStorage' | 'vite-env' | 'none';
+  urlFrom: CredentialSource;
+  keyFrom: CredentialSource;
 } {
   const preferSaved = isTruthyViteString(import.meta.env.VITE_SUPABASE_PREFER_SAVED_CONFIG);
-  const saved = readSavedConfig();
+  const saved = readIsoProCloudConnectionComMigracao();
   const envUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
   const envKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
-  const storageUrl = String(saved?.url ?? saved?.supabaseUrl ?? '').trim();
-  const storageKey = String(saved?.key ?? saved?.supabaseAnonKey ?? '').trim();
+  const storageUrl = saved?.supabaseUrl ?? '';
+  const storageKey = saved?.supabaseAnonKey ?? '';
 
   if (preferSaved && storageUrl && storageKey) {
     return {
@@ -83,19 +62,26 @@ function resolveSupabaseCredentials(): {
     };
   }
 
-  const url = storageUrl || envUrl;
-  const key = storageKey || envKey;
+  if (storageUrl && storageKey) {
+    return {
+      url: storageUrl,
+      key: storageKey,
+      urlFrom: 'localStorage',
+      keyFrom: 'localStorage',
+    };
+  }
+
   return {
-    url,
-    key,
-    urlFrom: storageUrl ? 'localStorage' : envUrl ? 'vite-env' : 'none',
-    keyFrom: storageKey ? 'localStorage' : envKey ? 'vite-env' : 'none',
+    url: '',
+    key: '',
+    urlFrom: 'none',
+    keyFrom: 'none',
   };
 }
 
 export function getRuntimeSupabaseConfig(): RuntimeSupabaseConfig {
-  const saved = readSavedConfig();
   const { url, key } = resolveSupabaseCredentials();
+  const saved = readIsoProCloudConnectionComMigracao();
 
   return {
     url,
@@ -111,11 +97,13 @@ export function getSupabase(): SupabaseClient | null {
 
   const nextSignature = `${url}::${key}`;
   if (!client || clientSignature !== nextSignature) {
+    const globalFetch = canUseDesktopSupabaseFetch() ? createDesktopSupabaseFetch() : undefined;
     client = createClient(url, key, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
       },
+      global: globalFetch ? { fetch: globalFetch } : undefined,
     });
     clientSignature = nextSignature;
   }
@@ -130,8 +118,7 @@ export function resetSupabaseClient() {
 }
 
 export function hasSupabaseConfig() {
-  const { url, key } = getRuntimeSupabaseConfig();
-  return Boolean(url && key);
+  return getSupabaseOperationalStatus() === 'ready';
 }
 
 export function shouldUseCloudMaterials() {
@@ -140,8 +127,8 @@ export function shouldUseCloudMaterials() {
 }
 
 export function getSupabaseOperationalStatus(): SupabaseOperationalStatus {
-  const { url, key } = getRuntimeSupabaseConfig();
-  if (url && key) return 'ready';
+  const { url, key, urlFrom, keyFrom } = resolveSupabaseCredentials();
+  if (url && key && urlFrom === keyFrom) return 'ready';
   if (url || key) return 'partial';
   return 'missing';
 }
@@ -152,8 +139,9 @@ export type SupabaseConfigDiagnostics = {
   hasKey: boolean;
   urlHost: string | null;
   keyLength: number;
-  urlFrom: 'localStorage' | 'vite-env' | 'none';
-  keyFrom: 'localStorage' | 'vite-env' | 'none';
+  urlFrom: CredentialSource;
+  keyFrom: CredentialSource;
+  status: SupabaseOperationalStatus;
 };
 
 export function getSupabaseConfigDiagnostics(): SupabaseConfigDiagnostics {
@@ -165,10 +153,12 @@ export function getSupabaseConfigDiagnostics(): SupabaseConfigDiagnostics {
       keyLength: 0,
       urlFrom: 'none',
       keyFrom: 'none',
+      status: 'missing',
     };
   }
 
   const { url, key, urlFrom, keyFrom } = resolveSupabaseCredentials();
+  const status = getSupabaseOperationalStatus();
 
   let urlHost: string | null = null;
   try {
@@ -184,5 +174,18 @@ export function getSupabaseConfigDiagnostics(): SupabaseConfigDiagnostics {
     keyLength: key.length,
     urlFrom,
     keyFrom,
+    status,
   };
+}
+
+/** Mensagem operacional quando a ligacao Supabase esta incompleta ou indisponivel. */
+export function formatSupabaseConnectionError(baseMessage: string): string {
+  const d = getSupabaseConfigDiagnostics();
+  if (d.status === 'partial') {
+    return `${baseMessage} Configuracao incompleta: URL (${d.urlFrom}) e chave (${d.keyFrom}) devem vir da mesma fonte (build ou Configuracoes).`;
+  }
+  if (d.urlHost) {
+    return `${baseMessage} Servidor: ${d.urlHost}.`;
+  }
+  return baseMessage;
 }

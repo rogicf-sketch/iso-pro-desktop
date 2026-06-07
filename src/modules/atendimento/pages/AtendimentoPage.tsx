@@ -6,6 +6,7 @@ import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { AtendimentoBuscaDocumento } from '../components/AtendimentoBuscaDocumento';
@@ -116,6 +117,7 @@ export function AtendimentoPage() {
   const [leitorCodigoBuffer, setLeitorCodigoBuffer] = useState('');
   const [reciboHistoricoLoadingId, setReciboHistoricoLoadingId] = useState<string | null>(null);
   const [reciboSessaoPreviewLoading, setReciboSessaoPreviewLoading] = useState(false);
+  const [reciboAviso, setReciboAviso] = useState<string | null>(null);
 
   const avisoRetiranteLeitor = useMemo(() => {
     if (!atendente.trim()) return 'Informe o atendente antes de confirmar o lote final.';
@@ -245,9 +247,11 @@ export function AtendimentoPage() {
         tipoNuvem: 'recibo_atendimento',
       });
       if (!res.ok) {
-        window.alert(
-          res.error ??
-            'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir / PDF no fluxo de confirmacao do atendimento.',
+        setReciboAviso(
+          traduzirErroImpressaoIsoPro(
+            res.error ??
+              'Não foi possível abrir a pré-visualização. Use «Imprimir / PDF» no fluxo de confirmação do atendimento.',
+          ),
         );
       }
     } finally {
@@ -267,9 +271,11 @@ export function AtendimentoPage() {
         tipoNuvem: 'recibo_sessao',
       });
       if (!res.ok) {
-        window.alert(
-          res.error ??
-            'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir / PDF na janela de visualizacao.',
+        setReciboAviso(
+          traduzirErroImpressaoIsoPro(
+            res.error ??
+              'Não foi possível abrir a pré-visualização. Use «Imprimir / PDF» na janela de visualização.',
+          ),
         );
       }
     } finally {
@@ -304,6 +310,7 @@ export function AtendimentoPage() {
 
         <SnapshotConflictHint show={snapshotConflict} onReload={() => void load()} />
         {error ? <div className="error-box">{error}</div> : null}
+        {reciboAviso ? <OperationalNotice tone="critical">{reciboAviso}</OperationalNotice> : null}
         {success ? <OperationalNotice>{success}</OperationalNotice> : null}
         {!canEdit ? (
           <OperationalNotice tone="warning">

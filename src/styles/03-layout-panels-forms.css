@@ -1095,6 +1095,10 @@ body.theme-claro .recebimento-badge-divergencia {
   justify-items: center;
 }
 
+.modal-backdrop--confirm {
+  z-index: 60;
+}
+
 .modal-card--wide {
   width: min(1260px, calc(100vw - 48px));
 }

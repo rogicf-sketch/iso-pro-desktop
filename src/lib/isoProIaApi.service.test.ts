@@ -59,6 +59,8 @@ function cfgMinima(overrides: Partial<ConfiguracaoSistema> = {}): ConfiguracaoSi
     backupOracleMinAtendimentosFluxo: 10,
     backupOracleMinRecebimentosFluxo: 3,
     backupOracleMinCadastrosFluxo: 5,
+    pdfNuvemHabilitado: true,
+    pdfNuvemTimeoutSegundos: 90,
     ...overrides,
   };
 }

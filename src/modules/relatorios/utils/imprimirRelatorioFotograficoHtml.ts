@@ -1,5 +1,5 @@
+import { imprimirRelatorioProfissional } from '../../../lib/relatorioProfissional';
 import {
-  abrirImpressaoHtmlRelatorio,
   cssBarraPreVisualizacaoImpressaoHtml,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
@@ -429,6 +429,6 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
 </html>`;
 }
 
-export function imprimirRelatorioFotograficoHtml(html: string): boolean {
-  return abrirImpressaoHtmlRelatorio(html);
+export async function imprimirRelatorioFotograficoHtml(html: string, fileName = 'relatorio-fotografico.pdf'): Promise<boolean> {
+  return imprimirRelatorioProfissional({ html, fileName, tipoNuvem: 'relatorio_fotografico' });
 }

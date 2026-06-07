@@ -1,0 +1,15 @@
+[Unit]
+Description=I.S.O PRO PDF Worker
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/iso-pro-pdf-worker
+EnvironmentFile=/etc/iso-pro/pdf-worker.env
+ExecStart=/usr/bin/node /opt/iso-pro-pdf-worker/dist/index.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

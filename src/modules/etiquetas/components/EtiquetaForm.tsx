@@ -5,6 +5,7 @@ import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import { imprimirEtiquetaHtml } from '../utils/imprimirEtiquetaHtml';
 import { EtiquetaPreview } from './EtiquetaPreview';
 import type { EtiquetaFormData } from '../types/etiqueta.types';
@@ -103,7 +104,11 @@ export function EtiquetaForm({ initialValue, onCancel, onApplyPreset, onSubmit }
           <Button
             onClick={() => {
               if (!imprimirEtiquetaHtml(form)) {
-                window.alert('Nao foi possivel abrir a impressao. Verifique se o navegador bloqueou pop-ups.');
+                setError(
+                  traduzirErroImpressaoIsoPro(
+                    'Não foi possível abrir a impressão. Verifique a impressora ou use a aplicação desktop.',
+                  ),
+                );
               }
             }}
             type="button"

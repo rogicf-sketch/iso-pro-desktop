@@ -10,6 +10,11 @@ import path from 'node:path';
 import { escreverShellPreviewRir } from './rirPdfPreviewShell.ts';
 import { gerarPdfBytesFromHtml } from './gerarPdfBytesFromHtml.ts';
 import { resolvePreloadPath } from './window.ts';
+import {
+  aguardarCarregamentoWebContents,
+  aguardarIframePdfPreviewShell,
+  carregarPdfTemporarioNaJanela,
+} from './pdfWebContents.ts';
 
 const RIR_PDF_MOTOR = 'html-chromium';
 
@@ -117,7 +122,9 @@ async function abrirPreviewRirPdfInterno(
     tmpShell = await escreverShellPreviewRir(pdfFileName, RIR_PDF_MOTOR, tmpPdf.path);
 
     await win.loadFile(tmpShell.htmlPath);
+    await aguardarCarregamentoWebContents(win);
     await win.webContents.executeJavaScript(`window.__rirPdfBase64 = ${JSON.stringify(b64)};`, true);
+    await aguardarIframePdfPreviewShell(win.webContents, 'rir-view');
     win.show();
     win.focus();
     win.moveTop();
@@ -229,29 +236,7 @@ export function registerRirPdfHandlers() {
 
       tmp = await escreverPdfTemporario(b64, 'rir-print');
 
-      await win.loadURL(`file://${tmp.path.replace(/\\/g, '/')}`);
-
-      await new Promise<void>((resolve, reject) => {
-
-        const t = setTimeout(() => reject(new Error('Timeout ao carregar PDF para impressão.')), 30_000);
-
-        win.webContents.once('did-finish-load', () => {
-
-          clearTimeout(t);
-
-          resolve();
-
-        });
-
-        win.webContents.once('did-fail-load', (_e, code, desc) => {
-
-          clearTimeout(t);
-
-          reject(new Error(`Falha ao carregar PDF: ${code} ${desc}`));
-
-        });
-
-      });
+      await carregarPdfTemporarioNaJanela(win, tmp.path);
 
 
 

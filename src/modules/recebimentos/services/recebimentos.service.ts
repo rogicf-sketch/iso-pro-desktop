@@ -30,7 +30,7 @@ import type {
   RecebimentosArquivoExportacao,
   RecebimentosImportacaoResumo,
 } from '../types/recebimento.types';
-import { recebimentoCorrespondeBuscaInteligente } from '../utils/recebimentoBusca';
+import { recebimentoCorrespondeBuscaInteligente, textoRecebimentoExpandidoParaBusca } from '../utils/recebimentoBusca';
 import {
   construirIndiceDisciplinaUnidadePorCodigoMaterial,
   construirIndicePesoPorCodigoMaterial,
@@ -255,18 +255,10 @@ function aplicarCadastroMateriaisLinhaRecebimento(
 }
 
 async function enriquecerRecebimentosComPesoCadastroMateriais(recs: Recebimento[]): Promise<Recebimento[]> {
-  let pesoPorCodigo = new Map<string, number>();
-  try {
-    pesoPorCodigo = await construirIndicePesoPorCodigoMaterial();
-  } catch {
-    /* cadastro indisponivel: segue sem peso do catalogo */
-  }
-  let disciplinaUnidadePorCodigo: Map<string, { disciplina: string; unidade: string }> | null = null;
-  try {
-    disciplinaUnidadePorCodigo = await construirIndiceDisciplinaUnidadePorCodigoMaterial();
-  } catch {
-    disciplinaUnidadePorCodigo = null;
-  }
+  const [pesoPorCodigo, disciplinaUnidadePorCodigo] = await Promise.all([
+    construirIndicePesoPorCodigoMaterial().catch(() => new Map<string, number>()),
+    construirIndiceDisciplinaUnidadePorCodigoMaterial().catch(() => null),
+  ]);
   return recs.map((rec) => ({
     ...rec,
     itens: rec.itens.map((it) => aplicarCadastroMateriaisLinhaRecebimento(it, pesoPorCodigo, disciplinaUnidadePorCodigo)),
@@ -279,18 +271,10 @@ async function enriquecerRecebimentosComPesoCadastroMateriais(recs: Recebimento[
 export async function enriquecerItensRecebimentoComPesoCadastroMateriais(
   itens: RecebimentoItem[],
 ): Promise<RecebimentoItem[]> {
-  let pesoPorCodigo = new Map<string, number>();
-  try {
-    pesoPorCodigo = await construirIndicePesoPorCodigoMaterial();
-  } catch {
-    /* */
-  }
-  let disciplinaUnidadePorCodigo: Map<string, { disciplina: string; unidade: string }> | null = null;
-  try {
-    disciplinaUnidadePorCodigo = await construirIndiceDisciplinaUnidadePorCodigoMaterial();
-  } catch {
-    disciplinaUnidadePorCodigo = null;
-  }
+  const [pesoPorCodigo, disciplinaUnidadePorCodigo] = await Promise.all([
+    construirIndicePesoPorCodigoMaterial().catch(() => new Map<string, number>()),
+    construirIndiceDisciplinaUnidadePorCodigoMaterial().catch(() => null),
+  ]);
   return itens.map((item) => aplicarCadastroMateriaisLinhaRecebimento(item, pesoPorCodigo, disciplinaUnidadePorCodigo));
 }
 
@@ -338,6 +322,28 @@ export async function carregarRecebimentosCompletos(): Promise<Recebimento[]> {
     fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
   });
   return enriquecerRecebimentosComPesoCadastroMateriais(data);
+}
+
+/**
+ * Indice leve id -> texto de NF/romaneio/fornecedor para busca cruzada (ex.: historico de etiquetas).
+ * Nao enriquece itens nem consulta cadastro de materiais.
+ */
+export async function carregarIndiceTextoBuscaRecebimentos(
+  referenciaIds?: Iterable<string>,
+): Promise<Map<string, string>> {
+  const { data } = await withLocalFallback({
+    shouldTryRemote: shouldTryRemoteRead(),
+    loadRemote: () => readSnapshotRecebimentos(),
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
+  });
+  const idSet = referenciaIds ? new Set(referenciaIds) : null;
+  const map = new Map<string, string>();
+  for (const r of data) {
+    if (idSet && !idSet.has(r.id)) continue;
+    map.set(r.id, textoRecebimentoExpandidoParaBusca(r));
+  }
+  return map;
 }
 
 function normalizeLookupValue(value: string) {
@@ -685,8 +691,7 @@ export async function listarRecebimentos(
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
   });
-  const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(fallbackResult.data);
-  const items = aplicarFiltrosListaRecebimentos(enriched, filtro);
+  const items = aplicarFiltrosListaRecebimentos(fallbackResult.data, filtro);
   const { meta } = fallbackResult;
 
   const start = (filtro.page - 1) * filtro.pageSize;
@@ -713,8 +718,7 @@ export async function obterIdsRecebimentosFiltrados(filtro: RecebimentoFiltro): 
       loadLocal: () => readAll(),
       fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
     });
-    const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(fallbackResult.data);
-    const filtered = aplicarFiltrosListaRecebimentos(enriched, filtro);
+    const filtered = aplicarFiltrosListaRecebimentos(fallbackResult.data, filtro);
     return { success: true, data: filtered.map((r) => r.id) };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Falha ao listar recebimentos.' };
@@ -733,9 +737,8 @@ export async function obterResumosRecebimentosParaExclusao(
       loadLocal: () => readAll(),
       fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
     });
-    const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(fallbackResult.data);
     const idSet = new Set(unique);
-    const res = enriched
+    const res = fallbackResult.data
       .filter((r) => idSet.has(r.id))
       .map((r) => ({ notaFiscal: r.notaFiscal, romaneio: r.romaneio, fornecedor: r.fornecedor }))
       .sort((a, b) => a.fornecedor.localeCompare(b.fornecedor) || a.notaFiscal.localeCompare(b.notaFiscal));
@@ -1062,9 +1065,14 @@ export async function excluirRecebimentoDefinitivamente(
 }
 
 export async function buscarRecebimentoPorId(id: string): Promise<ServiceResult<Recebimento>> {
-  const item = (await loadRecebimentos()).find((recebimento) => recebimento.id === id);
-  if (!item) return { success: false, error: 'Recebimento nao encontrado.' };
-  return { success: true, data: item };
+  const raw = await readRemoteOrLocal({
+    readRemote: readSnapshotRecebimentos,
+    readLocal: readAll,
+  });
+  const found = raw.find((recebimento) => recebimento.id === id);
+  if (!found) return { success: false, error: 'Recebimento nao encontrado.' };
+  const [enriched] = await enriquecerRecebimentosComPesoCadastroMateriais([found]);
+  return { success: true, data: enriched };
 }
 
 export async function finalizarConferenciaRecebimento(payload: {

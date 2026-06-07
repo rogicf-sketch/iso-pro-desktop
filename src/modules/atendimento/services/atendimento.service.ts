@@ -1,4 +1,7 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
+import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -435,9 +438,9 @@ async function enrichMateriaisSaldoFromLocalMovement(
 
 /** Saldo recebimentos − já atendido (+ ajustes), igual ao mobile e à lista de Materiais após recálculo. */
 async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
-  if (hasSupabaseConfig()) {
+  if (shouldTryRemoteRead()) {
     try {
-      const payload = await readSnapshotPayload();
+      const payload = await withRemoteReadTimeout(() => readSnapshotPayload());
       const documentosRec = documentosReconciliadosDoPayload(payload);
       return buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
     } catch {
@@ -455,9 +458,9 @@ async function resolveDocumentosEMateriaisAtendimento(): Promise<{
   documentos: DocumentoStored[];
   materiais: MaterialStored[];
 }> {
-  if (hasSupabaseConfig()) {
+  if (shouldTryRemoteRead()) {
     try {
-      const state = await readRemoteState();
+      const state = await withRemoteReadTimeout(() => readRemoteState());
       return { documentos: state.documentos, materiais: state.materiais };
     } catch {
       const local = loadLocalState();
@@ -783,13 +786,17 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
   let source: 'supabase' | 'local' = 'local';
   let fallbackReason = '';
 
-  try {
-    if (hasSupabaseConfig()) {
-      await readRemoteState();
+  if (shouldTryRemoteRead()) {
+    try {
+      await withRemoteReadTimeout(() => readRemoteState());
       source = 'supabase';
+    } catch (error) {
+      if (!isIsoProDesktop()) {
+        fallbackReason = traduzirErroOperacionalIsoPro(
+          error instanceof Error ? error.message : 'Falha ao consultar documentos pendentes no Supabase.',
+        );
+      }
     }
-  } catch (error) {
-    fallbackReason = error instanceof Error ? error.message : 'Falha ao consultar documentos pendentes no Supabase.';
   }
 
   const data = await listarDocumentosPendentes();
@@ -804,9 +811,10 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
 }
 
 export async function listarHistoricoAtendimentos(): Promise<Atendimento[]> {
-  const items = hasSupabaseConfig()
-    ? await readRemoteState().then((state) => state.atendimentos).catch(() => readJson<Atendimento>(atendimentosStorageKey()))
-    : readJson<Atendimento>(atendimentosStorageKey());
+  const items = await readRemoteOrLocal({
+    readRemote: async () => (await readRemoteState()).atendimentos,
+    readLocal: () => readJson<Atendimento>(atendimentosStorageKey()),
+  });
   return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
 
@@ -1036,13 +1044,17 @@ export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResul
   let source: 'supabase' | 'local' = 'local';
   let fallbackReason = '';
 
-  try {
-    if (hasSupabaseConfig()) {
-      await readRemoteState();
+  if (shouldTryRemoteRead()) {
+    try {
+      await withRemoteReadTimeout(() => readRemoteState());
       source = 'supabase';
+    } catch (error) {
+      if (!isIsoProDesktop()) {
+        fallbackReason = traduzirErroOperacionalIsoPro(
+          error instanceof Error ? error.message : 'Falha ao consultar historico de atendimentos no Supabase.',
+        );
+      }
     }
-  } catch (error) {
-    fallbackReason = error instanceof Error ? error.message : 'Falha ao consultar historico de atendimentos no Supabase.';
   }
 
   const data = await listarHistoricoAtendimentos();
@@ -1135,7 +1147,7 @@ export async function registrarAtendimento(payload: {
   const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
   const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
 
-  const remoteState = hasSupabaseConfig() ? await readRemoteState().catch(() => null) : null;
+  const remoteState = shouldTryRemoteRead() ? await readRemoteState().catch(() => null) : null;
   const localState = loadLocalState();
   const documentos = remoteState?.documentos ?? localState.documentos;
   const materiais =
@@ -1350,7 +1362,7 @@ export async function registrarAtendimentosSessao(
   const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
   const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
 
-  const remoteState = hasSupabaseConfig() ? await readRemoteState().catch(() => null) : null;
+  const remoteState = shouldTryRemoteRead() ? await readRemoteState().catch(() => null) : null;
   const localState = loadLocalState();
   const documentos = remoteState?.documentos ?? localState.documentos;
   const materiais =
@@ -1505,7 +1517,7 @@ export async function estornarAtendimento(
   id: string,
   linhasEstorno?: EstornoAtendimentoLinha[],
 ): Promise<ServiceResult<Atendimento>> {
-  const remoteState = hasSupabaseConfig() ? await readRemoteState().catch(() => null) : null;
+  const remoteState = shouldTryRemoteRead() ? await readRemoteState().catch(() => null) : null;
   const localState = loadLocalState();
   const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
   const documentos = remoteState?.documentos ?? localState.documentos;

@@ -72,7 +72,7 @@ export type DadosReciboAtendimento = {
   nomeAtendido: string;
   /**
    * URL do logo (https, caminho no app ex. /recibo-logo.png em public, ou data URL).
-   * Se omitido, o gerador do HTML tenta localStorage `iso-pro-desktop-recibo-logo-url`; senao, area para logo a esquerda.
+   * Se omitido, usa o logo em Configuracoes (logoInstitucionalUrl); senao, area para logo a esquerda.
    */
   logoUrl?: string | null;
   detalhesRetiradaExterna?: {

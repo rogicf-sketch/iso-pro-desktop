@@ -39,5 +39,5 @@ Documento curto para equipa interna ou cliente enterprise: **o que fazer quando 
 - [ ] SQL Supabase aplicado na ordem documentada.
 - [ ] RLS validado para cada papel (admin, campo, leitura).
 - [ ] Build desktop assinado (se aplicável) testado em VM limpa.
-- [ ] APK/AAB mobile testado com login real e modo offline breve.
+- [ ] APK/AAB mobile testado com login real; validar fila offline (gravacao sem rede e sincronizacao ao voltar).
 - [ ] Plano de backup + runbook conhecido pela equipa de suporte.

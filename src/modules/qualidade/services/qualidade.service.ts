@@ -2,6 +2,7 @@ import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -34,7 +35,7 @@ import {
 } from '../types/qualidade.types';
 import { hydrateRncRegistro, persistRncRegistroFotosToIdb } from '../utils/rncFotoIdb';
 import { rncLinhaTemConteudoOcorrencia } from '../utils/rncItensRecebimento';
-import { extrairDisciplinaProcedimento } from '../utils/rirDisciplina';
+import { extrairDisciplinaProcedimento, resolverDisciplinaRir } from '../utils/rirDisciplina';
 
 function rirStorageKey(): string {
   return getScopedIsoProStorageKey('iso-pro-desktop-rir');
@@ -79,6 +80,15 @@ function normalizeRirItemLinha(it: RirItemLinha): RirItemLinha {
 }
 
 export function normalizeRirRegistro(item: RirRegistro): RirRegistro {
+  const itensRir = Array.isArray(item.itensRir) ? item.itensRir.map((row) => normalizeRirItemLinha(row)) : [];
+  const disciplinaManual = item.disciplina?.trim() ?? '';
+  const disciplina =
+    disciplinaManual ||
+    resolverDisciplinaRir({
+      procedimentoNumero: item.procedimentoNumero,
+      codigo: item.codigo,
+      itensRir,
+    });
   return {
     id: item.id,
     codigo: item.codigo ?? '',
@@ -96,9 +106,10 @@ export function normalizeRirRegistro(item: RirRegistro): RirRegistro {
     inspecaoQualitativa: item.inspecaoQualitativa !== false,
     inspecaoDimensional: !!item.inspecaoDimensional,
     procedimentoNumero: item.procedimentoNumero ?? '',
+    disciplina,
     solCompraPackList: item.solCompraPackList ?? '',
     obsCurta: item.obsCurta ?? '',
-    itensRir: Array.isArray(item.itensRir) ? item.itensRir.map((row) => normalizeRirItemLinha(row)) : [],
+    itensRir,
     instrumentos: item.instrumentos ?? '',
     documentosQc: item.documentosQc ?? '',
     observacoesQc: item.observacoesQc ?? '',
@@ -440,9 +451,10 @@ function writeAll<T>(key: string, items: T[]) {
 }
 
 async function loadRir() {
-  const raw = hasSupabaseConfig()
-    ? await readSnapshotRir().catch(() => readAll(rirStorageKey(), seedRir))
-    : readAll(rirStorageKey(), seedRir);
+  const raw = await readRemoteOrLocal({
+    readRemote: readSnapshotRir,
+    readLocal: () => readAll(rirStorageKey(), seedRir),
+  });
   return raw.map((item) => normalizeRirRegistro(item));
 }
 
@@ -452,15 +464,11 @@ async function loadRncFromLocalStorage(): Promise<RncRegistro[]> {
 }
 
 async function loadRnc(): Promise<RncRegistro[]> {
-  if (hasSupabaseConfig()) {
-    try {
-      const base = await readSnapshotRnc();
-      return Promise.all(base.map((x) => hydrateRncRegistro(x)));
-    } catch {
-      return loadRncFromLocalStorage();
-    }
-  }
-  return loadRncFromLocalStorage();
+  const base = await readRemoteOrLocal({
+    readRemote: readSnapshotRnc,
+    readLocal: loadRncFromLocalStorage,
+  });
+  return Promise.all(base.map((x) => hydrateRncRegistro(x)));
 }
 
 async function readSnapshotPayload(): Promise<SnapshotPayload> {
@@ -762,6 +770,15 @@ export function validateRir(data: RirFormData) {
   if (config.rirModoNumeracao === 'disciplina' && !extrairDisciplinaProcedimento(data.procedimentoNumero)) {
     return 'No modo por disciplina, informe o procedimento com sigla (ex.: PE-TUB-003 REV.2).';
   }
+  const disciplinaEff = resolverDisciplinaRir({
+    disciplinaManual: data.disciplina,
+    procedimentoNumero: data.procedimentoNumero,
+    codigo: data.codigo,
+    itensRir: data.itensRir,
+  });
+  if (!disciplinaEff) {
+    return 'Informe a disciplina (ou use procedimento/codigo com sigla, ex.: PE-TUB-003 ou RIR-TUB-01).';
+  }
   if (!data.fornecedorNome?.trim()) {
     return 'Informe o fornecedor.';
   }
@@ -840,7 +857,7 @@ export function validateRnc(data: RncFormData) {
 
 export async function listarRir(filtro: RirFiltro): Promise<ServiceResult<PaginatedResult<RirRegistro>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotRir(),
     loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
     fallbackMessage: 'Falha ao consultar RIR no Supabase.',
@@ -965,7 +982,7 @@ export async function montarExportacaoRirCsvCompleto(
   opcoes?: ExportacaoRirOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotRir(),
     loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
     fallbackMessage: 'Falha ao consultar RIR no Supabase.',
@@ -1109,7 +1126,7 @@ function readAllRncNormalized(): RncRegistro[] {
 
 export async function listarRnc(filtro: RncFiltro): Promise<ServiceResult<PaginatedResult<RncRegistro>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => loadRnc(),
     loadLocal: () => loadRncFromLocalStorage(),
     fallbackMessage: 'Falha ao consultar RNC no Supabase.',
@@ -1140,6 +1157,7 @@ function trimRirPayload(payload: RirFormData): RirFormData {
     contratoNumero: payload.contratoNumero.trim(),
     fornecedorNome: payload.fornecedorNome.trim(),
     procedimentoNumero: payload.procedimentoNumero.trim(),
+    disciplina: (payload.disciplina ?? '').trim(),
     solCompraPackList: payload.solCompraPackList.trim(),
     obsCurta: payload.obsCurta.trim(),
     itensRir: (payload.itensRir ?? []).map((it) =>

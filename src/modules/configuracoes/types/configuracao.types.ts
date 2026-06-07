@@ -97,4 +97,8 @@ export type ConfiguracaoSistema = {
   backupOracleMinAtendimentosFluxo: number;
   backupOracleMinRecebimentosFluxo: number;
   backupOracleMinCadastrosFluxo: number;
+  /** Gera PDF via worker na nuvem quando online (fallback local se offline). */
+  pdfNuvemHabilitado: boolean;
+  /** Timeout máximo aguardando job PDF na nuvem (segundos). */
+  pdfNuvemTimeoutSegundos: number;
 };

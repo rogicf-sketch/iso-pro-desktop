@@ -1,17 +1,44 @@
-import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
+import { montarDocumentoHtmlInstitucionalPaged } from '../../../lib/relatorioPagedDocument';
+import type { RelatorioPdfMeta } from '../../../lib/relatorioPdfMeta';
 import {
-  abrirImpressaoHtmlRelatorio,
-  cssBarraPreVisualizacaoImpressaoHtml,
+  abrirPreVisualizacaoHtmlRelatorio,
   escapeHtmlRelatorio,
-  htmlBarraPreVisualizacaoImpressao,
   segmentoInstituicaoRodapeEletronico,
-  scriptBarraPreVisualizacaoImpressao,
 } from '../../../lib/htmlRelatorioInstitucional';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
+import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
+import { LOGO_INSTITUCIONAL_PRINT_PNG } from '../pdf/rirPdfLogo';
+import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import type { RirRegistro } from '../types/qualidade.types';
 import { rirObraDefaultsFromConfig } from './rirConfigDefaults';
+import { formatarDisciplinaExibicaoRir, resolverDisciplinaRir } from './rirDisciplina';
+import { formatarQuantidadeRir } from './rirDescricaoCompacta';
 
-const DOC_VERSION = '22';
+/** v70 — assinatura: espaço acima da linha; sem folha em branco no fim. */
+const DOC_VERSION = '70';
+
+export type CabecalhoRirParams = {
+  logoBlock: string;
+  escopoLinha: string;
+  codigo: string;
+  dataRegistro: string;
+  emitidoEm: string;
+  uoExibir: string;
+  localExibir: string;
+  contratoExibir: string;
+  fornecedor: string;
+  nf: string;
+  romaneio: string;
+  procedimento: string;
+  solCompra: string;
+  disciplina: string;
+  obsCurta: string;
+  inspecaoQuantitativa: boolean;
+  inspecaoQualitativa: boolean;
+  inspecaoDimensional: boolean;
+  folhaAtual?: number;
+  totalFolhas?: number;
+};
 
 function formatDatePt(iso: string): string {
   if (!iso) return '—';
@@ -25,9 +52,15 @@ function formatDateTimePt(): string {
 }
 
 function laudoLabel(l: RirRegistro['laudo']): string {
-  if (l === 'reprovado') return 'Reprovado';
-  if (l === 'observacoes') return 'Conforme observações';
-  return 'Aprovado';
+  if (l === 'reprovado') return 'REPROVADO';
+  if (l === 'observacoes') return 'APROVADO CONFORME OBSERVAÇÕES';
+  return 'APROVADO';
+}
+
+function laudoClasseCss(l: RirRegistro['laudo']): string {
+  if (l === 'reprovado') return 'rir-laudo-pill--reprovado';
+  if (l === 'observacoes') return 'rir-laudo-pill--obs';
+  return 'rir-laudo-pill--aprovado';
 }
 
 function statusTratativaLabel(s: RirRegistro['status']): string {
@@ -40,78 +73,624 @@ function statusTratativaLabel(s: RirRegistro['status']): string {
   return m[s] ?? s;
 }
 
-function mkIns(on: boolean): string {
-  return on
-    ? '<span class="rir-pill ok">✓</span>'
-    : '<span class="rir-pill off">—</span>';
+function mkTagInspecao(label: string, on: boolean): string {
+  return `<span class="rir-tag${on ? ' rir-tag--on' : ' rir-tag--off'}">${on ? '✓' : '☐'} ${label}</span>`;
 }
 
-/** Mesmo HTML do topo do RIR — entra no thead para repetir em cada folha na impressao (visual inalterado). */
-function montarBlocoCabecalhoRirParaImpressao(params: {
-  logoBlock: string;
-  escopoLinha: string;
-  localCfg: string;
-  codigo: string;
-  dataRegistro: string;
-  emitidoEm: string;
-  uoExibir: string;
-  localExibir: string;
-  contratoExibir: string;
-  fornecedor: string;
-  nf: string;
-  romaneio: string;
-  procedimento: string;
-  solCompra: string;
-  obsCurta: string;
-  inspecaoQuantitativa: boolean;
-  inspecaoQualitativa: boolean;
-  inspecaoDimensional: boolean;
+function folhaMetaHtml(params: CabecalhoRirParams): string {
+  const folha =
+    params.folhaAtual && params.totalFolhas
+      ? `<div class="rir-hdr-date">Folha: <strong>${params.folhaAtual}/${params.totalFolhas}</strong></div>`
+      : '';
+  return `<div class="rir-hdr-meta">
+      <div class="rir-hdr-rir-num">${escapeHtmlRelatorio(params.codigo)}</div>
+      <div class="rir-hdr-date">Data: ${escapeHtmlRelatorio(params.dataRegistro)}</div>
+      <div class="rir-hdr-date">Emitido: ${escapeHtmlRelatorio(params.emitidoEm)}</div>
+      ${folha}
+    </div>`;
+}
+
+/** Faixa titulo (logo + titulo + meta) — padrão INS institucional. */
+export function montarFaixaTituloInstitucionalRirHtml(params: CabecalhoRirParams): string {
+  return `<header class="rir-hdr">
+    <div class="rir-hdr-logo">${params.logoBlock}</div>
+    <div class="rir-hdr-title">
+      <h1>RELATÓRIO DE INSPEÇÃO DE RECEBIMENTO</h1>
+      <div class="rir-hdr-badge">RIR · ${escapeHtmlRelatorio(params.escopoLinha)}</div>
+    </div>
+    ${folhaMetaHtml(params)}
+  </header>`;
+}
+
+function montarCelulaInfoRir(label: string, valor: string): string {
+  return `<div class="rir-info-cell"><span class="rir-info-label">${escapeHtmlRelatorio(label)}</span><span class="rir-info-value">${valor || '—'}</span></div>`;
+}
+
+function montarBlocoInfoRir(params: CabecalhoRirParams): string {
+  const obsHtml = params.obsCurta.trim()
+    ? `<div class="rir-info-cell rir-info-cell--full"><span class="rir-info-label">Obs.</span><span class="rir-info-value">${escapeHtmlRelatorio(params.obsCurta)}</span></div>`
+    : '';
+  return `<div class="rir-info-grid">
+    ${montarCelulaInfoRir('UO (Obra/Depto)', escapeHtmlRelatorio(params.uoExibir))}
+    ${montarCelulaInfoRir('Local', escapeHtmlRelatorio(params.localExibir))}
+    ${montarCelulaInfoRir('Contrato', escapeHtmlRelatorio(params.contratoExibir))}
+    ${montarCelulaInfoRir('Nota Fiscal', escapeHtmlRelatorio(params.nf))}
+    ${montarCelulaInfoRir('Fornecedor', escapeHtmlRelatorio(params.fornecedor))}
+    ${montarCelulaInfoRir('Romaneio', escapeHtmlRelatorio(params.romaneio))}
+    ${montarCelulaInfoRir('Nº Procedimento', escapeHtmlRelatorio(params.procedimento))}
+    ${montarCelulaInfoRir('Sol. compra / Pack-list', params.solCompra ? escapeHtmlRelatorio(params.solCompra) : '—')}
+    ${montarCelulaInfoRir('Disciplina', escapeHtmlRelatorio(params.disciplina))}
+    ${obsHtml}
+  </div>
+  <div class="rir-inspecao-tags">
+    ${mkTagInspecao('Quantitativa', params.inspecaoQuantitativa)}
+    ${mkTagInspecao('Qualitativa', params.inspecaoQualitativa)}
+    ${mkTagInspecao('Dimensional', params.inspecaoDimensional)}
+  </div>`;
+}
+
+/** Folha 1 — cabeçalho completo agrupado. */
+export function montarCabecalhoInspecaoRirHtml(params: CabecalhoRirParams): string {
+  return `${montarFaixaTituloInstitucionalRirHtml(params)}${montarBlocoInfoRir(params)}`;
+}
+
+/** Folhas 2+ — cabeçalho compacto (menos espaço vertical). */
+export function montarCabecalhoFolhaContinuacaoRirHtml(params: CabecalhoRirParams): string {
+  const folha =
+    params.folhaAtual && params.totalFolhas
+      ? `<div class="rir-hdr-date">Folha <strong>${params.folhaAtual}/${params.totalFolhas}</strong></div>`
+      : '';
+  return `<header class="rir-hdr rir-hdr--compact">
+    <div class="rir-hdr-logo">${params.logoBlock}</div>
+    <div class="rir-hdr-title rir-hdr-title--compact">
+      <h1>${escapeHtmlRelatorio(params.codigo)}</h1>
+      <p>NF ${escapeHtmlRelatorio(params.nf) || '—'} · ${escapeHtmlRelatorio(params.fornecedor)} · ${escapeHtmlRelatorio(params.localExibir) || '—'}</p>
+    </div>
+    <div class="rir-hdr-meta">
+      ${folha}
+      <div class="rir-hdr-date">Data: ${escapeHtmlRelatorio(params.dataRegistro)}</div>
+    </div>
+  </header>`;
+}
+
+function montarLinhasTabelaRir(itens: NonNullable<RirRegistro['itensRir']>, indiceInicial: number): string {
+  if (itens.length === 0) {
+    return '<tr><td colspan="6" class="rir-empty-row">Nenhum item registrado neste relatório.</td></tr>';
+  }
+  return itens
+    .map(
+      (it, i) => `<tr class="rir-item-row">
+      <td class="rir-c-item">${indiceInicial + i + 1}</td>
+      <td class="rir-c-cod">${escapeHtmlRelatorio(it.codigoMaterial)}</td>
+      <td class="rir-c-desc">${escapeHtmlRelatorio(it.descricaoMaterial).replace(/\n/g, '<br>')}</td>
+      <td class="rir-c-q">${escapeHtmlRelatorio(formatarQuantidadeRir(it.quantidade))}</td>
+      <td class="rir-c-u">${escapeHtmlRelatorio(it.unidade)}</td>
+      <td class="rir-c-cert">${escapeHtmlRelatorio((it.certificado || 'N/A').trim() || 'N/A')}</td>
+    </tr>`,
+    )
+    .join('');
+}
+
+/** Thead: colunas (sem grade vertical). */
+export function montarTheadRirInspecao(): string {
+  return `<tr class="rir-thead-cols">
+    <th scope="col">Item</th>
+    <th scope="col">Código</th>
+    <th scope="col">Descrição</th>
+    <th scope="col">Qtd.</th>
+    <th scope="col">Unid.</th>
+    <th scope="col">Certificado</th>
+  </tr>`;
+}
+
+function montarTabelaMaterialRir(cabecalhoHtml: string, linhas: string, rodapeHtml: string): string {
+  const linhaRodape = `<tr class="rir-footer-row">
+    <td colspan="6" class="rir-footer-cell">${rodapeHtml}</td>
+  </tr>`;
+  return `<div class="rir-table-wrap">
+    <table class="rir-table">
+      <colgroup>
+        <col class="rir-col-item" />
+        <col class="rir-col-cod" />
+        <col class="rir-col-desc" />
+        <col class="rir-col-q" />
+        <col class="rir-col-u" />
+        <col class="rir-col-cert" />
+      </colgroup>
+      <thead>
+        <tr class="rir-thead-repeat">
+          <td colspan="6" class="rir-thead-repeat-cell">${cabecalhoHtml}</td>
+        </tr>
+        ${montarTheadRirInspecao()}
+      </thead>
+      <tbody>${linhas}${linhaRodape}</tbody>
+    </table>
+  </div>`;
+}
+
+function montarRodapeRir(params: {
+  r: RirRegistro;
+  laudo: RirRegistro['laudo'];
+  laudoTxt: string;
+  statusTxt: string;
+  refReceb: string;
+  segRodapeInst: string;
 }): string {
-  return `<header class="rir-classic-top">
-    <div class="rir-brand">${params.logoBlock}</div>
-    <div class="rir-title-block">
-      <h1 class="rir-title-main">Relatório de inspeção de recebimento (RIR)</h1>
-      <p class="rir-title-sub">${escapeHtmlRelatorio(params.escopoLinha)}${params.localCfg ? ` · ${escapeHtmlRelatorio(params.localCfg)}` : ''}</p>
+  const { r, laudo, laudoTxt, statusTxt, refReceb, segRodapeInst } = params;
+  const obs = escapeHtmlRelatorio(r.observacoesQc || '—');
+  return `<div class="rir-print-tail">
+  <div class="rir-laudo-block">
+    <div class="rir-laudo-pill ${laudoClasseCss(laudo)}"><span>${escapeHtmlRelatorio(laudoTxt)}</span></div>
+    <div class="rir-laudo-box">
+      <div class="rir-laudo-obs">
+        <strong>Observações da inspeção:</strong>
+        <p>${obs.replace(/\n/g, '<br>')}</p>
+      </div>
     </div>
-    <div class="rir-meta-box">
-      <div><strong>Nº RIR</strong>${escapeHtmlRelatorio(params.codigo)}</div>
-      <div style="margin-top:8px;"><strong>Data</strong>${escapeHtmlRelatorio(params.dataRegistro)}</div>
-      <div style="margin-top:8px;"><strong>Emitido</strong>${escapeHtmlRelatorio(params.emitidoEm)}</div>
+  </div>
+  <div class="rir-trace">
+    <strong>Rastreabilidade:</strong>
+    ID recebimento <code>${refReceb}</code>
+    · ID RIR <code>${escapeHtmlRelatorio(r.id)}</code>
+    · Estado: <strong>${escapeHtmlRelatorio(statusTxt)}</strong>
+    · Relatório v${DOC_VERSION}
+  </div>
+  <div class="rir-signatures">
+    <div class="rir-sign-card">
+      <div class="rir-sign-space"></div>
+      <div class="rir-sign-line"></div>
+      <div class="rir-sign-role">Responsável — recebimento</div>
+      <div class="rir-sign-name">${escapeHtmlRelatorio(r.assinaturaRecebimento.nome)}</div>
+      <div class="rir-sign-date">${r.assinaturaRecebimento.data ? formatDatePt(r.assinaturaRecebimento.data) : '—'}</div>
     </div>
-  </header>
-  <div class="rir-classic-grid">
-    <div class="rir-fld"><label>UO (Obra / Depto)</label><span>${escapeHtmlRelatorio(params.uoExibir) || '—'}</span></div>
-    <div class="rir-fld"><label>Local</label><span>${escapeHtmlRelatorio(params.localExibir) || '—'}</span></div>
-    <div class="rir-fld"><label>Contrato Nº</label><span>${escapeHtmlRelatorio(params.contratoExibir) || '—'}</span></div>
+    <div class="rir-sign-card">
+      <div class="rir-sign-space"></div>
+      <div class="rir-sign-line"></div>
+      <div class="rir-sign-role">Controle de qualidade</div>
+      <div class="rir-sign-name">${escapeHtmlRelatorio(r.assinaturaCq.nome)}</div>
+      <div class="rir-sign-date">${r.assinaturaCq.data ? formatDatePt(r.assinaturaCq.data) : '—'}</div>
+    </div>
+    <div class="rir-sign-card">
+      <div class="rir-sign-space"></div>
+      <div class="rir-sign-line"></div>
+      <div class="rir-sign-role">Cliente</div>
+      <div class="rir-sign-name">${escapeHtmlRelatorio(r.assinaturaCliente.nome)}</div>
+      <div class="rir-sign-date">${r.assinaturaCliente.data ? formatDatePt(r.assinaturaCliente.data) : '—'}</div>
+    </div>
   </div>
-  <div class="rir-ins-row">
-    <span class="rir-ins-label">Inspeção:</span>
-    ${mkIns(params.inspecaoQuantitativa)} <span>Quantitativa</span>
-    ${mkIns(params.inspecaoQualitativa)} <span>Qualitativa</span>
-    ${mkIns(params.inspecaoDimensional)} <span>Dimensional</span>
+  <div class="rir-doc-foot">
+    Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteúdo para arquivo e auditoria. Referência: ${escapeHtmlRelatorio(r.codigo)}.
   </div>
-  <div class="rir-classic-bar">Documentos</div>
-  <div class="rir-doc-campos">
-    <div class="rir-fld rir-doc-campos__nf"><label>Nº Nota Fiscal</label><span>${escapeHtmlRelatorio(params.nf) || '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__forn"><label>Fornecedor</label><span>${escapeHtmlRelatorio(params.fornecedor)}</span></div>
-    <div class="rir-fld rir-doc-campos__proc"><label>Nº Procedimento</label><span>${escapeHtmlRelatorio(params.procedimento)}</span></div>
-    <div class="rir-fld rir-doc-campos__rom"><label>Nº Romaneio</label><span>${escapeHtmlRelatorio(params.romaneio) || '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__sol"><label>Sol. compra / Pack-list</label><span>${params.solCompra ? escapeHtmlRelatorio(params.solCompra) : '—'}</span></div>
-    <div class="rir-fld rir-doc-campos__full"><label>Obs.</label><span>${escapeHtmlRelatorio(params.obsCurta) || '—'}</span></div>
-  </div>
-  <div class="rir-classic-bar rir-classic-bar--material">Material recebido (nota fiscal)</div>`;
+</div>`;
 }
 
-/**
- * Relatorio RIR — layout inspirado no formulario em papel (bordas, faixas cinza, tabela material + certificado).
- */
-export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
+function cssEstilosRelatorioRir(): string {
+  return `
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+@page {
+  size: A4;
+  margin: 7.5mm 7.5mm 10mm 7.5mm;
+}
+body.rir-print-body,
+body.rir-print-body.iso-report-native-body {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+  font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
+  color: #0f172a;
+  font-size: 9pt;
+  line-height: 1.2;
+}
+.rir-doc { max-width: none; width: 100%; margin: 0; padding: 0; }
+.rir-doc * { box-sizing: border-box; }
+.rir-print-main { display: block; width: 100%; }
+.rir-thead-repeat-cell {
+  padding: 0 !important;
+  border: none !important;
+  background: #fff !important;
+  vertical-align: top;
+}
+.rir-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: nowrap;
+  padding-bottom: 8px;
+  margin-bottom: 4mm;
+  border-bottom: 2px solid #0f172a;
+}
+.rir-hdr--compact {
+  margin-bottom: 2mm;
+  padding-bottom: 5px;
+  border-bottom-color: #e2e8f0;
+}
+.rir-hdr-logo { flex: 0 0 auto; max-width: 170px; min-width: 80px; }
+.rir-logo-badge {
+  display: inline-block;
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 6px 10px 5px;
+  line-height: 1.1;
+}
+.rir-logo-badge--img { background: transparent; padding: 0; border-radius: 0; }
+.rir-logo-iso { color: #fff; font-weight: 800; font-size: 11pt; letter-spacing: 0.05em; white-space: nowrap; }
+.rir-logo-pro { color: #22c55e; }
+.rir-logo-sep { color: #64748b; margin: 0 1px; font-weight: 600; }
+.rir-logo-sub { display: block; color: #22c55e; font-size: 7pt; font-weight: 700; margin-top: 2px; letter-spacing: 0.03em; }
+.rir-logo-img { display: block; height: 44px; width: auto; max-width: 165px; object-fit: contain; }
+.rir-hdr-title { flex: 1 1 220px; text-align: center; min-width: 0; }
+.rir-hdr-title h1 {
+  margin: 0;
+  font-size: 11pt;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #0f172a;
+  line-height: 1.2;
+}
+.rir-hdr-badge {
+  margin-top: 4px;
+  display: inline-block;
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 8pt;
+  font-weight: 600;
+  max-width: 100%;
+  line-height: 1.35;
+}
+.rir-hdr-title--compact h1 { font-size: 11pt; text-transform: none; font-weight: 700; }
+.rir-hdr-title--compact p {
+  margin: 3px 0 0;
+  font-size: 9pt;
+  color: #475569;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.rir-hdr-meta { flex: 0 0 auto; text-align: right; min-width: 110px; }
+.rir-hdr-rir-num { font-weight: 800; font-size: 11pt; color: #2563eb; line-height: 1.2; }
+.rir-hdr-date { font-size: 8.5pt; color: #64748b; margin-top: 2px; line-height: 1.3; }
+.rir-hdr-date strong { color: #0f172a; }
+.rir-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px 10px;
+  background: #f8fafc;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 3mm;
+  border: 1px solid #e2e8f0;
+}
+.rir-info-cell { display: flex; flex-direction: column; min-width: 0; }
+.rir-info-cell--full { grid-column: 1 / -1; }
+.rir-info-label {
+  font-size: 7pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+.rir-info-value {
+  font-size: 9pt;
+  font-weight: 600;
+  color: #0f172a;
+  margin-top: 1px;
+  word-break: break-word;
+  line-height: 1.25;
+}
+.rir-inspecao-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.rir-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 8.5pt;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  background: #f1f5f9;
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: #64748b;
+}
+.rir-tag--on { background: #dcfce7; color: #166534; }
+.rir-tag--off { background: #fff; color: #94a3b8; border: 1px solid #e2e8f0; }
+.rir-table-wrap {
+  overflow: visible;
+  width: 100%;
+  max-width: 100%;
+  margin-bottom: 4px;
+}
+.rir-table {
+  width: 100%;
+  max-width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+  table-layout: fixed;
+}
+.rir-col-item { width: 6%; }
+.rir-col-cod { width: 16%; }
+.rir-col-desc { width: 45%; }
+.rir-col-q { width: 9%; }
+.rir-col-u { width: 7%; }
+.rir-col-cert { width: 17%; }
+.rir-table thead tr.rir-thead-cols th {
+  background: #0f172a !important;
+  color: #fff !important;
+  padding: 8px 10px !important;
+  font-weight: 600;
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: none !important;
+}
+.rir-table thead tr.rir-thead-cols th:nth-child(1),
+.rir-table thead tr.rir-thead-cols th:nth-child(5) { text-align: center; }
+.rir-table thead tr.rir-thead-cols th:nth-child(1) {
+  padding-left: 5px !important;
+  padding-right: 5px !important;
+}
+.rir-table thead tr.rir-thead-cols th:nth-child(4) { text-align: right; }
+.rir-table td,
+.rir-table th {
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid #e2e8f0;
+}
+.rir-table td {
+  color: #334155;
+  vertical-align: middle;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.rir-table tbody tr.rir-item-row:nth-child(even) { background: #f8fafc; }
+.rir-table tbody tr.rir-item-row {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.rir-footer-cell {
+  padding: 12px 0 0 !important;
+  border: none !important;
+  border-bottom: none !important;
+  vertical-align: top;
+  background: #fff !important;
+}
+.rir-table tbody tr.rir-footer-row {
+  break-after: avoid-page;
+  page-break-after: avoid;
+}
+.rir-table tbody td.rir-c-item,
+.rir-table tbody td.rir-c-u { text-align: center; }
+.rir-table tbody td.rir-c-q { text-align: right; font-variant-numeric: tabular-nums; }
+.rir-c-item {
+  font-weight: 600;
+  color: #64748b;
+  font-size: 9pt;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  font-variant-numeric: tabular-nums;
+  padding-left: 5px !important;
+  padding-right: 5px !important;
+}
+.rir-c-q { font-weight: 600; color: #0f172a; font-size: 9pt; }
+.rir-c-u { font-size: 9pt; color: #64748b; }
+.rir-c-desc {
+  line-height: 1.3;
+  font-size: 8.5pt;
+  font-weight: 400;
+  vertical-align: top;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.rir-c-cod {
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 8.5pt;
+  line-height: 1.25;
+  word-break: break-all;
+  vertical-align: top;
+}
+.rir-c-cert {
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 8.5pt;
+  line-height: 1.25;
+  word-break: break-all;
+  vertical-align: top;
+}
+.rir-norms-disclaimer { display: none; }
+.rir-empty-row { text-align: center; color: #94a3b8; padding: 12px !important; font-style: italic; }
+.rir-laudo-block {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.rir-laudo-box {
+  width: 100%;
+  background: #fefce8;
+  border: 1px solid #fde047;
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.rir-laudo-obs { min-width: 0; }
+.rir-laudo-obs strong { font-size: 9.5pt; color: #854d0e; display: block; margin-bottom: 2px; }
+.rir-laudo-obs p { margin: 0; font-size: 9pt; color: #854d0e; line-height: 1.35; white-space: pre-wrap; }
+.rir-laudo-pill {
+  text-align: center;
+  padding: 4px 14px;
+  border-radius: 20px;
+  flex-shrink: 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.rir-laudo-pill span { color: #fff; font-weight: 800; font-size: 8.5pt; letter-spacing: 0.02em; line-height: 1.2; }
+.rir-laudo-pill--aprovado { background: #16a34a; }
+.rir-laudo-pill--reprovado { background: #dc2626; }
+.rir-laudo-pill--obs { background: #d97706; }
+.rir-trace {
+  background: #f1f5f9;
+  padding: 5px 8px;
+  border-radius: 6px;
+  margin-top: 6px;
+  font-size: 8.5pt;
+  color: #475569;
+  border-left: 4px solid #2563eb;
+}
+.rir-trace code { font-family: ui-monospace, monospace; background: #e2e8f0; padding: 1px 4px; border-radius: 3px; font-size: 7.5pt; }
+.rir-signatures {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+  padding-bottom: 3px;
+  border-bottom: 2px solid #2563eb;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.rir-sign-card { text-align: center; padding: 0 6px 2px; }
+.rir-sign-space { min-height: 38px; }
+.rir-sign-line { width: 88%; border-top: 1px dashed #94a3b8; margin: 0 auto 6px; }
+.rir-sign-role { font-size: 9pt; font-weight: 700; color: #2563eb; margin-bottom: 4px; }
+.rir-sign-name { font-weight: 800; font-size: 10.5pt; color: #0f172a; margin-bottom: 3px; }
+.rir-sign-date { font-size: 8.5pt; color: #64748b; }
+.rir-doc-foot { margin-top: 4px; margin-bottom: 0; font-size: 7.5pt; color: #94a3b8; text-align: center; line-height: 1.35; }
+.rir-print-tail {
+  margin-top: 6px;
+  padding-top: 4px;
+  padding-bottom: 0;
+  break-after: avoid-page;
+  page-break-after: avoid;
+}
+@media print {
+  .iso-pro-doc-preview-toolbar { display: none !important; }
+  body.rir-print-body,
+  body.rir-print-body.iso-report-native-body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+  .rir-doc {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box;
+  }
+  .rir-table thead {
+    display: table-header-group;
+  }
+  .rir-footer-cell {
+    border: none !important;
+    background: #fff !important;
+    padding-bottom: 0 !important;
+  }
+  .rir-table tbody tr.rir-footer-row {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  .rir-print-tail,
+  .rir-doc-foot {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  .rir-table-wrap {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  .rir-table thead tr.rir-thead-cols th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .rir-table tbody tr.rir-item-row:nth-child(even) {
+    background: #f8fafc !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .rir-signatures {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rir-laudo-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rir-tag--on {
+    background: #dcfce7 !important;
+    color: #166534 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .rir-table-wrap {
+    overflow: visible !important;
+    border: none;
+    border-radius: 0;
+    width: 100%;
+  }
+  script { display: none !important; }
+}
+@media screen {
+  .rir-doc {
+    max-width: 210mm;
+    margin: 0 auto 18px;
+    padding: 12mm 10mm 14mm;
+    background: #fff;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
+    box-sizing: border-box;
+  }
+}
+`;
+}
+
+function isLogoFabricaOuSemCustom(url: string): boolean {
+  const u = url.toLowerCase();
+  if (!u) return true;
+  return (
+    u.includes('logo-institutional') ||
+    u.endsWith(LOGO_INSTITUCIONAL_PADRAO_FABRICA.replace('./', ''))
+  );
+}
+
+function montarLogoBlockRir(paraPdf: boolean): string {
+  const texto = `<div class="rir-logo-badge"><span class="rir-logo-iso">I · S · O <span class="rir-logo-sep">|</span> <span class="rir-logo-pro">PRO</span></span><small class="rir-logo-sub">GESTÃO DE MATERIAIS</small></div>`;
+  const logo = resolverUrlLogoInstitucionalParaHtmlImpresso();
+  if (!logo && !paraPdf) return texto;
+  if (logo.startsWith('data:')) {
+    return `<div class="rir-logo-badge rir-logo-badge--img"><img class="rir-logo-img" src="${escapeHtmlRelatorio(logo)}" alt="Logo" decoding="async" /></div>`;
+  }
+  if (paraPdf) {
+    if (/^https?:/i.test(logo)) return texto;
+    if (isLogoFabricaOuSemCustom(logo)) {
+      return `<div class="rir-logo-badge rir-logo-badge--img"><img class="rir-logo-img" src="${LOGO_INSTITUCIONAL_PRINT_PNG}" alt="Logo I.S.O PRO" decoding="async" /></div>`;
+    }
+    return texto;
+  }
+  if (logo) {
+    return `<div class="rir-logo-badge rir-logo-badge--img"><img class="rir-logo-img" src="${escapeHtmlRelatorio(logo)}" alt="Logo" decoding="async" /></div>`;
+  }
+  return texto;
+}
+
+function montarConteudoRir(r: RirRegistro, opts?: { paraPdf?: boolean }): string {
+  const paraPdf = opts?.paraPdf === true;
   const cfg = readConfiguracoes();
   const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfg.documentoRodapeNome, cfg.documentoRodapeCnpj);
-  const logo = resolverUrlLogoInstitucionalParaHtmlImpresso();
   const clienteNome = cfg.cliente || '';
   const projetoNome = cfg.projeto || '';
-  const localCfg = cfg.local || '';
   const obCfg = rirObraDefaultsFromConfig(cfg);
   const uoExibir = (r.uo || '').trim() || obCfg.uo;
   const localExibir = (r.localObra || '').trim() || obCfg.localObra;
@@ -120,34 +699,27 @@ export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
   const laudoTxt = laudoLabel(laudo);
   const statusTxt = statusTratativaLabel(r.status);
   const solCompra = (r.solCompraPackList ?? '').trim();
-
-  let rows = '';
-  (r.itensRir ?? []).forEach((it, i) => {
-    rows += `<tr>
-      <td class="rir-c-item">${i + 1}</td>
-      <td>${escapeHtmlRelatorio(it.codigoMaterial)}</td>
-      <td class="rir-c-q">${escapeHtmlRelatorio(String(it.quantidade))}</td>
-      <td>${escapeHtmlRelatorio(it.unidade)}</td>
-      <td class="rir-c-desc">${escapeHtmlRelatorio(it.descricaoMaterial).replace(/\n/g, '<br>')}</td>
-      <td class="rir-c-cert">${escapeHtmlRelatorio(it.certificado)}</td>
-    </tr>`;
-  });
-  if (!rows) rows = '<tr><td colspan="6" class="rir-empty-row">Nenhum item registrado neste relatório.</td></tr>';
-
-  const logoBlock = logo
-    ? `<img class="rir-logo" src="${escapeHtmlRelatorio(logo)}" alt="Logo" />`
-    : `<div class="rir-brand-fallback">${escapeHtmlRelatorio(clienteNome || 'I.S.O PRO')}</div>`;
-
-  const escopoLinha = [clienteNome, projetoNome].filter(Boolean).join(' · ') || '—';
+  const itens = r.itensRir ?? [];
+  const disciplinaSigla =
+    (r.disciplina ?? '').trim() ||
+    resolverDisciplinaRir({
+      procedimentoNumero: r.procedimentoNumero,
+      codigo: r.codigo,
+      itensRir: itens,
+    });
+  const disciplinaExibir = formatarDisciplinaExibicaoRir(disciplinaSigla);
+  const logoBlock = montarLogoBlockRir(paraPdf);
+  const escopoPartes = [clienteNome, projetoNome, uoExibir].filter((s) => !!String(s).trim());
+  const escopoLinha =
+    [...new Set(escopoPartes.map((s) => String(s).trim()))].join(' · ') || uoExibir || '—';
   const refReceb = r.recebimentoId ? escapeHtmlRelatorio(r.recebimentoId) : '—';
-  const emitidoEm = formatDateTimePt();
-  const cabecalhoImpressao = montarBlocoCabecalhoRirParaImpressao({
+
+  const cabecalhoParams: CabecalhoRirParams = {
     logoBlock,
     escopoLinha,
-    localCfg,
     codigo: r.codigo,
     dataRegistro: formatDatePt(r.dataRegistro),
-    emitidoEm,
+    emitidoEm: formatDateTimePt(),
     uoExibir,
     localExibir,
     contratoExibir,
@@ -156,510 +728,74 @@ export function montarHtmlRelatorioRirCompleto(r: RirRegistro): string {
     romaneio: r.recebimentoRomaneio ?? '',
     procedimento: r.procedimentoNumero,
     solCompra,
+    disciplina: disciplinaExibir,
     obsCurta: r.obsCurta,
     inspecaoQuantitativa: !!r.inspecaoQuantitativa,
     inspecaoQualitativa: !!r.inspecaoQualitativa,
     inspecaoDimensional: !!r.inspecaoDimensional,
-  });
-  return `<div class="rir-doc rir-doc--classic" lang="pt-BR">
-<style>
-/* Margens de página para impressão/PDF: ver @media print { @page { ... } } */
-html {
-  -webkit-print-color-adjust: exact;
-  print-color-adjust: exact;
-}
-body.rir-print-body {
-  margin: 0;
-  padding: 0;
-}
-.rir-doc--classic {
-  /*
-   * Tahoma/Segoe: no Windows imprimem com peso mais uniforme que Arial em negrito+caps no motor do Chromium.
-   * Evitar text-transform:uppercase em CSS nos títulos — combinação com faux-bold gerava “barras” em I/l.
-   */
-  font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
-  color: #0f172a;
-  font-size: 10.5pt;
-  line-height: 1.45;
-  background: #f1f5f9;
-  padding: 14px;
-  max-width: 960px;
-  margin: 0 auto;
-  text-rendering: geometricPrecision;
-  font-synthesis: none;
-  font-variant-ligatures: no-common-ligatures;
-  -webkit-text-stroke: 0;
-}
-.rir-doc--classic * { box-sizing: border-box; }
-.rir-doc-inner {
-  background: #fff;
-  border: 1px solid #334155;
-  padding: 18px 20px 22px;
-}
-.rir-classic-top {
-  display: grid;
-  /* Coluna esquerda fixa para o logo: sem isso o texto central invade por cima no grid */
-  grid-template-columns: minmax(120px, 210px) minmax(0, 1fr) minmax(108px, 168px);
-  gap: 14px 16px;
-  align-items: start;
-  border-bottom: 2px solid #0f172a;
-  padding-bottom: 12px;
-  margin-bottom: 0;
-}
-.rir-brand {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  min-width: 0;
-  max-width: 210px;
-}
-.rir-logo {
-  display: block;
-  max-height: 64px;
-  max-width: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-}
-.rir-brand-fallback { font-size: 16px; font-weight: 700; color: #0f172a; letter-spacing: normal; }
-.rir-title-block {
-  text-align: center;
-  padding: 4px 4px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  word-wrap: break-word;
-}
-.rir-title-main {
-  margin: 0;
-  font-size: 11pt;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  text-transform: none;
-  color: #0f172a;
-  line-height: 1.3;
-}
-.rir-title-sub {
-  margin: 6px 0 0 0;
-  font-size: 11px;
-  color: #475569;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.rir-meta-box {
-  font-size: 11px;
-  text-align: right;
-  line-height: 1.5;
-  color: #334155;
-  min-width: 0;
-}
-.rir-meta-box strong {
-  display: block;
-  font-size: 9px;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: #64748b;
-  margin-bottom: 2px;
-  font-weight: 600;
-}
-.rir-classic-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px 12px;
-  margin-top: 12px;
-  font-size: 11px;
-}
-.rir-classic-grid--2 { grid-template-columns: repeat(2, 1fr); }
-.rir-fld label {
-  display: block;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: #64748b;
-  margin-bottom: 2px;
-}
-.rir-fld span {
-  font-size: 12px;
-  font-weight: 400;
-  color: #0f172a;
-  word-break: break-word;
-  line-height: 1.4;
-}
-/* Documentos: linha1 NF | Fornecedor; linha2 Procedimento | Romaneio; linha3 Sol.compra (esq.); Obs em largura total */
-.rir-doc-campos {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 6px 18px;
-  margin-top: 0;
-  font-size: 11px;
-  align-items: start;
-  max-width: 32rem;
-  width: 100%;
-}
-.rir-doc-campos__nf { grid-column: 1; grid-row: 1; }
-.rir-doc-campos__forn { grid-column: 2; grid-row: 1; }
-.rir-doc-campos__proc { grid-column: 1; grid-row: 2; }
-.rir-doc-campos__rom { grid-column: 2; grid-row: 2; }
-.rir-doc-campos__sol { grid-column: 1; grid-row: 3; }
-.rir-doc-campos__full { grid-column: 1 / -1; grid-row: 4; }
-.rir-classic-bar {
-  margin: 14px 0 8px 0;
-  padding: 7px 10px;
-  background: #e5e7eb;
-  border: 1px solid #94a3b8;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: #1e293b;
-  font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
-}
-.rir-ins-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 8px; font-size: 11px; }
-.rir-ins-label {
-  font-weight: 600;
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: #475569;
-}
-.rir-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; font-weight: 500; }
-.rir-pill.ok { color: #047857; }
-.rir-pill.off { color: #94a3b8; }
-.rir-classic-table-wrap {
-  margin: 0 0 14px;
-  overflow: visible;
-  border: none;
-  background: transparent;
-}
-.rir-thead-repeat-cell {
-  padding: 0 !important;
-  border: none !important;
-  background: #fff !important;
-  vertical-align: top;
-}
-.rir-classic-bar--material {
-  margin-bottom: 0;
-}
-/* Uma unica malha de bordas (evita linhas duplicadas / “sobrando” no PDF) */
-.rir-classic-table {
-  width: 100%;
-  border-collapse: collapse;
-  border-spacing: 0;
-  font-size: 10.5px;
-  border: none;
-  table-layout: auto;
-  font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif;
-}
-.rir-classic-table th {
-  background: #e5e7eb;
-  color: #0f172a;
-  padding: 7px 8px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 10px;
-  border: 1px solid #64748b;
-}
-/* Alinhamento: so na linha de colunas do material (nao no bloco repetido do cabecalho) */
-.rir-classic-table thead tr.rir-thead-cols th:nth-child(1),
-.rir-classic-table thead tr.rir-thead-cols th:nth-child(3),
-.rir-classic-table thead tr.rir-thead-cols th:nth-child(4),
-.rir-classic-table thead tr.rir-thead-cols th:nth-child(6) {
-  text-align: center;
-}
-.rir-classic-table thead tr.rir-thead-cols th:nth-child(2),
-.rir-classic-table thead tr.rir-thead-cols th:nth-child(5) {
-  text-align: left;
-}
-.rir-classic-table td {
-  padding: 7px 8px;
-  vertical-align: top;
-  border: 1px solid #94a3b8;
-  font-weight: 400;
-}
-.rir-classic-table tbody td:nth-child(1),
-.rir-classic-table tbody td:nth-child(3),
-.rir-classic-table tbody td:nth-child(4),
-.rir-classic-table tbody td:nth-child(6) {
-  text-align: center;
-}
-.rir-classic-table tbody td:nth-child(2),
-.rir-classic-table tbody td:nth-child(5) {
-  text-align: left;
-}
-.rir-c-item { width: 36px; font-weight: 500; }
-.rir-c-q { font-variant-numeric: tabular-nums; width: 56px; }
-.rir-c-desc { min-width: 200px; line-height: 1.45; word-break: break-word; font-weight: 400; }
-.rir-c-cert { min-width: 88px; font-weight: 400; }
-.rir-empty-row { text-align: center; color: #94a3b8; padding: 16px !important; font-style: italic; }
-.rir-block {
-  border: 1px solid #cbd5e1;
-  padding: 10px 12px;
-  margin: 8px 0;
-  background: #fafafa;
-  font-size: 11px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-.rir-block h3 {
-  margin: 0 0 6px 0;
-  font-size: 9px;
-  text-transform: none;
-  letter-spacing: 0.02em;
-  color: #475569;
-  font-weight: 600;
-}
-.rir-laudo-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 8px; }
-.rir-laudo-badge { padding: 10px 16px; border-radius: 8px; font-weight: 600; font-size: 12px; display: inline-block; }
-.rir-laudo-badge.aprovado { background: #ecfdf5; color: #047857; border: 2px solid #34d399; }
-.rir-laudo-badge.reprovado { background: #fef2f2; color: #b91c1c; border: 2px solid #f87171; }
-.rir-laudo-badge.obs { background: #fffbeb; color: #b45309; border: 2px solid #fcd34d; }
-.rir-laudo-note { font-size: 11px; color: #64748b; margin: 0; max-width: 480px; line-height: 1.45; }
-.rir-sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 28px; page-break-inside: avoid; }
-.rir-sign > div { text-align: center; }
-.rir-sign .line { border-top: 1px dashed #64748b; margin: 36px 8px 8px 8px; }
-.rir-sign .role {
-  font-size: 9px;
-  text-transform: none;
-  letter-spacing: 0.02em;
-  color: #64748b;
-  font-weight: 600;
-}
-.rir-sign .nome { font-size: 12px; margin-top: 6px; color: #0f172a; font-weight: 500; }
-.rir-sign .data { font-size: 10px; color: #94a3b8; margin-top: 3px; }
-.rir-foot {
-  margin-top: 22px;
-  padding-top: 10px;
-  border-top: 1px solid #cbd5e1;
-  font-size: 9px;
-  color: #94a3b8;
-  line-height: 1.45;
-}
-.rir-strip-mini {
-  font-size: 10px;
-  color: #475569;
-  margin: 8px 0 0;
-  padding: 6px 8px;
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-}
-/* Fluxo em blocos (sem tabela externa): o Chrome imprime/PDF melhor do que com td unico envolvendo tudo. */
-.rir-print-main { display: block; width: 100%; }
-/* Mantém assinaturas + nota legal na mesma página (evita 2ª folha só com rodapé) */
-.rir-print-sign-foot { display: block; }
-@media print {
-  @page {
-    size: A4;
-    margin: 12mm;
-  }
-  html,
-  body.rir-print-body {
-    width: 100% !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    height: auto !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .rir-doc--classic {
-    background: #fff !important;
-    padding: 0 !important;
-    max-width: none !important;
-    width: 100% !important;
-    /* Mesma base tipográfica da pré-visualização (evita “encolher” no PDF) */
-    font-size: 10.5pt !important;
-    font-family: Tahoma, 'Segoe UI', Verdana, Arial, sans-serif !important;
-    text-rendering: geometricPrecision !important;
-    font-synthesis: none !important;
-    margin: 0 !important;
-  }
-  .rir-classic-table td {
-    font-weight: 400 !important;
-  }
-  .rir-classic-table th {
-    font-weight: 600 !important;
-  }
-  .rir-classic-table .rir-c-item {
-    font-weight: 500 !important;
-  }
-  .rir-doc-inner {
-    border: none !important;
-    /* Mantém respiro como na tela; padding 0 deixava o PDF “espremido” e diferente da prévia */
-    padding: 18px 16px 12px !important;
-    box-shadow: none !important;
-    width: 100% !important;
-    max-width: none !important;
-  }
-  .rir-classic-top {
-    grid-template-columns: minmax(120px, 210px) minmax(0, 1fr) minmax(108px, 168px) !important;
-    gap: 14px 16px !important;
-  }
-  .rir-title-block {
-    min-width: 0 !important;
-  }
-  .rir-brand {
-    max-width: 210px !important;
-  }
-  .rir-classic-top,
-  .rir-meta-box,
-  .rir-classic-bar,
-  .rir-block,
-  .rir-strip-mini,
-  .rir-doc-campos,
-  .rir-classic-table th,
-  .rir-classic-table td,
-  .rir-laudo-badge {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .rir-classic-grid {
-    width: 100%;
-  }
-  /* Não forçar largura total: na tela usa max-width 32rem; no PDF tem que ser igual */
-  .rir-doc-campos {
-    max-width: 32rem;
-    width: 100%;
-  }
-  .rir-classic-table thead {
-    display: table-header-group;
-  }
-  .rir-thead-repeat-cell {
-    border: none !important;
-    padding: 0 !important;
-  }
-  .rir-classic-table tbody tr {
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-  .rir-classic-table-wrap {
-    overflow: visible !important;
-  }
-  /* Tabela: mesmas bordas da tela — collapse evita linhas duplicadas no motor de impressao */
-  .rir-classic-table {
-    width: 100% !important;
-    border-collapse: collapse !important;
-    border-spacing: 0 !important;
-    border: none !important;
-    font-size: 10.5px !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .rir-classic-table th,
-  .rir-classic-table td {
-    border: 1px solid #94a3b8 !important;
-  }
-  .rir-classic-table th {
-    border-color: #64748b !important;
-  }
-  /* Menos “respiro” vertical no PDF: evita ultrapassar 1 página por poucos mm */
-  .rir-classic-bar {
-    margin: 10px 0 6px 0 !important;
-    padding: 6px 8px !important;
-  }
-  .rir-block {
-    margin: 6px 0 !important;
-    padding: 8px 10px !important;
-  }
-  .rir-laudo-wrap {
-    margin-top: 6px !important;
-  }
-  .rir-strip-mini {
-    margin-top: 6px !important;
-    padding: 4px 6px !important;
-  }
-  .rir-sign {
-    margin-top: 14px !important;
-    page-break-inside: avoid;
-    break-inside: avoid;
-  }
-  .rir-sign .line {
-    margin: 22px 8px 6px 8px !important;
-  }
-  .rir-foot {
-    margin-top: 8px !important;
-    padding-top: 8px !important;
-    page-break-before: avoid !important;
-    break-before: avoid !important;
-  }
-  .rir-print-sign-foot {
-    page-break-inside: avoid !important;
-    break-inside: avoid !important;
-  }
-}
-</style>
-<div class="rir-doc-inner">
-  <div class="rir-print-main">
-  <div class="rir-classic-table-wrap">
-    <table class="rir-classic-table">
-      <thead>
-        <tr class="rir-thead-repeat">
-          <td colspan="6" class="rir-thead-repeat-cell">${cabecalhoImpressao}</td>
-        </tr>
-        <tr class="rir-thead-cols">
-          <th>Item</th>
-          <th>Código</th>
-          <th>Qtd.</th>
-          <th>Unid.</th>
-          <th>Descrição</th>
-          <th>Certificado</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </div>
+  };
 
-  <div class="rir-classic-bar">Inspeção de recebimento</div>
-  <div class="rir-block">
-    <h3>Observações da inspeção</h3>
-    ${escapeHtmlRelatorio(r.observacoesQc || '—')}
-  </div>
+  const cabecalho = montarCabecalhoInspecaoRirHtml(cabecalhoParams);
+  const linhas = montarLinhasTabelaRir(itens, 0);
+  const rodapeParams = { r, laudo, laudoTxt, statusTxt, refReceb, segRodapeInst };
 
-  <div class="rir-classic-bar">Laudo</div>
-  <div class="rir-laudo-wrap">
-    <span class="rir-laudo-badge ${laudo === 'reprovado' ? 'reprovado' : laudo === 'observacoes' ? 'obs' : 'aprovado'}">${escapeHtmlRelatorio(laudoTxt)}</span>
-    <p class="rir-laudo-note">Em caso de reprovação ou conforme observações, siga o procedimento interno (segregação, nova conferência, etc.).</p>
-  </div>
-
-  <div class="rir-strip-mini">
-    <strong>Rastreio:</strong> ID recebimento ${refReceb} · ID RIR ${escapeHtmlRelatorio(r.id)} · Estado: ${escapeHtmlRelatorio(statusTxt)} · Relatório v${DOC_VERSION}
-  </div>
-
-  <div class="rir-classic-bar">Assinaturas</div>
-  <div class="rir-print-sign-foot">
-  <div class="rir-sign">
-    <div><div class="line"></div><div class="role">Responsável — recebimento</div><div class="nome">${escapeHtmlRelatorio(r.assinaturaRecebimento.nome)}</div><div class="data">${r.assinaturaRecebimento.data ? formatDatePt(r.assinaturaRecebimento.data) : '—'}</div></div>
-    <div><div class="line"></div><div class="role">Controle de qualidade</div><div class="nome">${escapeHtmlRelatorio(r.assinaturaCq.nome)}</div><div class="data">${r.assinaturaCq.data ? formatDatePt(r.assinaturaCq.data) : '—'}</div></div>
-    <div><div class="line"></div><div class="role">Cliente</div><div class="nome">${escapeHtmlRelatorio(r.assinaturaCliente.nome)}</div><div class="data">${r.assinaturaCliente.data ? formatDatePt(r.assinaturaCliente.data) : '—'}</div></div>
-  </div>
-  <div class="rir-foot">
-    Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteúdo para arquivo e auditoria. Referência: ${escapeHtmlRelatorio(r.codigo)}.
-  </div>
-  </div>
-  </div>
+  return `<div class="rir-doc" lang="pt-BR">
+<div class="rir-print-main">
+${montarTabelaMaterialRir(cabecalho, linhas, montarRodapeRir(rodapeParams))}
 </div>
 </div>`;
 }
 
-export function montarDocumentoHtmlImpressaoRir(registro: RirRegistro): string {
-  const titulo = `I.S.O PRO — RIR ${(registro.codigo || '').trim() || '—'}`;
-  const inner = montarHtmlRelatorioRirCompleto(registro);
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8" />
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtmlRelatorio(titulo)}</title>
-<style>${cssBarraPreVisualizacaoImpressaoHtml()}</style>
-</head>
-<body class="rir-print-body">
-${htmlBarraPreVisualizacaoImpressao()}
-${inner}
-${scriptBarraPreVisualizacaoImpressao()}
-</body>
-</html>`;
+function montarPdfMetaRir(r: RirRegistro, escopoLinha: string): RelatorioPdfMeta {
+  return {
+    headerTitle: 'RELATÓRIO DE INSPEÇÃO DE RECEBIMENTO',
+    headerSub: escopoLinha,
+    headerCode: (r.codigo || '').trim() || '—',
+    footerPrefix: 'Folha',
+    footerOnly: true,
+  };
 }
 
-export function imprimirRirHtml(registro: RirRegistro): boolean {
-  return abrirImpressaoHtmlRelatorio(montarDocumentoHtmlImpressaoRir(registro));
+export function montarDocumentoHtmlImpressaoRir(
+  registro: RirRegistro,
+  opts?: { paraPdf?: boolean },
+): string {
+  const codigo = (registro.codigo || '').trim() || '—';
+  const cfg = readConfiguracoes();
+  const clienteNome = cfg.cliente || '';
+  const projetoNome = cfg.projeto || '';
+  const obCfg = rirObraDefaultsFromConfig(cfg);
+  const uoExibir = (registro.uo || '').trim() || obCfg.uo;
+  const escopoPartes = [clienteNome, projetoNome, uoExibir].filter((s) => !!String(s).trim());
+  const escopoLinha =
+    [...new Set(escopoPartes.map((s) => String(s).trim()))].join(' · ') || uoExibir || '—';
+
+  return montarDocumentoHtmlInstitucionalPaged({
+    title: `I.S.O PRO — RIR ${codigo}`,
+    bodyClass: 'rir-print-body',
+    reportStyles: cssEstilosRelatorioRir(),
+    contentHtml: montarConteudoRir(registro, { paraPdf: opts?.paraPdf }),
+    usePagedJs: false,
+    includeToolbar: !opts?.paraPdf,
+    pdfMeta: montarPdfMetaRir(registro, escopoLinha),
+  });
+}
+
+export function montarHtmlRelatorioRirCompleto(registro: RirRegistro): string {
+  return montarDocumentoHtmlImpressaoRir(registro);
+}
+
+/** HTML optimizado para printToPDF / Playwright (sem barra de pré-visualização). */
+export function montarHtmlRelatorioRirParaPdf(registro: RirRegistro): string {
+  return montarDocumentoHtmlImpressaoRir(registro, { paraPdf: true });
+}
+
+/**
+ * Motor oficial RIR — HTML institucional + paginação explícita + Chromium (Playwright / printToPDF).
+ * Ver `imprimirRirPdf.ts`.
+ */
+export async function preVisualizarRirRelatorioHtmlLegado(
+  registro: RirRegistro,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return abrirPreVisualizacaoHtmlRelatorio(montarDocumentoHtmlImpressaoRir(registro));
 }

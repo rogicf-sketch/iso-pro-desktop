@@ -12,6 +12,12 @@ import { escreverShellPreviewReport } from './reportPdfPreviewShell';
 
 import { resolvePreloadPath } from './window';
 
+import {
+  aguardarCarregamentoWebContents,
+  aguardarIframePdfPreviewShell,
+  carregarPdfTemporarioNaJanela,
+} from './pdfWebContents';
+
 
 
 function validarBase64Pdf(input: unknown): string | null {
@@ -134,42 +140,6 @@ function criarJanelaCarregamentoPdf(titulo: string): BrowserWindow {
 
 
 
-async function aguardarCarregamentoWebContents(win: BrowserWindow, timeoutMs = 30_000): Promise<void> {
-
-  await new Promise<void>((resolve, reject) => {
-
-    const timer = setTimeout(() => reject(new Error('Timeout ao carregar pré-visualização.')), timeoutMs);
-
-    const wc = win.webContents;
-
-    const fail = (_e: unknown, code: number, desc: string) => {
-
-      clearTimeout(timer);
-
-      reject(new Error(`Falha ao carregar pré-visualização (${code}): ${desc}`));
-
-    };
-
-    const finish = () => {
-
-      clearTimeout(timer);
-
-      wc.removeListener('did-fail-load', fail);
-
-      resolve();
-
-    };
-
-    wc.once('did-fail-load', fail);
-
-    wc.once('did-finish-load', finish);
-
-  });
-
-}
-
-
-
 async function abrirPreviewReportPdfInterno(
 
   b64: string,
@@ -244,7 +214,7 @@ async function abrirPreviewReportPdfInterno(
 
     await win.webContents.executeJavaScript(`window.__reportPdfBase64 = ${JSON.stringify(b64)};`, true);
 
-
+    await aguardarIframePdfPreviewShell(win.webContents, 'report-view');
 
     if (!win.isDestroyed()) {
 
@@ -378,9 +348,7 @@ export function registerReportPdfHandlers() {
 
       tmp = await escreverPdfTemporarioGenerico(b64, 'report-print');
 
-      await win.loadURL(`file://${tmp.path.replace(/\\/g, '/')}`);
-
-      await aguardarCarregamentoWebContents(win);
+      await carregarPdfTemporarioNaJanela(win, tmp.path);
 
 
 

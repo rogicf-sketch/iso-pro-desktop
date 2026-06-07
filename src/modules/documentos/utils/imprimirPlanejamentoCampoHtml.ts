@@ -1,5 +1,9 @@
 import {
-  abrirImpressaoHtmlRelatorio,
+  imprimirRelatorioProfissional,
+  nomeArquivoRelatorioPdf,
+  preVisualizarRelatorioProfissional,
+} from '../../../lib/relatorioProfissional';
+import {
   cssBarraPreVisualizacaoImpressaoHtml,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
@@ -413,10 +417,32 @@ export function montarHtmlPlanejamentoCampo(
 </html>`;
 }
 
-export function imprimirPlanejamentoCampoHtml(
+export async function imprimirPlanejamentoCampoHtml(
   doc: Documento,
   metricas: Map<string, MetricasPorCodigoMaterial>,
   localizacoesRecebimentoPorCodigo?: Map<string, string>,
-): boolean {
-  return abrirImpressaoHtmlRelatorio(montarHtmlPlanejamentoCampo(doc, metricas, localizacoesRecebimentoPorCodigo));
+): Promise<boolean> {
+  const html = montarHtmlPlanejamentoCampo(doc, metricas, localizacoesRecebimentoPorCodigo);
+  const fileName = nomeArquivoRelatorioPdf(doc.numero || doc.id || 'documento', 'planejamento');
+  const titulo = `Planejamento — ${doc.numero || doc.id || 'documento'}`;
+  return imprimirRelatorioProfissional({
+    html,
+    fileName,
+    titulo,
+  });
+}
+
+export async function preVisualizarPlanejamentoCampoHtml(
+  doc: Documento,
+  metricas: Map<string, MetricasPorCodigoMaterial>,
+  localizacoesRecebimentoPorCodigo?: Map<string, string>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const html = montarHtmlPlanejamentoCampo(doc, metricas, localizacoesRecebimentoPorCodigo);
+  const fileName = nomeArquivoRelatorioPdf(doc.numero || doc.id || 'documento', 'planejamento');
+  const titulo = `Planejamento — ${doc.numero || doc.id || 'documento'}`;
+  return preVisualizarRelatorioProfissional({
+    html,
+    fileName,
+    titulo,
+  });
 }

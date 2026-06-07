@@ -1,4 +1,3 @@
-import { getScopedIsoProStorageKey } from './isoProAmbiente';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from './logoInstitucional.constants';
 import { readConfiguracoes } from '../modules/configuracoes/services/configuracoes.service';
 
@@ -8,14 +7,10 @@ export const LEGACY_LOGO_STORAGE_KEY_BASE = 'iso-pro-desktop-recibo-logo-url';
 /** @deprecated Use {@link LEGACY_LOGO_STORAGE_KEY_BASE} ou `getScopedIsoProStorageKey(LEGACY_LOGO_STORAGE_KEY_BASE)`. */
 export const LEGACY_LOGO_STORAGE_KEY = LEGACY_LOGO_STORAGE_KEY_BASE;
 
-function legacyLogoInstitucionalStorageKey(): string {
-  return getScopedIsoProStorageKey(LEGACY_LOGO_STORAGE_KEY_BASE);
-}
-
 /**
  * URL do logo institucional para relatorios impressos (recibo, RIR, RNC, etiquetas, etc.).
  * Aceita caminho em `public`, URL absoluta ou `data:image/...` (upload em Configuracoes).
- * Ordem: override explicito > Configuracoes > localStorage legado > vazio.
+ * Ordem: override explicito > Configuracoes > logo padrao de fabrica.
  */
 export function resolverUrlLogoInstitucional(override?: string | null): string {
   const explicit = override?.trim();
@@ -23,8 +18,6 @@ export function resolverUrlLogoInstitucional(override?: string | null): string {
   if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     const fromConfig = readConfiguracoes().logoInstitucionalUrl?.trim();
     if (fromConfig) return fromConfig;
-    const stored = localStorage.getItem(legacyLogoInstitucionalStorageKey())?.trim();
-    if (stored) return stored;
   }
   return LOGO_INSTITUCIONAL_PADRAO_FABRICA;
 }

@@ -23,6 +23,7 @@ electron/.dev-main.mjs.map
 !.env.example
 scripts/deploy-web.env
 scripts/backup-oci.env
+services/pdf-worker/pdf-worker.local.env
 
 # Supabase CLI estado local (não versionar)
 supabase/.temp/
@@ -34,6 +35,12 @@ backups
 test-results/
 playwright-report/
 blob-report/
+
+# PDFs de teste / revisão local (não versionar)
+.pdf-review/
+/test-*.pdf
+/*-review.pdf
+/verify-*.pdf
 
 # Editor directories and files
 .vscode/*

@@ -2,6 +2,7 @@ import { blobToDataUrl, dataUrlToBlob } from '../../../lib/mediaBlobCodec';
 import { getScopedIsoProStorageKey, isStorageKeyForAmbienteAtivo } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { isMediaRefKey, mediaBlobDeleteByPrefix, mediaBlobGet, mediaBlobPut, MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
+import { shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import { getErrorMessage, withLocalFallback } from '../../../lib/service-result';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
@@ -11,6 +12,13 @@ import {
   parseRelatorioFotograficoSeqState,
 } from '../schemas/relatorioFotograficoStorage.zod';
 import type { RelatorioFotograficoFoto, RelatorioFotograficoMeta, RelatorioFotograficoPayload } from '../types/relatorioFotografico.types';
+import {
+  emptyRelatorioFotograficoCloudBundle,
+  listMetadadosFromBundle,
+  mergeReportIntoBundle,
+  parseRelatorioFotograficoCloudBundle,
+  type RelatorioFotograficoCloudBundleV2,
+} from '../utils/relatorioFotograficoCloudBundle';
 
 const PAYLOAD_KEY_PREFIX = 'iso-pro-rf-payload-v1-';
 const SNAPSHOT_ID = 'default';
@@ -320,7 +328,7 @@ function remoteMatchesReport(remote: RelatorioFotograficoPayload, reportId: stri
   return false;
 }
 
-async function readRemotePayload(): Promise<RelatorioFotograficoPayload> {
+async function readRemoteBundle(): Promise<RelatorioFotograficoCloudBundleV2> {
   const supabase = getSupabase();
   if (!supabase) throw new Error('Supabase nao configurado.');
   const { data, error } = await supabase
@@ -330,22 +338,29 @@ async function readRemotePayload(): Promise<RelatorioFotograficoPayload> {
     .eq('tenant_id', getActiveTenantId())
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return normalizeRelatorioFotograficoPayload(data?.payload);
+  if (!data?.payload) return emptyRelatorioFotograficoCloudBundle();
+  return parseRelatorioFotograficoCloudBundle(data.payload, normalizeRelatorioFotograficoPayload);
 }
 
-async function writeRemotePayload(payload: RelatorioFotograficoPayload): Promise<void> {
+async function writeRemoteBundle(bundle: RelatorioFotograficoCloudBundleV2): Promise<void> {
   const supabase = getSupabase();
   if (!supabase) throw new Error('Supabase nao configurado.');
   const { error } = await supabase.from('iso_pro_relatorio_snapshot').upsert(
     {
       id: SNAPSHOT_ID,
       tenant_id: getActiveTenantId(),
-      payload,
+      payload: bundle,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'id,tenant_id' },
   );
   if (error) throw new Error(error.message);
+}
+
+async function readRemotePayloadForReport(reportId: string): Promise<RelatorioFotograficoPayload | null> {
+  const bundle = await readRemoteBundle();
+  const p = bundle.reports[reportId.trim()];
+  return p ?? null;
 }
 
 /**
@@ -354,11 +369,14 @@ async function writeRemotePayload(payload: RelatorioFotograficoPayload): Promise
 export function listarMetadadosRelatoriosFotograficos(): RelatorioFotograficoMeta[] {
   const ids = readCatalogIdsRaw();
   const out: RelatorioFotograficoMeta[] = [];
+  const seen = new Set<string>();
   for (const id of ids) {
     const p = readPayloadFromKey(id);
     if (!p) continue;
+    const rid = (p.reportId || id).trim();
+    seen.add(rid);
     out.push({
-      id: p.reportId || id,
+      id: rid,
       titulo: p.titulo.trim() || '(sem título)',
       numeroRelatorio: p.numeroRelatorio.trim(),
       salvoEm: p.salvoEm,
@@ -366,6 +384,36 @@ export function listarMetadadosRelatoriosFotograficos(): RelatorioFotograficoMet
     });
   }
   return out;
+}
+
+/** Metadados locais + nuvem (quando Supabase configurado). */
+export async function listarMetadadosRelatoriosFotograficosComNuvem(): Promise<
+  ServiceResult<RelatorioFotograficoMeta[]>
+> {
+  const local = listarMetadadosRelatoriosFotograficos();
+  if (!hasSupabaseConfig()) {
+    return { success: true, data: local, meta: { source: 'local' } };
+  }
+  try {
+    const bundle = await readRemoteBundle();
+    const remote = listMetadadosFromBundle(bundle);
+    const byId = new Map<string, RelatorioFotograficoMeta>();
+    for (const m of remote) byId.set(m.id, m);
+    for (const m of local) {
+      const cur = byId.get(m.id);
+      if (!cur || Date.parse(m.salvoEm) >= Date.parse(cur.salvoEm)) {
+        byId.set(m.id, m);
+      }
+    }
+    const merged = [...byId.values()].sort((a, b) => Date.parse(b.salvoEm) - Date.parse(a.salvoEm));
+    return { success: true, data: merged, meta: { source: 'supabase' } };
+  } catch (error) {
+    return {
+      success: true,
+      data: local,
+      meta: { source: 'local', fallbackReason: getErrorMessage(error, 'Falha ao listar relatorios na nuvem.') },
+    };
+  }
 }
 
 /** Resumo de relatórios já gravados no catálogo local, por `recebimentoId` (evitar duplicidade na UI). */
@@ -484,10 +532,10 @@ export async function carregarRelatorioFotografico(
   }
 
   const fallback = await withLocalFallback({
-    shouldTryRemote: true,
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: async () => {
-      const remote = await readRemotePayload();
-      if (!remoteMatchesReport(remote, targetId)) {
+      const remote = await readRemotePayloadForReport(targetId);
+      if (!remote || !remoteMatchesReport(remote, targetId)) {
         return local;
       }
       const merged = newerPayload(local, remote);
@@ -541,7 +589,8 @@ export async function salvarRelatorioFotografico(
     await writePayloadToStorage(next);
     const stored = readPayloadFromKey(id) ?? next;
     const forCloud = await hydrateRelatorioFotograficoPayload(stored);
-    await writeRemotePayload(forCloud);
+    const bundle = mergeReportIntoBundle(await readRemoteBundle(), forCloud);
+    await writeRemoteBundle(bundle);
     return { success: true, data: forCloud, meta: { source: 'supabase' } };
   } catch (error) {
     try {

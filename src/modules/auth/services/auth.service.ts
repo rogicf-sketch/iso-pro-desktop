@@ -2,10 +2,21 @@ import { isElectronApp } from '../../../lib/isElectronApp';
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
-import { getSupabase, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
-import { hashPassword, isPasswordHash, verifyPassword } from 'iso-pro-shared';
+import { getSupabase, hasSupabaseConfig, resetSupabaseClient, formatSupabaseConnectionError } from '../../../lib/supabase';
+import { verifyPassword } from 'iso-pro-shared';
+import {
+  autenticarUsuarioIsoProRpc,
+  clearCachedOperationalToken,
+  refreshUsuarioSessaoIsoProRpc,
+} from '../../../lib/isoProAuthRpc';
+import {
+  markSessionCloudValidationOk,
+  markSessionCloudValidationStale,
+  resetSessionCloudHealth,
+} from '../../../lib/sessionCloudHealth';
 import { parseAuthSessionUser, parseAuthUsersStorageList } from '../schemas/authLocal.zod';
 import type { AppModule, AuthUser, LoginPayload, Permission, PermissionAction } from '../types/auth.types';
+import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { appendAuthAuditEvent } from './authAudit.service';
 
 export const AUTH_SESSION_STORAGE_KEY_BASE = 'iso-pro-desktop-session';
@@ -144,6 +155,7 @@ export function getVolatileSessionPassword(): string | null {
 
 export function clearVolatileSessionPassword(): void {
   volatileSessionPassword = null;
+  clearCachedOperationalToken();
 }
 
 /** Quem está em sessão alterou a própria senha na nuvem — manter actor alinhado ao RPC. */
@@ -271,29 +283,6 @@ function resolveEmbeddedLocalMockUser(user: AuthUser): (AuthUser & { senha: stri
   return localMockUserByLogin(user.login);
 }
 
-type RemotePermissionRow = {
-  modulo?: string | null;
-  acao?: string | null;
-  permitido?: boolean | null;
-};
-
-type RemoteProfileRow = {
-  id?: string | null;
-  nome?: string | null;
-  codigo?: string | null;
-  perfil_permissoes?: RemotePermissionRow[] | null;
-};
-
-type RemoteUserRow = {
-  id?: string | null;
-  login?: string | null;
-  nome?: string | null;
-  senha?: string | null;
-  ativo?: boolean | null;
-  perfis_acesso?: RemoteProfileRow | null;
-  usuario_permissoes?: RemotePermissionRow[] | null;
-};
-
 class AuthServiceError extends Error {
   code: 'invalid_credentials' | 'remote_unavailable';
 
@@ -361,89 +350,58 @@ function readLocalUsers(): Array<AuthUser & { senha: string }> {
     }));
 }
 
-function mapRemoteUser(row: RemoteUserRow): AuthUser {
-  const perfil = row.perfis_acesso;
-  const sourcePermissions = row.usuario_permissoes?.length ? row.usuario_permissoes : perfil?.perfil_permissoes ?? [];
-  const permissoes = sourcePermissions
-    .filter(
-      (permissao): permissao is Required<Pick<RemotePermissionRow, 'modulo' | 'acao' | 'permitido'>> &
-        RemotePermissionRow =>
-        Boolean(permissao.modulo && permissao.acao && isAppModule(permissao.modulo)),
-    )
-    .map((permissao) => ({
-      modulo: permissao.modulo as AppModule,
-      acao: normalizePermissionAction(permissao.acao ?? 'visualizar'),
-      permitido: Boolean(permissao.permitido),
-    }));
-
-  return {
-    id: String(row.id ?? ''),
-    login: String(row.login ?? ''),
-    nome: String(row.nome ?? row.login ?? 'Usuario'),
-    perfil: {
-      id: String(perfil?.id ?? ''),
-      nome: String(perfil?.nome ?? perfil?.codigo ?? 'Perfil'),
-    },
-    permissoes,
-  };
-}
-
 async function senhaArmazenadaValida(plainSenha: string, storedSenha: string): Promise<boolean> {
   return verifyPassword(plainSenha, storedSenha);
 }
 
-/** Rehash silencioso após login com senha legada em texto plano (migração gradual). */
-function rehashRemotePasswordIfLegacy(userId: string, plainSenha: string, storedSenha: string): void {
-  if (isPasswordHash(storedSenha)) return;
-  const supabase = getSupabase();
-  if (!supabase) return;
-  void (async () => {
-    try {
-      const hashed = await hashPassword(plainSenha);
-      await supabase
-        .from('usuarios_sistema')
-        .update({ senha: hashed })
-        .eq('id', userId)
-        .eq('tenant_id', getActiveTenantId());
-    } catch {
-      /* migração best-effort */
-    }
-  })();
+function mapAuthRpcUserToAuthUser(
+  rpcUser: import('../../../lib/isoProAuthRpc').IsoProAuthRpcUser,
+): AuthUser {
+  const permissoes = rpcUser.permissoes
+    .filter((p) => isAppModule(p.modulo))
+    .map((p) => ({
+      modulo: p.modulo as AppModule,
+      acao: normalizePermissionAction(p.acao),
+      permitido: Boolean(p.permitido),
+    }));
+  return {
+    id: rpcUser.id,
+    login: rpcUser.login,
+    nome: rpcUser.nome,
+    perfil: { id: rpcUser.perfil.id, nome: rpcUser.perfil.nome },
+    permissoes: mergePermissoesComDefaultsPerfil(permissoes, rpcUser.perfil.id),
+  };
 }
 
 async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
-  const supabase = getSupabase();
-  if (!supabase) {
-    throw new AuthServiceError('Supabase nao configurado.', 'remote_unavailable');
-  }
-
   const login = payload.login.trim().toLowerCase();
   const senha = payload.senha.trim();
+  const tenantId = getActiveTenantId();
 
-  const { data, error } = await supabase
-    .from('usuarios_sistema')
-    .select('id,login,nome,senha,ativo,perfis_acesso(id,codigo,nome,perfil_permissoes(modulo,acao,permitido)),usuario_permissoes(modulo,acao,permitido)')
-    .eq('login', login)
-    .eq('tenant_id', getActiveTenantId())
-    .eq('ativo', true)
-    .maybeSingle();
-
-  if (error) {
-    throw new AuthServiceError(error.message, 'remote_unavailable');
+  const rpc = await autenticarUsuarioIsoProRpc(tenantId, login, senha);
+  if (rpc.ok) {
+    const sessionUser = mapAuthRpcUserToAuthUser(rpc.user);
+    setVolatileSessionPasswordAfterSuccessfulLogin(senha);
+    persistAuthSession(sessionUser, payload.permanecerLogado);
+    markSessionCloudValidationOk();
+    return sessionUser;
   }
 
-  const user = data as RemoteUserRow | null;
-  const storedSenha = String(user?.senha ?? '');
-  if (!user || !(await senhaArmazenadaValida(senha, storedSenha))) {
-    throw new AuthServiceError('Login ou senha invalidos.', 'invalid_credentials');
+  if (rpc.rpcMissing) {
+    throw new AuthServiceError(
+      'Servidor Supabase desatualizado: falta a funcao iso_pro_autenticar_usuario. Execute «npx supabase db push» no projeto e tente novamente.',
+      'remote_unavailable',
+    );
   }
 
-  rehashRemotePasswordIfLegacy(String(user.id ?? ''), senha, storedSenha);
+  if (/network|fetch|timeout|failed to fetch/i.test(rpc.error)) {
+    throw new AuthServiceError(
+      formatSupabaseConnectionError(traduzirErroOperacionalIsoPro(rpc.error)),
+      'remote_unavailable',
+    );
+  }
 
-  const sessionUser = mapRemoteUser(user);
-  setVolatileSessionPasswordAfterSuccessfulLogin(senha);
-  persistAuthSession(sessionUser, payload.permanecerLogado);
-  return sessionUser;
+  throw new AuthServiceError(rpc.error || 'Login ou senha invalidos.', 'invalid_credentials');
 }
 
 export async function login(payload: LoginPayload): Promise<AuthUser> {
@@ -475,30 +433,6 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
       return await loginRemote(payload);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Falha ao autenticar no Supabase.';
-      const canUseLocalFallback = error instanceof AuthServiceError && error.code === 'remote_unavailable';
-      if (!canUseLocalFallback) {
-        appendAuthAuditEvent({
-          type: 'login_failure',
-          actorLogin: payload.login.trim().toLowerCase(),
-          detail: message,
-        });
-        throw new Error(message);
-      }
-      const login = payload.login.trim().toLowerCase();
-      const fallbackUser = readLocalUsers().find((item) => item.login === login) ?? localMockUserByLogin(login);
-      if (fallbackUser) {
-        if (await senhaArmazenadaValida(payload.senha.trim(), fallbackUser.senha)) {
-          const sessionUser = sanitizeUser(fallbackUser);
-          setVolatileSessionPasswordAfterSuccessfulLogin(payload.senha.trim());
-          persistAuthSession(sessionUser, payload.permanecerLogado);
-          appendAuthAuditEvent({
-            type: 'login_success',
-            actorLogin: sessionUser.login,
-            detail: `Login realizado com fallback local por indisponibilidade da nuvem. Sessao ${payload.permanecerLogado ? 'persistente' : 'ate fechar o browser'}.`,
-          });
-          return sessionUser;
-        }
-      }
       appendAuthAuditEvent({
         type: 'login_failure',
         actorLogin: payload.login.trim().toLowerCase(),
@@ -542,6 +476,7 @@ export function logout() {
   }
   clearAuthSessionStorage();
   clearVolatileSessionPassword();
+  resetSessionCloudHealth();
   invalidateIsoProSnapshotCache();
   resetSupabaseClient();
 }
@@ -597,35 +532,65 @@ async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
     throw new AuthServiceError('Supabase nao configurado.', 'remote_unavailable');
   }
 
-  const { data, error } = await supabase
-    .from('usuarios_sistema')
-    .select('id,login,nome,senha,ativo,perfis_acesso(id,codigo,nome,perfil_permissoes(modulo,acao,permitido)),usuario_permissoes(modulo,acao,permitido)')
-    .eq('id', user.id)
-    .eq('tenant_id', getActiveTenantId())
-    .eq('ativo', true)
-    .maybeSingle();
+  const senhaRefresh = getVolatileSessionPassword();
+  if (senhaRefresh) {
+    const rpc = await autenticarUsuarioIsoProRpc(getActiveTenantId(), user.login, senhaRefresh);
+    if (rpc.ok) {
+      const sessionUser = mapAuthRpcUserToAuthUser(rpc.user);
+      const backend = getActiveAuthSessionStorage() ?? window.localStorage;
+      backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+      touchAuthSessionActivity();
+      markSessionCloudValidationOk();
+      return sessionUser;
+    }
 
-  if (error) {
-    throw new AuthServiceError(error.message, 'remote_unavailable');
+    if (!rpc.rpcMissing) {
+      if (/network|fetch|timeout|failed to fetch/i.test(rpc.error)) {
+        markSessionCloudValidationStale();
+        throw new AuthServiceError(rpc.error, 'remote_unavailable');
+      }
+      appendAuthAuditEvent({
+        type: 'session_invalidated',
+        actorLogin: user.login,
+        detail: 'Sessao invalidada porque o utilizador deixou de estar ativo na base principal.',
+      });
+      clearAuthSessionStorage();
+      clearVolatileSessionPassword();
+      return null;
+    }
   }
 
-  const refreshed = data as RemoteUserRow | null;
-  if (!refreshed) {
-    appendAuthAuditEvent({
-      type: 'session_invalidated',
-      actorLogin: user.login,
-      detail: 'Sessao invalidada porque o usuario deixou de estar ativo na base principal.',
-    });
-    clearAuthSessionStorage();
-    clearVolatileSessionPassword();
-    return null;
+  const refreshRpc = await refreshUsuarioSessaoIsoProRpc(getActiveTenantId(), user.id);
+  if (refreshRpc.ok) {
+    const sessionUser = mapAuthRpcUserToAuthUser(refreshRpc.user);
+    const backend = getActiveAuthSessionStorage() ?? window.localStorage;
+    backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    touchAuthSessionActivity();
+    markSessionCloudValidationOk();
+    return sessionUser;
   }
 
-  const sessionUser = mapRemoteUser(refreshed);
-  const backend = getActiveAuthSessionStorage() ?? window.localStorage;
-  backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
-  touchAuthSessionActivity();
-  return sessionUser;
+  if (refreshRpc.rpcMissing) {
+    markSessionCloudValidationStale();
+    throw new AuthServiceError(
+      'Servidor Supabase desatualizado: falta iso_pro_refresh_usuario_sessao. Execute «npx supabase db push».',
+      'remote_unavailable',
+    );
+  }
+
+  if (/network|fetch|timeout|failed to fetch/i.test(refreshRpc.error)) {
+    markSessionCloudValidationStale();
+    throw new AuthServiceError(refreshRpc.error, 'remote_unavailable');
+  }
+
+  appendAuthAuditEvent({
+    type: 'session_invalidated',
+    actorLogin: user.login,
+    detail: 'Sessao invalidada porque o utilizador deixou de estar ativo na base principal.',
+  });
+  clearAuthSessionStorage();
+  clearVolatileSessionPassword();
+  return null;
 }
 
 function refreshLocalSession(user: AuthUser): AuthUser | null {
@@ -695,10 +660,14 @@ export async function validateCurrentSession(user: AuthUser | null): Promise<Aut
   if (hasSupabaseConfig()) {
     try {
       const refreshed = await refreshRemoteSession(user);
-      if (refreshed) touchAuthSessionActivity();
+      if (refreshed) {
+        touchAuthSessionActivity();
+        markSessionCloudValidationOk();
+      }
       return refreshed;
     } catch (error) {
       if (error instanceof AuthServiceError && error.code === 'remote_unavailable') {
+        markSessionCloudValidationStale();
         touchAuthSessionActivity();
         return user;
       }

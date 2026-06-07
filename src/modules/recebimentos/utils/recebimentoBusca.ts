@@ -81,3 +81,29 @@ export function recebimentoCorrespondeBuscaInteligente(
 
   return false;
 }
+
+/**
+ * Texto expandido para busca cruzada (ex.: historico de etiquetas): NF com/sem prefixo e somente digitos.
+ */
+export function textoRecebimentoExpandidoParaBusca(recebimento: {
+  notaFiscal: string;
+  romaneio: string;
+  fornecedor: string;
+}): string {
+  const nf = (recebimento.notaFiscal ?? '').trim();
+  const rom = (recebimento.romaneio ?? '').trim();
+  const forn = (recebimento.fornecedor ?? '').trim();
+  const chunks: string[] = [];
+  const push = (s: string) => {
+    const x = s.toLowerCase().trim();
+    if (x) chunks.push(x);
+  };
+  push(nf);
+  push(rom);
+  push(forn);
+  const nfDigits = nf.replace(/\D/g, '');
+  if (nfDigits.length >= 4) push(nfDigits);
+  const nfSemPrefixo = nf.replace(/^(nf|n\.?\s*f\.?)[\s.:_-]*/i, '').trim();
+  push(nfSemPrefixo);
+  return chunks.join(' ');
+}

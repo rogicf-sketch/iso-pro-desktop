@@ -1,6 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { Button } from '../../../components/ui/Button';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -13,7 +13,7 @@ import {
   excluirRelatorioFotograficoLocal,
   hydrateRelatorioFotograficoPayload,
   limparTodosRelatoriosFotograficosLocais,
-  listarMetadadosRelatoriosFotograficos,
+  listarMetadadosRelatoriosFotograficosComNuvem,
 } from '../services/relatorioFotografico.service';
 import type { RelatorioFotograficoMeta, RelatorioFotograficoPayload } from '../types/relatorioFotografico.types';
 import { montarHtmlRelatorioFotografico } from '../utils/imprimirRelatorioFotograficoHtml';
@@ -45,13 +45,19 @@ export function RelatorioFotograficoListPage() {
   const { canAccessAction } = useAuth();
   const canEdit = canAccessAction('relatorios', 'editar');
 
-  const [items, setItems] = useState<RelatorioFotograficoMeta[]>(() => listarMetadadosRelatoriosFotograficos());
+  const [items, setItems] = useState<RelatorioFotograficoMeta[]>([]);
   const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    setItems(listarMetadadosRelatoriosFotograficos());
+    void listarMetadadosRelatoriosFotograficosComNuvem().then((r) => {
+      if (r.success && r.data) setItems(r.data);
+    });
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const bytesRf = estimativaBytesTotalArmazenamentoRfLocal();
   const bytesLs = estimativaBytesTodoLocalStorage();
@@ -72,7 +78,13 @@ export function RelatorioFotograficoListPage() {
       }
       const ready = await hydrateRelatorioFotograficoPayload(mergeObraFromConfigRf(result.data));
       const html = montarHtmlRelatorioFotografico(ready);
-      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      const codigo = ready.numeroRelatorio || ready.titulo || m.id;
+      const res = await preVisualizarRelatorioProfissional({
+        html,
+        fileName: nomeArquivoRelatorioPdf(String(codigo), 'RF'),
+        titulo: `Pré-visualização — ${codigo}`,
+        tipoNuvem: 'relatorio_fotografico',
+      });
       if (!res.ok) {
         setMsg({
           tone: 'err',

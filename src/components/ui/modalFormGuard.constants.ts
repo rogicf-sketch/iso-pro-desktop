@@ -1,2 +1,4 @@
+export const MODAL_DISCARD_CONFIRM_TITLE = 'Descartar alterações?';
+
 export const MODAL_DISCARD_CONFIRM_MESSAGE =
-  'Ha alteracoes nao salvas. Fechar mesmo assim? O que foi preenchido sera perdido.';
+  'Há alterações não salvas neste formulário. Se fechar agora, o que foi preenchido será perdido.';

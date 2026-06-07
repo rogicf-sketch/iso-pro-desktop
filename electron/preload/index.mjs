@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   isConfigSecretsAvailable: () => ipcRenderer.invoke('desktop-config-secrets:is-available'),
   /** Recibos / relatórios HTML — impressão fiável (processo principal). */
   printHtml: (html) => ipcRenderer.invoke('desktop-print:html', html),
+  /** Impressão da janela de pré-visualização (já paginada — sem reenviar HTML). */
+  printJanelaAtual: () => ipcRenderer.invoke('desktop-print:visible'),
   /** PDF com fundos/cores alinhados à pré-visualização (sem depender do diálogo Imprimir). */
   saveHtmlAsPdf: (html) => ipcRenderer.invoke('desktop-pdf:html', html),
   /** PDF da janela de pré-visualização (já paginada pelo Paged.js). */
@@ -42,7 +44,10 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   diagnosticarRirPdfFontes: () => ipcRenderer.invoke('desktop-rir:diagnosticar-fontes'),
   loadRirPdfFontesEmbutidas: () => ipcRenderer.invoke('desktop-rir:fontes-embutidas'),
   /** Relatórios HTML — pré-visualização (evita `window.open` bloqueado no Electron). */
+  beginHtmlPreviewLoading: (titulo) => ipcRenderer.invoke('desktop-preview:html-begin', titulo),
   previewHtml: (html) => ipcRenderer.invoke('desktop-preview:html', html),
   verifySmtpMail: (payload) => ipcRenderer.invoke('desktop-mail:verify-smtp', payload),
   sendMail: (payload) => ipcRenderer.invoke('desktop-mail:send', payload),
+  /** HTTP Supabase via processo principal (TLS/rede fiavel no desktop empacotado). */
+  supabaseFetch: (payload) => ipcRenderer.invoke('desktop-supabase:fetch', payload),
 });

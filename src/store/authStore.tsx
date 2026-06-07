@@ -89,10 +89,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     let debounceId: number | undefined;
     function registerActivity() {
+      touchAuthSessionActivity();
       if (debounceId) window.clearTimeout(debounceId);
       debounceId = window.setTimeout(() => touchAuthSessionActivity(), 60_000);
     }
-    registerActivity();
     window.addEventListener('click', registerActivity);
     window.addEventListener('keydown', registerActivity);
     return () => {

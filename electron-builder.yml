@@ -31,6 +31,12 @@ asar: true
 
 # Ícone em runtime para BrowserWindow (fora do asar — ver `electron/main/window.ts`).
 extraResources:
+  - from: node_modules/pagedjs/dist/paged.polyfill.min.js
+    to: vendor/paged.polyfill.min.js
+  - from: public/fonts
+    to: fonts
+  - from: public/logo-institutional-print.png
+    to: logo-institutional-print.png
   - from: build/icon.ico
     to: icon.ico
   - from: scripts/export-iso-pro-snapshot.mjs

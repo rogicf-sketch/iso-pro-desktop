@@ -74,6 +74,8 @@ const configBase: ConfiguracaoSistema = {
   backupOracleMinAtendimentosFluxo: 10,
   backupOracleMinRecebimentosFluxo: 3,
   backupOracleMinCadastrosFluxo: 5,
+  pdfNuvemHabilitado: true,
+  pdfNuvemTimeoutSegundos: 90,
 };
 
 const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({

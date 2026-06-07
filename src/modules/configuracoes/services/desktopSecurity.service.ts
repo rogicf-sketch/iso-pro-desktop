@@ -335,7 +335,18 @@ async function validateDesktopLicense(context: DesktopSecurityContext): Promise<
         .eq('tenant_id', getActiveTenantId())
         .maybeSingle();
 
-      // Se a tabela ainda nao existir ou a consulta falhar, a validacao local continua operando.
+      if (error && config.desktopVinculoAtivo) {
+        const msg = (error.message ?? '').toLowerCase();
+        const tabelaInexistente = msg.includes('does not exist') || msg.includes('42p01');
+        if (!tabelaInexistente) {
+          return {
+            blocked: true,
+            reason:
+              'Nao foi possivel validar a licenca desktop na nuvem. Verifique a ligacao ao Supabase e tente novamente.',
+          };
+        }
+      }
+
       if (!error && data && registryStatus.data === 'revoked') {
         return {
           blocked: true,

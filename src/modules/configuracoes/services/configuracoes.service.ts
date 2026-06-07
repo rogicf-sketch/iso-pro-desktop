@@ -11,10 +11,15 @@ import { getCurrentUser } from '../../auth/services/auth.service';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
 import { getSupabaseConfigDiagnostics, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
+import {
+  readIsoProCloudConnectionComMigracao,
+  writeIsoProCloudConnection,
+} from '../../../lib/isoProCloudConnection';
 import type { ServiceResult } from '../../../types/common.types';
 import { parseConfiguracaoJson } from '../schemas/configuracaoPersistido.zod';
 import type { ConfiguracaoSistema, RirProcedimentoCadastroItem } from '../types/configuracao.types';
 import { normalizeIaApiBaseUrl } from '../../../lib/isoProIaApi.service';
+import { LEGACY_LOGO_STORAGE_KEY_BASE } from '../../../lib/logoInstitucional';
 import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
 import { sincronizarConfigAlertaEstoqueParaNuvem } from './syncAlertaEstoqueConfigNuvem.service';
 import { sincronizarBackupOracleSettingsFromConfig } from '../../../lib/backupOracleAuto.client';
@@ -46,17 +51,6 @@ function normalizeTema(t: unknown): ConfiguracaoSistema['tema'] {
   return TEMAS_VALIDOS.includes(t as ConfiguracaoSistema['tema']) ? (t as ConfiguracaoSistema['tema']) : 'padrao';
 }
 
-/** Alinha site/embebido em producao: primeiro perfil ja usa tabela `materiais` na nuvem quando URL/chave vêm do build. */
-function materiaisNuvemPadraoParaPrimeiroPerfil(): boolean {
-  const v = import.meta.env.VITE_SUPABASE_PREFER_SAVED_CONFIG;
-  const s = v == null ? '' : String(v).trim().toLowerCase();
-  const preferSaved = s === 'true' || s === '1' || s === 'yes';
-  const envUrl = String(import.meta.env.VITE_SUPABASE_URL ?? '').trim();
-  const envKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim();
-  if (!envUrl || !envKey || preferSaved) return false;
-  return import.meta.env.PROD;
-}
-
 const defaultConfig: ConfiguracaoSistema = {
   cliente: '',
   projeto: '',
@@ -69,7 +63,8 @@ const defaultConfig: ConfiguracaoSistema = {
   rirProcedimentosCadastro: [] as RirProcedimentoCadastroItem[],
   rirPrefSenha: '',
   rncPrefSenha: '',
-  materiaisNuvem: materiaisNuvemPadraoParaPrimeiroPerfil(),
+  /** Padrao: materiais no `iso_pro_snapshot` (mobile + web alinhados). Ativar tabela `materiais` so em Configuracoes. */
+  materiaisNuvem: false,
   supabaseUrl: '',
   supabaseAnonKey: '',
   isoProLinkAuthSecret: '',
@@ -113,6 +108,8 @@ const defaultConfig: ConfiguracaoSistema = {
   backupOracleMinAtendimentosFluxo: 10,
   backupOracleMinRecebimentosFluxo: 3,
   backupOracleMinCadastrosFluxo: 5,
+  pdfNuvemHabilitado: true,
+  pdfNuvemTimeoutSegundos: 90,
 };
 
 function normalizeRelatorioFinalIaBaseUrl(url: unknown): string {
@@ -163,11 +160,31 @@ export function limparUsuarioTemaPreferido(): void {
   localStorage.removeItem(chaveLocalStorageTemaPreferidoUsuario(u.login));
 }
 
+function aplicarCloudConnectionNaConfiguracao(config: ConfiguracaoSistema): ConfiguracaoSistema {
+  const diag = getSupabaseConfigDiagnostics();
+  const cloud = readIsoProCloudConnectionComMigracao();
+  if (diag.urlFrom === 'vite-env' && diag.keyFrom === 'vite-env') {
+    return {
+      ...config,
+      supabaseUrl: '',
+      supabaseAnonKey: '',
+      materiaisNuvem: cloud?.materiaisNuvem ?? config.materiaisNuvem,
+    };
+  }
+  if (!cloud) return config;
+  return {
+    ...config,
+    supabaseUrl: cloud.supabaseUrl,
+    supabaseAnonKey: cloud.supabaseAnonKey,
+    materiaisNuvem: cloud.materiaisNuvem,
+  };
+}
+
 export function readConfiguracoes(): ConfiguracaoSistema {
   const raw = localStorage.getItem(configStorageKey());
   if (!raw) {
     localStorage.setItem(configStorageKey(), JSON.stringify(defaultConfig));
-    return mergeConfigSecrets(defaultConfig);
+    return aplicarCloudConnectionNaConfiguracao(mergeConfigSecrets(defaultConfig));
   }
 
   try {
@@ -175,7 +192,7 @@ export function readConfiguracoes(): ConfiguracaoSistema {
     const validated = parseConfiguracaoJson(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
-      return mergeConfigSecrets({ ...defaultConfig });
+      return aplicarCloudConnectionNaConfiguracao(mergeConfigSecrets({ ...defaultConfig }));
     }
     const parsedConfig = validated as Partial<ConfiguracaoSistema> & { reciboLogoUrl?: string };
     const logoBruto = (parsedConfig.logoInstitucionalUrl ?? parsedConfig.reciboLogoUrl ?? '').trim();
@@ -247,11 +264,16 @@ export function readConfiguracoes(): ConfiguracaoSistema {
       backupOracleMinCadastrosFluxo: Number(parsedConfig.backupOracleMinCadastrosFluxo) > 0
         ? Number(parsedConfig.backupOracleMinCadastrosFluxo)
         : defaultConfig.backupOracleMinCadastrosFluxo,
+      pdfNuvemHabilitado: parsedConfig.pdfNuvemHabilitado !== false,
+      pdfNuvemTimeoutSegundos:
+        Number(parsedConfig.pdfNuvemTimeoutSegundos) >= 15 && Number(parsedConfig.pdfNuvemTimeoutSegundos) <= 300
+          ? Number(parsedConfig.pdfNuvemTimeoutSegundos)
+          : defaultConfig.pdfNuvemTimeoutSegundos,
     };
-    return mergeConfigSecrets(merged);
+    return aplicarCloudConnectionNaConfiguracao(mergeConfigSecrets(merged));
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Configuracoes', configStorageKey());
-    return mergeConfigSecrets({ ...defaultConfig });
+    return aplicarCloudConnectionNaConfiguracao(mergeConfigSecrets({ ...defaultConfig }));
   }
 }
 
@@ -264,12 +286,43 @@ export function aplicarTemaEfetivoNaSessao(): void {
   aplicarTemaSistema(readTemaEfetivoParaSessao());
 }
 
+function logoJaConfigurado(url: string): boolean {
+  const t = url.trim();
+  return Boolean(t && t !== LOGO_INSTITUCIONAL_PADRAO_FABRICA);
+}
+
+/** Migra `iso-pro-desktop-recibo-logo-url` (legado) para `logoInstitucionalUrl` em Configuracoes. */
+function migrateLegacyLogoInstitucionalStorage(): void {
+  if (typeof localStorage === 'undefined') return;
+  const legacyKey = getScopedIsoProStorageKey(LEGACY_LOGO_STORAGE_KEY_BASE);
+  const legacy = localStorage.getItem(legacyKey)?.trim();
+  if (!legacy) return;
+
+  const config = readConfiguracoes();
+  if (logoJaConfigurado(config.logoInstitucionalUrl)) {
+    localStorage.removeItem(legacyKey);
+    return;
+  }
+
+  localStorage.setItem(
+    configStorageKey(),
+    JSON.stringify({ ...config, logoInstitucionalUrl: legacy }),
+  );
+  localStorage.removeItem(legacyKey);
+  dispatchIsoProConfigUpdatedEvent();
+}
+
 export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
   const configBeforeVault = readConfiguracoes();
   const { migrated } = await hydrateConfigSecretsVault(configBeforeVault);
   if (migrated) {
     const stripped = await persistConfigSecretsVault(configBeforeVault);
     localStorage.setItem(configStorageKey(), JSON.stringify(stripped));
+  }
+  try {
+    migrateLegacyLogoInstitucionalStorage();
+  } catch {
+    /* migracao best-effort */
   }
   const config = readConfiguracoes();
   aplicarTemaEfetivoNaSessao();
@@ -405,6 +458,11 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
       payload.backupOracleMinCadastrosFluxo > 0
         ? payload.backupOracleMinCadastrosFluxo
         : defaultConfig.backupOracleMinCadastrosFluxo,
+    pdfNuvemHabilitado: payload.pdfNuvemHabilitado !== false,
+    pdfNuvemTimeoutSegundos:
+      payload.pdfNuvemTimeoutSegundos >= 15 && payload.pdfNuvemTimeoutSegundos <= 300
+        ? payload.pdfNuvemTimeoutSegundos
+        : defaultConfig.pdfNuvemTimeoutSegundos,
   };
 
   if (normalizedBase.desktopVinculoAtivo && !normalizedBase.desktopInstalacaoAutorizadaId.trim()) {
@@ -470,6 +528,16 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
   }
 
   localStorage.setItem(configStorageKey(), JSON.stringify(await persistConfigSecretsVault(normalized)));
+
+  const diagPersist = getSupabaseConfigDiagnostics();
+  writeIsoProCloudConnection({
+    supabaseUrl:
+      diagPersist.urlFrom === 'vite-env' ? '' : credenciaisSupabaseParaPersistir.url || normalized.supabaseUrl,
+    supabaseAnonKey:
+      diagPersist.keyFrom === 'vite-env' ? '' : credenciaisSupabaseParaPersistir.key || normalized.supabaseAnonKey,
+    materiaisNuvem: normalized.materiaisNuvem,
+  });
+
   aplicarTemaEfetivoNaSessao();
 
   const supabaseTargetChanged =

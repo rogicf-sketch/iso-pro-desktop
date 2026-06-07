@@ -12,6 +12,7 @@ import { validateDocumento } from '../schemas/documento.schema';
 import {
   buscarDocumentoPorId,
   cancelarDocumento,
+  carregarDocumentoPlanejamentoParaVisualizacao,
   excluirDocumentosDefinitivamente,
   importarDocumentosDoArquivoCsv,
   obterIdsDocumentosFiltrados,
@@ -19,12 +20,14 @@ import {
   listarDocumentos,
   montarExportacaoDocumentosCsvResumo,
   montarModeloCsvImportacaoDocumentos,
+  precarregarBundlePlanejamentoDocumentos,
   previewImportacaoDocumentosCsv,
   salvarDocumento,
   sincronizarPlanejamentoLocalComNuvem,
   diagnosticarPlanejamentoLocalVersusNuvem,
   visualizarPlanejamentoCampoPorId,
 } from '../services/documentos.service';
+import type { MetricasPorCodigoMaterial } from '../services/documentoPlanejamento';
 import type {
   Documento,
   DocumentoFiltro,
@@ -66,6 +69,12 @@ export function useDocumentos() {
   const [selected, setSelected] = useState<Documento | null>(null);
   const [viewDocument, setViewDocument] = useState<Documento | null>(null);
   const [viewDocumentLoading, setViewDocumentLoading] = useState(false);
+  const [viewDocumentOpeningId, setViewDocumentOpeningId] = useState<string | null>(null);
+  const [viewPlanejamentoMetricas, setViewPlanejamentoMetricas] = useState<Map<string, MetricasPorCodigoMaterial>>(
+    new Map(),
+  );
+  const [viewPlanejamentoLocalizacoes, setViewPlanejamentoLocalizacoes] = useState<Map<string, string>>(new Map());
+  const viewDocumentoSeqRef = useRef(0);
   const [visualizarPlanejamentoBusyId, setVisualizarPlanejamentoBusyId] = useState<string | null>(null);
   const [importSnapshotConflict, setImportSnapshotConflict] = useState(false);
   const [importStaging, setImportStaging] = useState<{
@@ -116,6 +125,10 @@ export function useDocumentos() {
 
   const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+
+  useEffect(() => {
+    void precarregarBundlePlanejamentoDocumentos();
+  }, []);
 
   const listQuery = useQuery({
     queryKey: documentosListaQueryKey(filtersForLista, user?.login),
@@ -704,9 +717,15 @@ export function useDocumentos() {
     },
     viewDocument,
     viewDocumentLoading,
+    viewDocumentOpeningId,
+    viewPlanejamentoMetricas,
+    viewPlanejamentoLocalizacoes,
     closeViewDocument: () => {
+      viewDocumentoSeqRef.current += 1;
       setViewDocument(null);
       setViewDocumentLoading(false);
+      setViewPlanejamentoMetricas(new Map());
+      setViewPlanejamentoLocalizacoes(new Map());
     },
     visualizarPlanejamentoBusyId,
     visualizarPlanejamentoDireto: async (item: DocumentoListItem) => {
@@ -723,18 +742,26 @@ export function useDocumentos() {
       }
     },
     openViewDocumento: async (item: DocumentoListItem) => {
+      if (viewDocumentOpeningId === item.id && viewDocumentLoading) return;
+      const seq = ++viewDocumentoSeqRef.current;
       setError('');
-      setViewDocument(null);
+      setViewDocumentOpeningId(item.id);
       setViewDocumentLoading(true);
       try {
-        const result = await buscarDocumentoPorId(item.id);
+        const result = await carregarDocumentoPlanejamentoParaVisualizacao(item.id);
+        if (seq !== viewDocumentoSeqRef.current) return;
         if (!result.success || !result.data) {
           setError(result.error ?? 'Nao foi possivel carregar o documento.');
           return;
         }
-        setViewDocument(result.data);
+        setViewDocument(result.data.documento);
+        setViewPlanejamentoMetricas(result.data.metricas);
+        setViewPlanejamentoLocalizacoes(result.data.localizacoesRecebimentoPorCodigo);
       } finally {
-        setViewDocumentLoading(false);
+        if (seq === viewDocumentoSeqRef.current) {
+          setViewDocumentLoading(false);
+          setViewDocumentOpeningId(null);
+        }
       }
     },
     submitDocumento,

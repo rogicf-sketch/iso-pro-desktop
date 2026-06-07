@@ -9,7 +9,8 @@ import {
   setActiveTenantId,
   type IsoProTenantListItem,
 } from '../../../lib/isoProTenant';
-import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
+import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
+import { getSupabase, getSupabaseOperationalStatus, hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { isLocalMockAuthSeedEnabled, readRememberLoginPreference } from '../services/auth.service';
 import { getFirstAccessibleRoute } from '../../../routes/navigation';
@@ -61,7 +62,14 @@ export function LoginPage() {
     (async () => {
       try {
         const supabase = getSupabase();
-        if (!supabase) return;
+        if (!supabase) {
+          if (!cancelled && getSupabaseOperationalStatus() === 'partial') {
+            setTenantListaErro(
+              'Configuracao Supabase incompleta: URL e chave anon devem estar preenchidas em conjunto (Configuracoes ou build).',
+            );
+          }
+          return;
+        }
         const list = await carregarListaTenantsNuvem(supabase);
         if (cancelled) return;
         setTenantsNuvem(list);
@@ -73,9 +81,15 @@ export function LoginPage() {
         } else {
           setTenantSelectId(cur);
         }
-      } catch {
+      } catch (err) {
         if (!cancelled) {
-          setTenantListaErro('Não foi possível carregar a lista de empresas na nuvem. Verifique credenciais e se a migração multi-tenant foi aplicada.');
+          const msg = err instanceof Error ? err.message : '';
+          const rede = /failed to fetch|fetch failed|network|timeout|econnrefused/i.test(msg);
+          setTenantListaErro(
+            rede
+              ? traduzirErroOperacionalIsoPro(msg)
+              : 'Não foi possível carregar a lista de empresas na nuvem. Verifique credenciais e se a migração multi-tenant foi aplicada.',
+          );
         }
       }
     })();
@@ -185,7 +199,11 @@ export function LoginPage() {
           partilhados. Após 8 horas sem usar o sistema, a sessão expira de qualquer forma.
         </p>
 
-        {error ? <div className="error-box">{error}</div> : null}
+        {error ? (
+          <div className="error-box" data-e2e="login-error">
+            {error}
+          </div>
+        ) : null}
 
         {isLocalMockAuthSeedEnabled() ? (
           <div className="login-demo">
@@ -220,7 +238,7 @@ export function LoginPage() {
           Segurança: não partilhe credenciais. Marque «Permanecer logado» só em equipamentos de confiança.
         </OperationalNotice>
 
-        <button className="primary-button login-submit" disabled={isSubmitting} type="submit">
+        <button className="primary-button login-submit" data-e2e="login-submit" disabled={isSubmitting} type="submit">
           {isSubmitting ? 'A validar…' : 'Entrar'}
         </button>
       </form>

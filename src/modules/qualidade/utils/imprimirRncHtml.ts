@@ -1,5 +1,5 @@
+import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import {
-  abrirImpressaoHtmlRelatorio,
   cssBarraPreVisualizacaoImpressaoHtml,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
@@ -398,11 +398,14 @@ export function montarHtmlRnc(registro: RncRegistro): string {
 }
 
 export function imprimirRncHtml(registro: RncRegistro): boolean {
-  return abrirImpressaoHtmlRelatorio(montarHtmlRnc(registro));
+  void imprimirRncHtmlAsync(registro);
+  return true;
 }
 
 /** Hidrata fotos em IndexedDB antes de montar o HTML (impressão a partir da lista). */
 export async function imprimirRncHtmlAsync(registro: RncRegistro): Promise<boolean> {
   const h = await hydrateRncRegistro(registro);
-  return abrirImpressaoHtmlRelatorio(montarHtmlRnc(h));
+  const html = montarHtmlRnc(h);
+  const fileName = nomeArquivoRelatorioPdf(h.codigo, 'RNC');
+  return imprimirRelatorioProfissional({ html, fileName, tipoNuvem: 'rnc' });
 }

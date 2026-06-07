@@ -15,6 +15,7 @@ type Props = {
   onDestravar?: (item: RirRegistro) => void;
   canEdit: boolean;
   canAdministrarRir?: boolean;
+  previewBusyId?: string | null;
 };
 
 function laudoLabel(l: RirRegistro['laudo']) {
@@ -39,6 +40,7 @@ export function RirTable({
   onDestravar,
   canEdit,
   canAdministrarRir,
+  previewBusyId = null,
 }: Props) {
   return (
     <DataTable
@@ -66,6 +68,8 @@ export function RirTable({
           render: (item) => (
             <div className="table-actions">
               <ActionButton
+                disabled={previewBusyId === item.id}
+                disabledLabel="A gerar…"
                 enabledLabel="Visualizar"
                 enabledTitle="Pre-visualizar relatorio RIR (impressao / PDF)"
                 onClick={() => onVisualizar(item)}

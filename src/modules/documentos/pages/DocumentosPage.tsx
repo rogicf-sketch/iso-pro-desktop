@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
@@ -7,7 +7,7 @@ import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
-import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { DocumentoFilters } from '../components/DocumentoFilters';
@@ -18,9 +18,10 @@ import {
   resolverLocalizacaoExibicaoPlanejamento,
   resolverStatusLinhaDocumento,
 } from '../services/documentoPlanejamento';
-import type { MetricasPorCodigoMaterial } from '../services/documentoPlanejamento';
-import { carregarMetricasELocalizacoesPlanejamentoPorCodigo } from '../services/documentos.service';
-import { imprimirPlanejamentoCampoHtml, montarHtmlPlanejamentoCampo } from '../utils/imprimirPlanejamentoCampoHtml';
+import {
+  imprimirPlanejamentoCampoHtml,
+  preVisualizarPlanejamentoCampoHtml,
+} from '../utils/imprimirPlanejamentoCampoHtml';
 
 function statusLinhaPlanejamentoMeta(status: ReturnType<typeof resolverStatusLinhaDocumento>) {
   if (status === 'atendido') return createStatusMeta('Atendido', 'ok');
@@ -39,11 +40,8 @@ function encurtarLinhaDocumentoResumo(texto: string) {
 
 export function DocumentosPage() {
   const { canAccessAction } = useAuth();
-  const [metricasVisualizacao, setMetricasVisualizacao] = useState<Map<string, MetricasPorCodigoMaterial>>(new Map());
-  const [localizacoesRecebimentoVisualizacao, setLocalizacoesRecebimentoVisualizacao] = useState<Map<string, string>>(
-    new Map(),
-  );
   const [folhaCampoBusy, setFolhaCampoBusy] = useState(false);
+  const [folhaCampoAviso, setFolhaCampoAviso] = useState<string | null>(null);
   const cloudStatus = getSupabaseOperationalStatus();
   const {
     items,
@@ -94,8 +92,9 @@ export function DocumentosPage() {
     confirmarImportSubstituirComLimpezaHistorico,
     viewDocument,
     viewDocumentLoading,
-    visualizarPlanejamentoBusyId,
-    visualizarPlanejamentoDireto,
+    viewDocumentOpeningId,
+    viewPlanejamentoMetricas,
+    viewPlanejamentoLocalizacoes,
     closeViewDocument,
     openViewDocumento,
     cancelDocAlvo,
@@ -132,19 +131,6 @@ export function DocumentosPage() {
     const restantes = total - visiveis.length;
     return { total, visiveis, restantes };
   }, [excluirModalResumos]);
-
-  const viewDocId = viewDocument?.id;
-  useEffect(() => {
-    if (!viewDocId) {
-      setMetricasVisualizacao(new Map());
-      setLocalizacoesRecebimentoVisualizacao(new Map());
-      return;
-    }
-    void carregarMetricasELocalizacoesPlanejamentoPorCodigo().then(({ metricas, localizacoesRecebimentoPorCodigo }) => {
-      setMetricasVisualizacao(metricas);
-      setLocalizacoesRecebimentoVisualizacao(localizacoesRecebimentoPorCodigo);
-    });
-  }, [viewDocId]);
 
   return (
     <div className="panel">
@@ -197,7 +183,8 @@ export function DocumentosPage() {
           Planejamento de materiais com itens, revisao, status e pendencia por documento. Use <strong>Baixar modelo CSV</strong> para obter
           cabecalho e linhas de exemplo (um material por linha; repita numero/revisao/data por linha). Na importacao, se{' '}
           <strong>descricao_material</strong> estiver vazia mas o <strong>codigo</strong> existir no cadastro de materiais, o sistema completa
-          a descricao. <strong>Visualizar</strong> abre a folha de campo em PDF (janela separada); <strong>Ver itens</strong> mostra a lista no ecra.{' '}
+          a descricao. <strong>Visualizar</strong> abre a lista de itens do documento; dentro do modal use{' '}
+          <strong>Pre-visualizar folha de campo</strong> ou <strong>Imprimir / PDF</strong> para a folha de campo em paisagem.{' '}
           <strong>Excel - itens</strong> gera uma linha por material: dados do documento (numero, revisao, descricao), do material (codigo,
           descricao, disciplina, saldo do cadastro), unidade, <strong>quantidade no documento</strong> (por desenho), atendida e pendente nesse
           documento, <strong>quantidade prevista</strong> (soma do codigo em todos os documentos ativos), totais <strong>atendido</strong> e{' '}
@@ -296,9 +283,8 @@ export function DocumentosPage() {
             onExcluirDefinitivo={canAdminister ? abrirExclusaoDefinitivaDocumento : undefined}
             onToggleSelect={canAdminister ? toggleSelectDocumentoId : undefined}
             onToggleSelectPagina={canAdminister ? toggleSelectDocumentosPaginaAtual : undefined}
-            onVerItens={(item) => void openViewDocumento(item)}
-            onVisualizar={(item) => void visualizarPlanejamentoDireto(item)}
-            visualizarBusyId={visualizarPlanejamentoBusyId}
+            onVisualizar={(item) => void openViewDocumento(item)}
+            visualizarBusyId={viewDocumentOpeningId}
             selectedIds={canAdminister ? selectedDocumentIdSet : undefined}
           />
           {canAdminister ? (
@@ -705,8 +691,8 @@ export function DocumentosPage() {
                   ) : (
                     viewDocument.itens.map((it) => {
                       const st =
-                        it.codigoMaterial.trim() && metricasVisualizacao.size > 0
-                          ? resolverStatusLinhaDocumento(it, metricasVisualizacao)
+                        it.codigoMaterial.trim() && viewPlanejamentoMetricas.size > 0
+                          ? resolverStatusLinhaDocumento(it, viewPlanejamentoMetricas)
                           : null;
                       const meta = st ? statusLinhaPlanejamentoMeta(st) : null;
                       return (
@@ -716,7 +702,7 @@ export function DocumentosPage() {
                             {it.descricaoMaterial}
                           </td>
                           <td style={{ whiteSpace: 'pre-wrap', maxWidth: 320 }}>
-                            {resolverLocalizacaoExibicaoPlanejamento(it, localizacoesRecebimentoVisualizacao) || '—'}
+                            {resolverLocalizacaoExibicaoPlanejamento(it, viewPlanejamentoLocalizacoes) || '—'}
                           </td>
                           <td>{it.unidade}</td>
                           <td>{it.quantidadeProjeto}</td>
@@ -731,6 +717,11 @@ export function DocumentosPage() {
                 </tbody>
               </table>
             </div>
+            {folhaCampoAviso ? (
+              <div style={{ marginTop: 12 }}>
+                <OperationalNotice tone="critical">{folhaCampoAviso}</OperationalNotice>
+              </div>
+            ) : null}
             <div className="form-actions">
               <Button onClick={closeViewDocument} type="button" variant="ghost">
                 Fechar
@@ -740,15 +731,20 @@ export function DocumentosPage() {
                 onClick={() => {
                   if (!viewDocument) return;
                   setFolhaCampoBusy(true);
+                  setFolhaCampoAviso(null);
                   void (async () => {
                     try {
                       const ok = await imprimirPlanejamentoCampoHtml(
                         viewDocument,
-                        metricasVisualizacao,
-                        localizacoesRecebimentoVisualizacao,
+                        viewPlanejamentoMetricas,
+                        viewPlanejamentoLocalizacoes,
                       );
                       if (!ok) {
-                        window.alert('Nao foi possivel abrir a pre-visualizacao. Verifique pop-ups ou o ambiente desktop.');
+                        setFolhaCampoAviso(
+                          traduzirErroImpressaoIsoPro(
+                            'Não foi possível abrir o diálogo de impressão. Verifique a impressora padrão.',
+                          ),
+                        );
                       }
                     } finally {
                       setFolhaCampoBusy(false);
@@ -765,21 +761,16 @@ export function DocumentosPage() {
                 onClick={() => {
                   if (!viewDocument) return;
                   setFolhaCampoBusy(true);
+                  setFolhaCampoAviso(null);
                   void (async () => {
                     try {
-                      const html = montarHtmlPlanejamentoCampo(
+                      const res = await preVisualizarPlanejamentoCampoHtml(
                         viewDocument,
-                        metricasVisualizacao,
-                        localizacoesRecebimentoVisualizacao,
+                        viewPlanejamentoMetricas,
+                        viewPlanejamentoLocalizacoes,
                       );
-                      const res = await preVisualizarRelatorioProfissional({
-                        html,
-                        fileName: nomeArquivoRelatorioPdf(viewDocument.numero || viewDocument.id, 'planejamento'),
-                        titulo: `Planejamento — ${viewDocument.numero}`,
-                        tipoNuvem: 'planejamento_campo',
-                      });
                       if (!res.ok && res.error) {
-                        window.alert(res.error);
+                        setFolhaCampoAviso(traduzirErroImpressaoIsoPro(res.error));
                       }
                     } finally {
                       setFolhaCampoBusy(false);
@@ -788,7 +779,7 @@ export function DocumentosPage() {
                 }}
                 type="button"
               >
-                Visualizar
+                Pre-visualizar folha de campo
               </Button>
             </div>
           </div>

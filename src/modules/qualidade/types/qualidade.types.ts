@@ -52,6 +52,8 @@ export type RirRegistro = {
   inspecaoQualitativa: boolean;
   inspecaoDimensional: boolean;
   procedimentoNumero: string;
+  /** Disciplina do RIR (relatorio). Auto a partir de procedimento/codigo/itens; editavel no formulario. */
+  disciplina?: string;
   /** Sol. compra / pack-list (referencia comercial — modelo RIR em papel). */
   solCompraPackList: string;
   obsCurta: string;

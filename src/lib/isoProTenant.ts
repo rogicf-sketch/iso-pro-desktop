@@ -5,6 +5,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { resetSupabaseClient } from './supabase';
 
 /** Tenant por omissão para bases já existentes (uma organização). */
 export const ISO_PRO_DEFAULT_TENANT_ID = '00000000-0000-0000-0000-000000000001';
@@ -40,6 +41,7 @@ export function setActiveTenantId(id: string): void {
   if (id === getActiveTenantId()) return;
   const next: TenantEstadoV1 = { version: 1, activeTenantId: id };
   localStorage.setItem(ISO_PRO_TENANT_CONTEXT_STORAGE_KEY, JSON.stringify(next));
+  resetSupabaseClient();
   if (typeof window !== 'undefined') {
     void import('./isoProSnapshot').then((m) => m.invalidateIsoProSnapshotCache());
   }

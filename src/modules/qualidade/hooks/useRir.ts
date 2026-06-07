@@ -39,6 +39,7 @@ const emptyForm: RirFormData = {
   inspecaoQualitativa: true,
   inspecaoDimensional: false,
   procedimentoNumero: '',
+  disciplina: '',
   solCompraPackList: '',
   obsCurta: '',
   itensRir: [],

@@ -1,5 +1,7 @@
 import type { ServiceResult } from '../types/common.types';
+import { withRemoteReadTimeout } from './dataReadPolicy';
 import { isIsoProSnapshotConflictError } from './isoProSnapshot';
+import { isIsoProDesktop } from './pdfCloud/pdfCloudConfig';
 import { businessWriteBlockedFailure, isBusinessLocalWriteBlocked } from './writePolicy';
 import { traduzirErroOperacionalIsoPro } from './traduzirErroOperacionalIsoPro';
 export function getErrorMessage(error: unknown, fallbackMessage: string) {
@@ -33,17 +35,20 @@ export async function withLocalFallback<T>(options: {
 
   try {
     return {
-      data: await options.loadRemote(),
+      data: await withRemoteReadTimeout(options.loadRemote),
       meta: {
         source: 'supabase',
       },
     };
   } catch (error) {
+    const fallbackReason = isIsoProDesktop()
+      ? undefined
+      : traduzirErroOperacionalIsoPro(getErrorMessage(error, options.fallbackMessage));
     return {
       data: await options.loadLocal(),
       meta: {
         source: 'local',
-        fallbackReason: getErrorMessage(error, options.fallbackMessage),
+        ...(fallbackReason ? { fallbackReason } : {}),
       },
     };
   }

@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = path.join(root, 'dist-electron');
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const appVersion = String(pkg.version ?? '0.0.0');
 
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -29,7 +31,11 @@ await esbuild.build({
 await esbuild.build({
   ...common,
   entryPoints: [path.join(root, 'electron', 'preload', 'index.mjs')],
-  outfile: path.join(outDir, 'preload.mjs'),
+  outfile: path.join(outDir, 'preload.cjs'),
+  format: 'cjs',
+  define: {
+    __ISO_PRO_APP_VERSION__: JSON.stringify(appVersion),
+  },
 });
 
-console.log('dist-electron: main.mjs + preload.mjs');
+console.log('dist-electron: main.mjs + preload.cjs');

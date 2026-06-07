@@ -142,6 +142,18 @@ export function getScopedIsoProStorageKey(baseKey: string): string {
   return getScopedIsoProStorageKeyForAmbienteIdAndTenant(baseKey, getAmbienteAtivoId(), getActiveTenantId());
 }
 
+/**
+ * Chave ao nivel da instalacao (por obra/ambiente, sem tenant).
+ * URL/chave Supabase e ligacao a nuvem devem usar isto — o mesmo projecto serve todas as empresas.
+ */
+export function getIsoProInstalacaoStorageKey(baseKey: string): string {
+  const ambiente = getAmbienteAtivoId();
+  if (ambiente && ambiente !== 'padrao') {
+    return `${baseKey.trim()}::ambiente:${ambiente}`;
+  }
+  return baseKey.trim();
+}
+
 /** Sufixo estável para nome da base IndexedDB de blobs (evita misturar fotos entre empresas/obras). */
 export function getAmbienteMediaDbSuffix(): string {
   const parts: string[] = [];

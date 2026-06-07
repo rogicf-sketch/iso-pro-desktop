@@ -5,7 +5,7 @@ import { Input } from '../../../components/ui/Input';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { collectAllPages } from '../../../lib/collectAllPages';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { compressImageFileToJpeg } from '../../../lib/imageCompress';
 import { mediaBlobDelete } from '../../../lib/mediaBlobStore';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -305,7 +305,13 @@ export function RelatorioFotograficoPage() {
     try {
       const ready = await hydrateRelatorioFotograficoPayload(mergeObraFromConfig(payload));
       const html = montarHtmlRelatorioFotografico(ready);
-      const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+      const codigo = ready.numeroRelatorio || ready.titulo || ready.reportId || 'RF';
+      const res = await preVisualizarRelatorioProfissional({
+        html,
+        fileName: nomeArquivoRelatorioPdf(codigo, 'RF'),
+        titulo: `Pré-visualização — ${codigo}`,
+        tipoNuvem: 'relatorio_fotografico',
+      });
       if (!res.ok) {
         setMsg({
           tone: 'err',
@@ -332,7 +338,7 @@ export function RelatorioFotograficoPage() {
     setPayload(withNum);
     const ready = await hydrateRelatorioFotograficoPayload(withNum);
     const html = montarHtmlRelatorioFotografico(ready);
-    const ok = imprimirRelatorioFotograficoHtml(html);
+    const ok = await imprimirRelatorioFotograficoHtml(html);
     if (!ok) {
       setMsg({ tone: 'err', text: 'O navegador bloqueou a janela de impressao.' });
       return;

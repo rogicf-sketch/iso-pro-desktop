@@ -5,8 +5,9 @@ import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { isElectronApp } from '../../../lib/isElectronApp';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { RirFilters } from '../components/RirFilters';
 import { RirForm } from '../components/RirForm';
@@ -15,7 +16,7 @@ import { RirTable } from '../components/RirTable';
 import { useRir } from '../hooks/useRir';
 import type { RirRegistro } from '../types/qualidade.types';
 import { obterRirPorId } from '../services/qualidade.service';
-import { imprimirRirHtml, montarDocumentoHtmlImpressaoRir } from '../utils/imprimirRirHtml';
+import { imprimirRirRelatorioPdf, preVisualizarRirRelatorio } from '../utils/imprimirRirPdf';
 
 export function RirPage() {
   const { canAccessAction } = useAuth();
@@ -58,6 +59,8 @@ export function RirPage() {
   const [procOpen, setProcOpen] = useState(false);
   const [rirExcluirAlvo, setRirExcluirAlvo] = useState<RirRegistro | null>(null);
   const [excluindoRir, setExcluindoRir] = useState(false);
+  const [rirPreviewBusyId, setRirPreviewBusyId] = useState<string | null>(null);
+  const [rirImpressaoAviso, setRirImpressaoAviso] = useState<string | null>(null);
 
   const fecharExcluirRir = useCallback(() => {
     if (excluindoRir) return;
@@ -76,13 +79,16 @@ export function RirPage() {
   }, [rirExcluirAlvo, removeRir]);
 
   const visualizarRirRelatorio = useCallback(async (reg: RirRegistro) => {
-    const html = montarDocumentoHtmlImpressaoRir(reg);
-    const res = await abrirPreVisualizacaoHtmlRelatorio(html);
-    if (!res.ok) {
-      window.alert(
-        res.error ??
-          'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir na lista para o dialogo do sistema.',
-      );
+    setRirPreviewBusyId(reg.id);
+    try {
+      const full = await obterRirPorId(reg.id);
+      const alvo = full.success && full.data ? full.data : reg;
+      const res = await preVisualizarRirRelatorio(alvo);
+      if (!res.ok) {
+        setRirImpressaoAviso(traduzirErroImpressaoIsoPro(res.error ?? 'Não foi possível abrir a pré-visualização do RIR.'));
+      }
+    } finally {
+      setRirPreviewBusyId(null);
     }
   }, []);
 
@@ -157,6 +163,10 @@ export function RirPage() {
       <RirFilters filters={filters} onChange={setFilters} />
       {error ? <div className="error-box">{error}</div> : null}
       {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {rirImpressaoAviso ? <OperationalNotice tone="critical">{rirImpressaoAviso}</OperationalNotice> : null}
+      {rirPreviewBusyId ? (
+        <OperationalNotice>A abrir pre-visualizacao do RIR…</OperationalNotice>
+      ) : null}
       {loading ? (
         <OperationalNotice>Carregando RIR...</OperationalNotice>
       ) : (
@@ -164,6 +174,7 @@ export function RirPage() {
           <RirTable
             canAdministrarRir={canAdministrarRir}
             canEdit={canEdit}
+            previewBusyId={rirPreviewBusyId}
             items={items}
             onDelete={canEdit ? (item) => setRirExcluirAlvo(item) : undefined}
             onDestravar={canAdministrarRir ? abrirDestravarRir : undefined}
@@ -172,9 +183,23 @@ export function RirPage() {
               void visualizarRirRelatorio(item);
             }}
             onPrint={(item) => {
-              if (!imprimirRirHtml(item)) {
-                window.alert('Nao foi possivel abrir a impressao. Verifique se o navegador bloqueou pop-ups.');
-              }
+              setRirImpressaoAviso(null);
+              /** Reservar janela no clique — após await o navegador bloqueia pop-ups. */
+              const printWindow = !isElectronApp() ? window.open('', '_blank') : null;
+              void (async () => {
+                try {
+                  const full = await obterRirPorId(item.id);
+                  const alvo = full.success && full.data ? full.data : item;
+                  const res = await imprimirRirRelatorioPdf(alvo, { printWindow });
+                  if (!res.ok) {
+                    if (printWindow && !printWindow.closed) printWindow.close();
+                    setRirImpressaoAviso(traduzirErroImpressaoIsoPro(res.error ?? 'Não foi possível imprimir o RIR.'));
+                  }
+                } catch {
+                  if (printWindow && !printWindow.closed) printWindow.close();
+                  setRirImpressaoAviso('Não foi possível imprimir o RIR.');
+                }
+              })();
             }}
           />
           <Pagination
@@ -285,11 +310,11 @@ export function RirPage() {
           onAbrirRirExistente={async (rirId) => {
             const res = await obterRirPorId(rirId);
             if (!res.success) {
-              window.alert(res.error ?? 'Nao foi possivel abrir o RIR.');
+              setRirImpressaoAviso(traduzirErroImpressaoIsoPro(res.error ?? 'Não foi possível abrir o RIR.'));
               return;
             }
             if (!res.data) {
-              window.alert('RIR nao encontrado.');
+              setRirImpressaoAviso('RIR não encontrado.');
               return;
             }
             const reg = res.data;

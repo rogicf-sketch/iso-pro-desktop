@@ -6,11 +6,12 @@ import {
   readIsoProSnapshotPayloadForWrite,
 } from '../../../lib/isoProSnapshot';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
-import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
+import { carregarIndiceTextoBuscaRecebimentos } from '../../recebimentos/services/recebimentos.service';
 import type { Etiqueta, EtiquetaFiltro, EtiquetaFormData, EtiquetaFormato, EtiquetaListItem, EtiquetaModelo } from '../types/etiqueta.types';
 import { parseEtiquetasPersistidas } from '../schemas/etiquetaPersistido.zod';
 
@@ -132,7 +133,7 @@ async function readSnapshotEtiquetas(): Promise<Etiqueta[]> {
 }
 
 async function loadEtiquetas(): Promise<Etiqueta[]> {
-  return hasSupabaseConfig() ? await readSnapshotEtiquetas().catch(() => readAll()) : readAll();
+  return readRemoteOrLocal({ readRemote: readSnapshotEtiquetas, readLocal: readAll });
 }
 
 /** Retorna etiquetas completas para os ids informados (ordem nao garantida). */
@@ -169,26 +170,14 @@ function buildSearchText(item: Etiqueta) {
 }
 
 /**
- * Texto expandido para busca a partir do recebimento: inclui NF com e sem prefixo "NF" e somente digitos,
- * para casar buscas como "NF-7778869" com cadastro "7778869" ou "77788.69".
+ * Carrega indice leve de NF/romaneio/fornecedor apenas para recebimentos referenciados pelas etiquetas.
  */
-function textoRecebimentoExpandidoParaBusca(recebimento: { notaFiscal: string; romaneio: string; fornecedor: string }): string {
-  const nf = (recebimento.notaFiscal ?? '').trim();
-  const rom = (recebimento.romaneio ?? '').trim();
-  const forn = (recebimento.fornecedor ?? '').trim();
-  const chunks: string[] = [];
-  const push = (s: string) => {
-    const x = s.toLowerCase().trim();
-    if (x) chunks.push(x);
-  };
-  push(nf);
-  push(rom);
-  push(forn);
-  const nfDigits = nf.replace(/\D/g, '');
-  if (nfDigits.length >= 4) push(nfDigits);
-  const nfSemPrefixo = nf.replace(/^(nf|n\.?\s*f\.?)[\s.:_-]*/i, '').trim();
-  push(nfSemPrefixo);
-  return chunks.join(' ');
+async function carregarTextoBuscaRecebimentosParaEtiquetas(items: Etiqueta[]): Promise<Map<string, string>> {
+  const referenciaIds = [
+    ...new Set(items.map((item) => item.referenciaId?.trim()).filter((id): id is string => Boolean(id))),
+  ];
+  if (!referenciaIds.length) return new Map();
+  return carregarIndiceTextoBuscaRecebimentos(referenciaIds);
 }
 
 /** Verifica token no texto; se nao bater literal, tenta apenas os digitos (notas fiscais com formatos diferentes). */
@@ -223,13 +212,7 @@ async function aplicarFiltrosEtiquetas(filtro: EtiquetaFiltroSemPagina): Promise
   const buscaRaw = filtro.busca.trim();
   if (buscaRaw) {
     const tokens = buscaRaw.toLowerCase().split(/\s+/).filter(Boolean);
-    const textoPorRecebimentoId = new Map<string, string>();
-    if (items.length) {
-      const recebimentos = await carregarRecebimentosCompletos();
-      for (const r of recebimentos) {
-        textoPorRecebimentoId.set(r.id, textoRecebimentoExpandidoParaBusca(r));
-      }
-    }
+    const textoPorRecebimentoId = items.length ? await carregarTextoBuscaRecebimentosParaEtiquetas(items) : new Map();
     items = items.filter((item) => itemMatchesTokens(item, tokens, textoPorRecebimentoId));
   }
 
@@ -271,7 +254,7 @@ export function validateEtiqueta(data: EtiquetaFormData): string | null {
 
 export async function listarEtiquetas(filtro: EtiquetaFiltro): Promise<ServiceResult<PaginatedResult<EtiquetaListItem>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotEtiquetas(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar etiquetas no Supabase.',
@@ -285,13 +268,7 @@ export async function listarEtiquetas(filtro: EtiquetaFiltro): Promise<ServiceRe
   const buscaRaw = filtro.busca.trim();
   if (buscaRaw) {
     const tokens = buscaRaw.toLowerCase().split(/\s+/).filter(Boolean);
-    const textoPorRecebimentoId = new Map<string, string>();
-    if (items.length) {
-      const recebimentos = await carregarRecebimentosCompletos();
-      for (const r of recebimentos) {
-        textoPorRecebimentoId.set(r.id, textoRecebimentoExpandidoParaBusca(r));
-      }
-    }
+    const textoPorRecebimentoId = items.length ? await carregarTextoBuscaRecebimentosParaEtiquetas(items) : new Map();
     items = items.filter((item) => itemMatchesTokens(item, tokens, textoPorRecebimentoId));
   }
 

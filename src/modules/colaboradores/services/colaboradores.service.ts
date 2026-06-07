@@ -1,5 +1,6 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
 import {
@@ -97,7 +98,7 @@ function writeAll(items: Colaborador[]) {
 }
 
 async function loadColaboradores() {
-  return hasSupabaseConfig() ? await readSnapshotColaboradores().catch(() => readAll()) : readAll();
+  return readRemoteOrLocal({ readRemote: readSnapshotColaboradores, readLocal: readAll });
 }
 
 function normalizeLookupValue(value: string) {
@@ -188,7 +189,7 @@ async function writeSnapshotColaboradores(items: Colaborador[]): Promise<void> {
 
 export async function listarColaboradores(filtro: ColaboradorFiltro): Promise<ServiceResult<PaginatedResult<Colaborador>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotColaboradores(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar colaboradores no Supabase.',
@@ -391,7 +392,7 @@ export async function montarExportacaoColaboradoresCsv(
   opcoes?: ExportacaoColaboradoresOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotColaboradores(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar colaboradores no Supabase.',

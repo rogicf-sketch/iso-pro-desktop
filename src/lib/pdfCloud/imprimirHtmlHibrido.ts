@@ -1,8 +1,15 @@
 import { abrirPreVisualizacaoHtmlRelatorio } from '../htmlRelatorioInstitucional';
+import { traduzirErroImpressaoIsoPro } from '../traduzirErroImpressaoIsoPro';
 
 import { entregarPdfBytes, gerarHtmlRelatorioPdfBytes } from './pdfHybridRouter';
 
+
+
 import type { PdfJobTipo } from './types';
+
+
+
+
 
 
 
@@ -10,107 +17,144 @@ type HtmlTipo = PdfJobTipo;
 
 
 
+
+
+
+
 async function fallbackGuardarHtml(html: string): Promise<{ ok: true } | { ok: false; error: string }> {
+
+
 
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
 
+
+
   if (api?.saveHtmlAsPdf) {
+
+
 
     return api.saveHtmlAsPdf(html);
 
+
+
   }
+
+
 
   return { ok: false, error: 'Guardar PDF indisponível neste ambiente.' };
 
+
+
 }
+
+
+
+
 
 
 
 export async function imprimirHtmlRelatorioHibrido(
 
+
+
   tipo: HtmlTipo,
+
+
 
   html: string,
 
+
+
   fileName: string,
+
+
 
 ): Promise<boolean> {
 
-  const prev = await preVisualizarHtmlRelatorioHibrido(tipo, html, fileName, fileName);
 
+
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+
+
+
+  if (api?.printHtml) {
+    const res = await api.printHtml(html);
+    if (res.ok) return true;
+    console.warn('[I.S.O PRO] printHtml falhou:', res.error);
+    /** Desktop: evitar fallback lento (gerar PDF + carregar ficheiro) — falha rápida e clara. */
+    return false;
+  }
+
+  try {
+    const gerado = await gerarHtmlRelatorioPdfBytes(tipo, html, fileName);
+    const entrega = await entregarPdfBytes(gerado.bytes, gerado.fileName, 'imprimir');
+    if (entrega.ok) return true;
+  } catch (e) {
+    console.warn('[I.S.O PRO] Imprimir PDF bytes falhou:', e);
+  }
+
+  const prev = await abrirPreVisualizacaoHtmlRelatorio(html);
   return prev.ok;
 
+
+
 }
+
+
+
+
 
 
 
 export async function guardarHtmlRelatorioHibrido(
-
   tipo: HtmlTipo,
-
   html: string,
-
   fileName: string,
-
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+
+  if (api?.saveHtmlAsPdf) {
+    const res = await api.saveHtmlAsPdf(html);
+    if (res.ok) return res;
+    console.warn('[I.S.O PRO] saveHtmlAsPdf falhou, tentando PDF bytes:', res.error);
+  }
 
   try {
-
     const gerado = await gerarHtmlRelatorioPdfBytes(tipo, html, fileName);
-
     const entrega = await entregarPdfBytes(gerado.bytes, gerado.fileName, 'guardar');
-
     if (entrega.ok) return entrega;
-
   } catch (e) {
-
     console.warn('[I.S.O PRO] Guardar PDF bytes, fallback HTML:', e);
-
   }
 
   return fallbackGuardarHtml(html);
-
 }
+
+
+
+
 
 
 
 export async function preVisualizarHtmlRelatorioHibrido(
-
-  tipo: HtmlTipo,
-
+  _tipo: HtmlTipo,
   html: string,
-
-  fileName: string,
-
+  _fileName: string,
   titulo: string,
-
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Desktop: janela HTML dedicada (lista principal visível). Web: overlay in-app. */
 
-  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+  const htmlPreview = await abrirPreVisualizacaoHtmlRelatorio(html, { tituloCarregamento: titulo });
 
-  /** Pré-visualização no próprio ecrã — imediata na web (evita fila PDF na nuvem). */
-  const inApp = await abrirPreVisualizacaoHtmlRelatorio(html);
-  if (inApp.ok) return inApp;
+  if (htmlPreview.ok) return htmlPreview;
 
-  if (api?.previewReportPdfFromHtml) {
-    try {
-      void api.beginReportPdfPreviewLoading?.(titulo);
-      const direto = await api.previewReportPdfFromHtml(html, titulo, fileName);
-      if (direto.ok) return direto;
-      console.warn('[I.S.O PRO] Preview PDF direto falhou:', direto.error);
-    } catch (e) {
-      console.warn('[I.S.O PRO] Preview PDF direto (IPC) falhou:', e);
-    }
-  }
+  return {
+    ok: false,
+    error: traduzirErroImpressaoIsoPro(
+      htmlPreview.error ?? 'Não foi possível abrir a pré-visualização. Use «Imprimir / PDF».',
+    ),
+  };
 
-  try {
-    const gerado = await gerarHtmlRelatorioPdfBytes(tipo, html, fileName);
-    const entrega = await entregarPdfBytes(gerado.bytes, gerado.fileName, 'preview', titulo);
-    if (entrega.ok) return entrega;
-  } catch (e) {
-    console.warn('[I.S.O PRO] Preview PDF bytes, fallback HTML:', e);
-  }
-
-  return inApp;
 }
+
 

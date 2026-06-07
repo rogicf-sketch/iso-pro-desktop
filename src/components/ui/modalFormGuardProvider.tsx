@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import { MODAL_DISCARD_CONFIRM_MESSAGE } from './modalFormGuard.constants';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ModalDiscardConfirm } from './ModalDiscardConfirm';
 import { ModalFormGuardContext } from './modalFormGuardContext';
 
 type ProviderProps = {
@@ -9,16 +9,35 @@ type ProviderProps = {
 
 export function ModalFormGuardProvider({ children, externalDirty = false }: ProviderProps) {
   const [childDirty, setChildDirty] = useState(false);
+  const [discardPromptOpen, setDiscardPromptOpen] = useState(false);
+  const pendingCloseRef = useRef<(() => void) | null>(null);
   const isDirty = externalDirty || childDirty;
 
   const registerDirty = useCallback((dirty: boolean) => {
     setChildDirty(dirty);
   }, []);
 
+  const cancelDiscard = useCallback(() => {
+    setDiscardPromptOpen(false);
+    pendingCloseRef.current = null;
+  }, []);
+
+  const confirmDiscard = useCallback(() => {
+    const close = pendingCloseRef.current;
+    setDiscardPromptOpen(false);
+    pendingCloseRef.current = null;
+    setChildDirty(false);
+    close?.();
+  }, []);
+
   const requestClose = useCallback(
     (close: () => void) => {
-      if (isDirty && !window.confirm(MODAL_DISCARD_CONFIRM_MESSAGE)) return;
-      close();
+      if (!isDirty) {
+        close();
+        return;
+      }
+      pendingCloseRef.current = close;
+      setDiscardPromptOpen(true);
     },
     [isDirty],
   );
@@ -28,5 +47,10 @@ export function ModalFormGuardProvider({ children, externalDirty = false }: Prov
     [registerDirty, requestClose, isDirty],
   );
 
-  return <ModalFormGuardContext.Provider value={api}>{children}</ModalFormGuardContext.Provider>;
+  return (
+    <>
+      <ModalFormGuardContext.Provider value={api}>{children}</ModalFormGuardContext.Provider>
+      <ModalDiscardConfirm onCancel={cancelDiscard} onConfirm={confirmDiscard} open={discardPromptOpen} />
+    </>
+  );
 }

@@ -1,4 +1,6 @@
 import { substituirPagedJsPorInline } from './relatorioPagedJsBundle';
+import { gerarHtmlRelatorioPdfBytes } from './pdfCloud/pdfHybridRouter';
+import type { PdfJobTipo } from './pdfCloud/types';
 
 export function escapeHtmlRelatorio(s: string): string {
   return s
@@ -93,15 +95,48 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
       function desativarCabecalhoPdfNativo() {
         document.body.classList.remove('iso-pdf-header-native');
       }
+      function desktopApi() {
+        if (window.isoProDesktop) return window.isoProDesktop;
+        try {
+          if (window.parent && window.parent !== window && window.parent.isoProDesktop) {
+            return window.parent.isoProDesktop;
+          }
+        } catch (e) {}
+        return null;
+      }
+      function isoProAvisoImpressao(texto) {
+        var el = document.getElementById('iso-pro-preview-aviso');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'iso-pro-preview-aviso';
+          el.setAttribute('role', 'alert');
+          el.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#7f1d1d;color:#fef2f2;padding:10px 16px;border-radius:8px;font:13px/1.4 Segoe UI,sans-serif;z-index:99999;max-width:min(92vw,520px);box-shadow:0 8px 24px rgba(0,0,0,.35)';
+          document.body.appendChild(el);
+        }
+        el.textContent = texto;
+        el.style.display = 'block';
+        clearTimeout(window.__isoProAvisoTimer);
+        window.__isoProAvisoTimer = setTimeout(function () { el.style.display = 'none'; }, 9000);
+      }
       function guardarPdf() {
         aguardarPaginacao(function () {
           ativarCabecalhoPdfNativo();
-          if (window.isoProDesktop && window.isoProDesktop.savePdfJanelaAtual) {
-            void window.isoProDesktop.savePdfJanelaAtual();
+          var api = desktopApi();
+          if (api && api.savePdfJanelaAtual && emJanelaPreviewDesktop(api)) {
+            void api.savePdfJanelaAtual().then(function (res) {
+              if (!res.ok) {
+                var err = res.error || 'Falha ao guardar PDF.';
+                isoProAvisoImpressao(err);
+              }
+            });
             return;
           }
-          if (window.isoProDesktop && window.isoProDesktop.saveHtmlAsPdf) {
-            void window.isoProDesktop.saveHtmlAsPdf(docHtml());
+          if (api && api.saveHtmlAsPdf) {
+            void api.saveHtmlAsPdf(docHtml()).then(function (res) {
+              if (!res.ok) {
+                isoProAvisoImpressao(res.error || 'Falha ao guardar PDF.');
+              }
+            });
             return;
           }
           window.print();
@@ -112,7 +147,14 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
           fn();
           return;
         }
-        document.addEventListener('relatorio-paginado-pronto', fn, { once: true });
+        var t = setTimeout(fn, 8000);
+        document.addEventListener('relatorio-paginado-pronto', function () {
+          clearTimeout(t);
+          fn();
+        }, { once: true });
+      }
+      function emJanelaPreviewDesktop(api) {
+        return !!(api && (api.savePdfJanelaAtual || api.printJanelaAtual));
       }
       var root = document.querySelector('.iso-pro-doc-preview-toolbar');
       if (!root) return;
@@ -122,8 +164,20 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
         btnPrint.addEventListener('click', function () {
           desativarCabecalhoPdfNativo();
           aguardarPaginacao(function () {
-            if (window.isoProDesktop && window.isoProDesktop.printHtml) {
-              void window.isoProDesktop.printHtml(docHtml());
+            var api = desktopApi();
+            if (api && api.printJanelaAtual && emJanelaPreviewDesktop(api)) {
+              void api.printJanelaAtual().then(function (res) {
+                if (!res.ok) {
+                  var err = res.error || 'Falha na impressao.';
+                  isoProAvisoImpressao(err);
+                }
+              });
+            } else if (api && api.printHtml) {
+              void api.printHtml(docHtml()).then(function (res) {
+                if (!res.ok) {
+                  isoProAvisoImpressao(res.error || 'Falha na impressão.');
+                }
+              });
             } else {
               window.print();
             }
@@ -131,7 +185,8 @@ export function scriptBarraPreVisualizacaoImpressao(): string {
         });
       }
       if (btnPdf) {
-        if (window.isoProDesktop && (window.isoProDesktop.savePdfJanelaAtual || window.isoProDesktop.saveHtmlAsPdf)) {
+        var apiPdf = desktopApi();
+        if (apiPdf && (apiPdf.savePdfJanelaAtual || apiPdf.saveHtmlAsPdf)) {
           btnPdf.addEventListener('click', guardarPdf);
         } else {
           btnPdf.style.display = 'none';
@@ -235,11 +290,8 @@ export function htmlLogoCompactoRunningHeader(logoUrl: string): string {
 /**
  * Dispara impressão do HTML (recibos, relatórios, etc.).
  *
- * No **I.S.O PRO desktop (Electron)** usa primeiro **IPC → processo principal** (`printHtml`): carrega o HTML
- * numa janela oculta e chama `webContents.print` — evita PDF / folha em branco típicos do `print()` no renderer.
- * Fora do Electron (ex.: só Vite no browser), usa **iframe oculto** como recurso.
- *
- * @returns false se não houver `document.body` (ex.: SSR) e não houver API desktop.
+ * No **I.S.O PRO desktop (Electron)** usa IPC (`printHtml`).
+ * No **navegador**, prefira `abrirImpressaoHtmlNavegador` (popup reservado no clique).
  */
 export function abrirImpressaoHtmlRelatorio(html: string): boolean {
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
@@ -256,7 +308,9 @@ export function abrirImpressaoHtmlRelatorio(html: string): boolean {
     return false;
   }
 
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const htmlParaImpressao = substituirPagedJsPorInline(html);
+
+  const blob = new Blob([htmlParaImpressao], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
 
   const iframe = document.createElement('iframe');
@@ -266,8 +320,8 @@ export function abrirImpressaoHtmlRelatorio(html: string): boolean {
     'position:fixed',
     'left:0',
     'top:0',
-    'width:1px',
-    'height:1px',
+    'width:100%',
+    'height:100%',
     'opacity:0',
     'pointer-events:none',
     'border:none',
@@ -301,7 +355,7 @@ export function abrirImpressaoHtmlRelatorio(html: string): boolean {
           } finally {
             cleanup();
           }
-        }, 320);
+        }, 600);
       });
     });
   };
@@ -321,24 +375,143 @@ export function abrirImpressaoHtmlRelatorio(html: string): boolean {
     if (!printed && iframe.contentDocument?.readyState === 'complete') {
       runPrint();
     }
-  }, 900);
+  }, 2500);
 
   return true;
 }
+
+/**
+ * Impressão no navegador (popup reservado no clique ou iframe de fallback).
+ * `reservedWindow`: abrir com `window.open('', '_blank')` **no mesmo turno** do clique do utilizador.
+ */
+export function abrirImpressaoHtmlNavegador(html: string, reservedWindow?: Window | null): boolean {
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+  if (api?.printHtml) {
+    void api.printHtml(html).then((res) => {
+      if (!res.ok && typeof window !== 'undefined') {
+        console.error('[I.S.O PRO] Falha na impressão:', res.error);
+      }
+    });
+    return true;
+  }
+
+  if (typeof document === 'undefined' || !document.body) {
+    return false;
+  }
+
+  const htmlInline = substituirPagedJsPorInline(html);
+  const w = reservedWindow ?? window.open('', '_blank');
+
+  if (w) {
+    w.document.open();
+    w.document.write(htmlInline);
+    w.document.close();
+
+    let printed = false;
+    const trigger = () => {
+      if (printed) return;
+      printed = true;
+      window.setTimeout(() => {
+        try {
+          w.focus();
+          w.print();
+        } catch {
+          /* popup bloqueado ou fechado */
+        }
+      }, 700);
+    };
+
+    w.addEventListener('load', trigger, { once: true });
+    window.setTimeout(trigger, 2800);
+    return true;
+  }
+
+  return abrirImpressaoHtmlRelatorio(html);
+}
+
 
 const ERRO_PREVISUALIZACAO_POPUP =
   'Não foi possível abrir a janela de pré-visualização. Permita pop-ups para este site ou use Editar e depois «Imprimir / PDF».';
 
 const OVERLAY_PREVISUALIZACAO_ID = 'iso-pro-html-preview-overlay';
 
-/** Pré-visualização dentro da própria janela (iframe + srcdoc) — só quando não há Electron. */
-function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
+/** Imprime o conteúdo já visível no iframe de pré-visualização (web). */
+function imprimirIframePreVisualizacao(
+  iframe: HTMLIFrameElement,
+  onErro: (msg: string) => void,
+): void {
+  let printed = false;
+  const run = () => {
+    if (printed) return;
+    printed = true;
+    const w = iframe.contentWindow;
+    if (!w) {
+      onErro('Não foi possível imprimir. Tente «Guardar PDF» ou use o I.S.O PRO Desktop.');
+      return;
+    }
+    try {
+      w.focus();
+      w.print();
+    } catch {
+      onErro('Impressão bloqueada pelo navegador. Ative pop-ups ou use «Guardar PDF».');
+    }
+  };
+
+  const doc = iframe.contentDocument;
+  const usaPaged = Boolean(doc?.defaultView && (doc.defaultView as Window & { __relatorioUsaPagedJs?: boolean }).__relatorioUsaPagedJs);
+  const pronto = doc?.body?.classList.contains('relatorio-paged-ready');
+
+  if (!usaPaged || pronto) {
+    window.setTimeout(run, pronto ? 80 : 400);
+    return;
+  }
+
+  const onReady = () => {
+    doc?.removeEventListener('relatorio-paginado-pronto', onReady);
+    window.setTimeout(run, 120);
+  };
+  doc?.addEventListener('relatorio-paginado-pronto', onReady, { once: true });
+  window.setTimeout(run, 9000);
+}
+
+async function guardarPdfHtmlWeb(
+  html: string,
+  fileName: string,
+  tipoNuvem: PdfJobTipo,
+  iframe: HTMLIFrameElement,
+  onMsg: (msg: string) => void,
+): Promise<void> {
+  try {
+    const gerado = await gerarHtmlRelatorioPdfBytes(tipoNuvem, html, fileName);
+    const blob = new Blob([Uint8Array.from(gerado.bytes)], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = gerado.fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+    onMsg(`PDF guardado: ${gerado.fileName}`);
+  } catch {
+    imprimirIframePreVisualizacao(iframe, () => {});
+    onMsg(
+      'PDF na nuvem indisponível nesta sessão. Abriu a impressão — escolha «Guardar como PDF» / «Microsoft Print to PDF» como destino e active «Gráficos de fundo».',
+    );
+  }
+}
+
+/** Pré-visualização dentro da própria janela (iframe + srcdoc) — browser / fallback quando IPC falha. */
+function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: string; pdfTipo?: PdfJobTipo }): boolean {
   if (typeof document === 'undefined' || !document.body) {
     return false;
   }
   document.getElementById(OVERLAY_PREVISUALIZACAO_ID)?.remove();
 
-  const htmlInline = substituirPagedJsPorInline(html);
+  const htmlInline = substituirPagedJsPorInline(
+    html.replace(
+      '</head>',
+      '<style>.iso-pro-doc-preview-toolbar{display:none!important}</style></head>',
+    ),
+  );
 
   const root = document.createElement('div');
   root.id = OVERLAY_PREVISUALIZACAO_ID;
@@ -349,42 +522,78 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
 
   const bar = document.createElement('div');
   bar.style.cssText =
-    'display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;flex-shrink:0;flex-wrap:wrap;';
+    'display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px;flex-shrink:0;';
   const left = document.createElement('div');
-  left.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:10px;flex:1;min-width:0;';
+  left.style.cssText = 'display:flex;flex-direction:column;gap:8px;flex:1;min-width:0;';
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:10px;flex-shrink:0;';
   const hint = document.createElement('span');
-  hint.style.cssText = 'color:#e2e8f0;font-size:13px;';
+  hint.style.cssText = 'color:#e2e8f0;font-size:13px;line-height:1.45;';
   hint.textContent =
-    'Pré-visualização — «Guardar PDF» igual ao ecrã; «Imprimir / PDF»: no diálogo ative «Gráficos de fundo» se faltar cor.';
+    'Pré-visualização — use os botões abaixo. No diálogo de impressão, active «Gráficos de fundo» se faltar cor.';
   const btnPrint = document.createElement('button');
   btnPrint.type = 'button';
   btnPrint.textContent = 'Imprimir / PDF';
   btnPrint.style.cssText =
     'padding:8px 16px;cursor:pointer;font-size:14px;border-radius:8px;border:1px solid #38bdf8;background:#0284c7;color:#fff;font-weight:600;';
-  btnPrint.addEventListener('click', () => {
-    void abrirImpressaoHtmlRelatorio(htmlInline);
-  });
   const btnPdf = document.createElement('button');
   btnPdf.type = 'button';
   btnPdf.textContent = 'Guardar PDF…';
   btnPdf.style.cssText =
     'padding:8px 16px;cursor:pointer;font-size:14px;border-radius:8px;border:1px solid #64748b;background:#1e293b;color:#f1f5f9;font-weight:600;';
+  btnPrint.addEventListener('click', () => {
+    btnPrint.disabled = true;
+    btnPrint.textContent = 'A imprimir…';
+    const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+    if (api?.printHtml) {
+      void api.printHtml(htmlInline).then((res) => {
+        btnPrint.disabled = false;
+        btnPrint.textContent = 'Imprimir / PDF';
+        if (!res.ok) {
+          hint.textContent = res.error ?? 'Falha na impressão.';
+        }
+      });
+      return;
+    }
+    imprimirIframePreVisualizacao(iframe, (msg) => {
+      hint.textContent = msg;
+    });
+    btnPrint.disabled = false;
+    btnPrint.textContent = 'Imprimir / PDF';
+  });
   btnPdf.addEventListener('click', () => {
     const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
     if (api?.saveHtmlAsPdf) {
+      btnPdf.disabled = true;
+      btnPdf.textContent = 'A gerar PDF…';
       void api.saveHtmlAsPdf(htmlInline).then((res) => {
-        if (!res.ok && typeof console !== 'undefined') {
-          console.error('[I.S.O PRO] PDF:', res.error);
+        btnPdf.disabled = false;
+        btnPdf.textContent = 'Guardar PDF…';
+        if (!res.ok) {
+          hint.textContent = res.error ?? 'Falha ao guardar PDF.';
         }
       });
+      return;
     }
+    btnPdf.disabled = true;
+    btnPdf.textContent = 'A gerar PDF…';
+    void guardarPdfHtmlWeb(
+      htmlInline,
+      opts?.pdfFileName ?? 'relatorio.pdf',
+      opts?.pdfTipo ?? 'relatorio_fotografico',
+      iframe,
+      (msg) => {
+        hint.textContent = msg;
+      },
+    ).finally(() => {
+      btnPdf.disabled = false;
+      btnPdf.textContent = 'Guardar PDF…';
+    });
   });
+  actions.appendChild(btnPdf);
+  actions.appendChild(btnPrint);
+  left.appendChild(actions);
   left.appendChild(hint);
-  left.appendChild(btnPdf);
-  left.appendChild(btnPrint);
-  if (typeof window !== 'undefined' && !window.isoProDesktop?.saveHtmlAsPdf) {
-    btnPdf.style.display = 'none';
-  }
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.textContent = 'Fechar';
@@ -394,7 +603,7 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
   bar.appendChild(btn);
 
   const iframe = document.createElement('iframe');
-  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-modals');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-modals allow-popups');
   iframe.setAttribute('title', 'Pré-visualização do relatório');
   iframe.style.cssText = 'flex:1;width:100%;min-height:0;border:0;border-radius:10px;background:#cbd5e1;';
 
@@ -430,35 +639,39 @@ function abrirPreVisualizacaoInAppOverlay(html: string): boolean {
  */
 export async function abrirPreVisualizacaoHtmlRelatorio(
   html: string,
+  opts?: { tituloCarregamento?: string; pdfFileName?: string; pdfTipo?: PdfJobTipo },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (abrirPreVisualizacaoInAppOverlay(html)) {
-    return { ok: true };
-  }
-
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
 
+  /** Desktop: janela dedicada com preload — lista principal permanece visível; Imprimir/PDF fiáveis. */
   if (api?.previewHtml) {
     try {
+      if (opts?.tituloCarregamento && api.beginHtmlPreviewLoading) {
+        void api.beginHtmlPreviewLoading(opts.tituloCarregamento);
+      }
       const res = await api.previewHtml(html);
       if (res.ok) return res;
-      if (abrirPreVisualizacaoInAppOverlay(html)) {
-        return { ok: true };
-      }
       return {
         ok: false,
         error:
           res.error ??
-          'Não foi possível abrir a pré-visualização. Reinicie a aplicação ou use «Imprimir / PDF».',
+          'Não foi possível abrir a pré-visualização. Reinicie a aplicação ou tente «Imprimir / PDF».',
       };
     } catch (e) {
-      if (abrirPreVisualizacaoInAppOverlay(html)) {
-        return { ok: true };
-      }
       return {
         ok: false,
         error: e instanceof Error ? e.message : 'Falha ao abrir pré-visualização.',
       };
     }
+  }
+
+  if (
+    abrirPreVisualizacaoInAppOverlay(html, {
+      pdfFileName: opts?.pdfFileName,
+      pdfTipo: opts?.pdfTipo,
+    })
+  ) {
+    return { ok: true };
   }
 
   const w = abrirJanelaPreVisualizacaoRelatorio();

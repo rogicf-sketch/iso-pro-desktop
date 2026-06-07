@@ -273,4 +273,51 @@ Corpo JSON (POST):
 2. Alerta operacional activo, destinatarios e prazos definidos.
 3. Funcao publicada (comando acima).
 
-Pode usar o **mesmo schedule** do estoque critico apontando para esta funcao, ou combinar invocacoes separadas no cron externo.
+
+---
+
+## Servico PDF na nuvem (`pdf_enqueue`, `pdf_status`, `pdf_cleanup`)
+
+Fila Postgres `pdf_jobs` + worker Node (`services/pdf-worker/`) + bucket Storage `pdfs`.
+
+### Deploy das funcoes
+
+```bash
+supabase db push   # migracao 20260604120000_pdf_jobs.sql
+supabase functions deploy pdf_enqueue --no-verify-jwt
+supabase functions deploy pdf_status --no-verify-jwt
+supabase functions deploy pdf_cleanup --no-verify-jwt
+```
+
+Opcional cron limpeza (PDFs > 7 dias):
+
+```bash
+supabase secrets set ISO_PRO_PDF_CLEANUP_CRON_SECRET="valor-aleatorio-longo"
+# POST pdf_cleanup com header x-iso-pro-cron-secret e body {}
+```
+
+### Enfileirar (desktop / web)
+
+```json
+{
+  "tenantId": "00000000-0000-0000-0000-000000000001",
+  "login": "admin",
+  "senha": "********",
+  "tipo": "rir",
+  "fileName": "RIR-ELE-01.pdf",
+  "payload": { }
+}
+```
+
+Tipos: `rir`, `rnc`, `relatorio_fotografico`, `planejamento_campo`, `etiqueta`.
+
+Payload RIR: contexto serializado (`RirPdfContextoWire`). Payload HTML: `{ "html": "<!DOCTYPE html>...", "waitPagedJs": true }`.
+
+### Worker
+
+Ver [services/pdf-worker/README.md](../../services/pdf-worker/README.md). Requer `SUPABASE_SERVICE_ROLE_KEY` na VM.
+
+### Desktop
+
+Configuracoes → Supabase → **PDF na nuvem (quando online)**. Fallback local automatico se offline ou timeout.
+

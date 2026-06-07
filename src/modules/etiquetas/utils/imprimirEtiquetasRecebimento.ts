@@ -1,9 +1,14 @@
+import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import {
-  abrirImpressaoHtmlRelatorio,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
   htmlBlocoLogoInstitucional,
 } from '../../../lib/htmlRelatorioInstitucional';
+import {
+  cssRunningHeaderInstitucional,
+  montarDocumentoHtmlInstitucionalPaged,
+  montarRunningHeaderInstitucional,
+} from '../../../lib/relatorioPagedDocument';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { RecebimentoItem } from '../../recebimentos/types/recebimento.types';
 import type { EtiquetaCodigosOpcao, EtiquetaFormato, EtiquetaModelo } from '../types/etiqueta.types';
@@ -88,8 +93,21 @@ export async function montarHtmlEtiquetasItensRecebimento(params: {
   copiasPorItem: number;
   codigos: EtiquetaCodigosOpcao;
   logoNaEtiqueta: boolean;
+  /** Pre-visualizacao in-app (iframe): sem Paged.js — evita ecra em branco. */
+  paraPreviewInApp?: boolean;
 }): Promise<string> {
-  const { recebimento, itens, modelo, formato, larguraMm, alturaMm, copiasPorItem, codigos, logoNaEtiqueta } = params;
+  const {
+    recebimento,
+    itens,
+    modelo,
+    formato,
+    larguraMm,
+    alturaMm,
+    copiasPorItem,
+    codigos,
+    logoNaEtiqueta,
+    paraPreviewInApp = false,
+  } = params;
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso();
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const compacto = formato === 'termica_58' || formato === 'termica_80';
@@ -117,15 +135,28 @@ export async function montarHtmlEtiquetasItensRecebimento(params: {
   const blocos = await Promise.all(tarefas);
 
   const gridClass = gridCols === 2 ? 'etiq-lote-grid etiq-lote-a4-2' : 'etiq-lote-grid etiq-lote-single';
+  const logoBlock = htmlBlocoLogoInstitucional(logoUrl, compacto);
+  const nfLabel = escapeHtmlRelatorio(notaFiscalSufixoParaRotuloEtiqueta(recebimento.notaFiscal));
+  const runningName = 'etiqRunningHdr';
+  const runningHeader = compacto
+    ? ''
+    : montarRunningHeaderInstitucional({
+        classPrefix: 'etiq',
+        runningName,
+        logoHtml: logoBlock,
+        title: 'Etiquetas do recebimento',
+        code: nfLabel,
+      });
+  const runningCss = compacto
+    ? ''
+    : cssRunningHeaderInstitucional({
+        classPrefix: 'etiq',
+        runningName,
+        logoHtml: logoBlock,
+        title: '',
+      });
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <meta name="color-scheme" content="light" />
-  <meta name="supported-color-schemes" content="light" />
-  <title>Etiquetas recebimento ${escapeHtmlRelatorio(recebimento.notaFiscal || '—')}</title>
-  <style>
+  const reportStyles = `
     ${cssInstitucionalRelatorio()}
     /* Pre-visualizacao no app (tema escuro): forcar leitura como impressao — papel claro, texto escuro */
     html { color-scheme: light; }
@@ -354,34 +385,46 @@ export async function montarHtmlEtiquetasItensRecebimento(params: {
       border-top: 1px dashed #cbd5e1;
     }
     @media print {
-      body { background: #fff !important; }
+      body.etiq-lote-body { background: #fff !important; }
       .etiq-lote-top { background: transparent !important; border: none; padding-left: 0; padding-right: 0; }
       .etiq-card { box-shadow: none; }
-    }
-  </style>
-</head>
-<body>
+    }`;
+
+  const contentHtml = `
   <div class="inst-topbar">
     <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
     <span>${escapeHtmlRelatorio(formato)} • ${escapeHtmlRelatorio(String(larguraMm))}×${escapeHtmlRelatorio(String(alturaMm))} mm • modelo ${escapeHtmlRelatorio(modelo)}</span>
   </div>
   <header class="inst-header">
-    ${htmlBlocoLogoInstitucional(logoUrl, compacto)}
+    ${logoBlock}
     <div class="inst-title-col">
       <h1>Etiquetas do recebimento</h1>
     </div>
   </header>
   <p class="etiq-lote-top">
-    <strong>NF:</strong> ${escapeHtmlRelatorio(notaFiscalSufixoParaRotuloEtiqueta(recebimento.notaFiscal))}
+    <strong>NF:</strong> ${nfLabel}
     &nbsp;|&nbsp; <strong>Romaneio:</strong> ${escapeHtmlRelatorio(recebimento.romaneio || '—')}
     &nbsp;|&nbsp; <strong>Fornecedor:</strong> ${escapeHtmlRelatorio(recebimento.fornecedor || '—')}
     &nbsp;|&nbsp; <strong>Data:</strong> ${escapeHtmlRelatorio(recebimento.dataRecebimento || '—')}
   </p>
   <div class="${gridClass}">
     ${blocos.join('\n')}
-  </div>
-</body>
-</html>`;
+  </div>`;
+
+  return montarDocumentoHtmlInstitucionalPaged({
+    title: `Etiquetas recebimento ${escapeHtmlRelatorio(recebimento.notaFiscal || '—')}`,
+    bodyClass: 'etiq-lote-body',
+    reportStyles,
+    contentHtml,
+    runningHeaderHtml: runningHeader || undefined,
+    runningHeaderCss: runningCss || undefined,
+    /** Etiquetas usam grade CSS — Paged.js só atrasa e trava impressão/pré-visualização. */
+    usePagedJs: false,
+    includeToolbar: !paraPreviewInApp,
+    pagedAtPage: compacto
+      ? { size: `${larguraMm}mm ${alturaMm}mm`, marginTopMm: 2, marginRightMm: 2, marginBottomMm: 2, marginLeftMm: 2, showPageNumbers: false, firstPageNoRunningHeader: false }
+      : { runningHeaderName: runningName, marginTopMm: 16 },
+  });
 }
 
 function classeModeloCard(modelo: EtiquetaModelo): string {
@@ -459,6 +502,14 @@ async function blocoEtiquetaItemHtml(opts: {
   </div>`;
 }
 
-export function imprimirEtiquetasRecebimentoHtml(html: string): boolean {
-  return abrirImpressaoHtmlRelatorio(html);
+export async function imprimirEtiquetasRecebimentoHtml(html: string, codigoRef = 'etiquetas'): Promise<boolean> {
+  const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+  if (api?.printHtml) {
+    const res = await api.printHtml(html);
+    return res.ok;
+  }
+  return imprimirRelatorioProfissional({
+    html,
+    fileName: nomeArquivoRelatorioPdf(codigoRef, 'etiquetas'),
+  });
 }

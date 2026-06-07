@@ -1,6 +1,7 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -154,7 +155,7 @@ function writeAll(items: Equipamento[]) {
 }
 
 export async function loadEquipamentos(): Promise<Equipamento[]> {
-  return hasSupabaseConfig() ? await readSnapshotEquipamentos().catch(() => readAll()) : readAll();
+  return readRemoteOrLocal({ readRemote: readSnapshotEquipamentos, readLocal: readAll });
 }
 
 function normalizeLookupValue(value: string) {
@@ -247,7 +248,7 @@ function filtrosEquipamentosEstaoPadrao(f: EquipamentoFiltro): boolean {
 
 export async function listarEquipamentos(filtro: EquipamentoFiltro): Promise<ServiceResult<PaginatedResult<Equipamento>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotEquipamentos(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',
@@ -271,7 +272,7 @@ export async function listarEquipamentos(filtro: EquipamentoFiltro): Promise<Ser
 
 export async function obterIndicadoresEquipamentos(): Promise<ServiceResult<EquipamentoIndicadores>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotEquipamentos(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',
@@ -405,7 +406,7 @@ export type { SituacaoContrato } from '../utils/equipamentoContrato';
 
 export async function montarExportacaoEquipamentosCsv(filtro: EquipamentoFiltro): Promise<ServiceResult<{ csv: string; fileName: string }>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotEquipamentos(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',

@@ -15,6 +15,7 @@ import type { ServiceWriteResult } from '../../../types/common.types';
 import { normalizeRirRegistro, obterSugestaoCodigoRir, validateRir } from '../services/qualidade.service';
 import type { RirFormData, RirItemLinha, RirRecebimentoChoice, RirRegistro } from '../types/qualidade.types';
 import { codigoHelpLinhaRir } from '../utils/rirNumeracaoCopy';
+import { formatarDisciplinaExibicaoRir, resolverDisciplinaRir } from '../utils/rirDisciplina';
 import {
   mapRecebimentoItensParaRirItens,
   montarCorpoObservacoesItensRecebimento,
@@ -78,6 +79,24 @@ export function RirForm({
   const [form, setForm] = useState<RirFormData>(initialValue);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
+  const disciplinaSugerida = useMemo(
+    () =>
+      resolverDisciplinaRir({
+        procedimentoNumero: form.procedimentoNumero,
+        codigo: form.codigo,
+        itensRir: form.itensRir,
+      }),
+    [form.procedimentoNumero, form.codigo, form.itensRir],
+  );
+
+  useEffect(() => {
+    if (!disciplinaSugerida) return;
+    setForm((f) => {
+      const atual = f.disciplina?.trim() ?? '';
+      if (atual) return f;
+      return { ...f, disciplina: disciplinaSugerida };
+    });
+  }, [disciplinaSugerida]);
   const guardedCancel = useModalGuardedClose(onCancel);
   useModalFormDirty(isPlainFormDirty(initialValue, form));
   /** Por defeito ligado em novo RIR: esconde NFs que já têm RIR ativo. */
@@ -516,6 +535,17 @@ export function RirForm({
           </datalist>
           <small className="panel-copy">Sugestoes do cadastro em &quot;Nº do procedimento&quot; (toolbar do RIR).</small>
         </label>
+        <Input
+          label="Disciplina *"
+          onChange={(e) => setForm({ ...form, disciplina: e.target.value })}
+          placeholder={
+            disciplinaSugerida ? formatarDisciplinaExibicaoRir(disciplinaSugerida) : 'Ex.: Tubulação'
+          }
+          value={form.disciplina ?? ''}
+        />
+        <small className="panel-copy">
+          Preenchimento automatico pelo procedimento (ex.: PE-TUB-003) ou codigo RIR (ex.: RIR-TUB-02). Obrigatorio se nao houver sigla detectavel.
+        </small>
         <Input
           label="Sol. compra / Pack-list"
           onChange={(e) => setForm({ ...form, solCompraPackList: e.target.value })}

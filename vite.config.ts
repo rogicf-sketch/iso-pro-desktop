@@ -10,7 +10,14 @@ const appVersion = (JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { vers
 
 // https://vite.dev/config/
 // base relativo: necessário para Electron carregar JS/CSS com loadFile (protocolo file://).
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  if (mode === 'production' && process.env.VITE_ENABLE_LOCAL_MOCK_AUTH === 'true') {
+    throw new Error(
+      'Build de producao bloqueado: remova VITE_ENABLE_LOCAL_MOCK_AUTH=true do ambiente de build.',
+    );
+  }
+
+  return {
   base: './',
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
@@ -28,7 +35,8 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
-    open: true,
+    /** Não abrir browser extra — `npm run dev` usa janela Electron. Use `npm run dev:browser` para abrir no Chrome. */
+    open: process.env.VITE_OPEN_BROWSER === '1',
   },
   test: {
     environment: 'node',
@@ -36,4 +44,5 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**', 'src/**/*.integration.test.ts'],
     reporters: process.env.GITHUB_ACTIONS ? ['default', 'github-actions'] : ['default'],
   },
+};
 })

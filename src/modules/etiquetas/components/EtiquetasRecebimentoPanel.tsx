@@ -1,8 +1,11 @@
 import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
-import { Modal } from '../../../components/ui/Modal';
+import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { PAGEDJS_SCRIPT_FILENAME } from '../../../lib/relatorioPagedConstants';
+import { substituirPagedJsPorInline } from '../../../lib/relatorioPagedJsBundle';
 import { Input } from '../../../components/ui/Input';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -19,11 +22,26 @@ import {
 } from '../utils/imprimirEtiquetasRecebimento';
 import { IconFullscreenEnter, IconFullscreenExit } from '../../../components/ui/FullscreenIcons';
 
+/** HTML no iframe in-app: srcdoc (nao blob:) + fontes absolutas para o tema escuro da app. */
+function prepararHtmlPreviewEtiquetaIframe(html: string): string {
+  let out = html.includes(PAGEDJS_SCRIPT_FILENAME) ? substituirPagedJsPorInline(html) : html;
+  if (typeof window !== 'undefined') {
+    try {
+      const fontsPrefix = new URL('./fonts/', window.location.href).href;
+      out = out.replace(/\.\/fonts\//g, fontsPrefix);
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
 type EtiquetaPreviewChromeProps = {
   copiasPorItem: number;
   iframeMinHeight: number;
   itemCount: number;
   onOpenLightbox?: () => void;
+  previewBusy?: boolean;
   previewHtml: string;
 };
 
@@ -32,10 +50,19 @@ function EtiquetaRecebimentoPreviewChrome({
   iframeMinHeight,
   itemCount,
   onOpenLightbox,
+  previewBusy = false,
   previewHtml,
 }: EtiquetaPreviewChromeProps) {
   const shellRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const [browserFs, setBrowserFs] = useState(false);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !previewHtml.trim()) return;
+    iframe.removeAttribute('src');
+    iframe.srcdoc = prepararHtmlPreviewEtiquetaIframe(previewHtml);
+  }, [previewHtml]);
 
   useEffect(() => {
     function sync() {
@@ -93,16 +120,16 @@ function EtiquetaRecebimentoPreviewChrome({
             <span className="etiqueta-preview-fs-icon">{browserFs ? <IconFullscreenExit /> : <IconFullscreenEnter />}</span>
           </button>
           {onOpenLightbox ? (
-            <Button onClick={onOpenLightbox} type="button" variant="ghost">
-              Tela grande
+            <Button disabled={previewBusy} onClick={onOpenLightbox} type="button" variant="ghost">
+              {previewBusy ? 'A abrir…' : 'Tela grande'}
             </Button>
           ) : null}
         </div>
       </div>
       <div className={onOpenLightbox ? 'etiqueta-preview-scroll' : 'etiqueta-preview-scroll etiqueta-preview-scroll--lightbox'}>
         <iframe
-          sandbox="allow-same-origin allow-scripts allow-modals"
-          srcDoc={previewHtml}
+          ref={iframeRef}
+          sandbox="allow-same-origin allow-scripts allow-modals allow-popups"
           style={iframeStyle}
           title="Pre-visualizacao etiquetas recebimento"
         />
@@ -128,15 +155,12 @@ export function EtiquetasRecebimentoPanel() {
   const [codigosNaEtiqueta, setCodigosNaEtiqueta] = useState<EtiquetaCodigosOpcao>('ambos');
   const [logoNaEtiqueta, setLogoNaEtiqueta] = useState(true);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
-  const [previewLightboxOpen, setPreviewLightboxOpen] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [imprimirBusy, setImprimirBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listaBuscaSeqRef = useRef(0);
-
-  useEffect(() => {
-    if (!previewHtml) setPreviewLightboxOpen(false);
-  }, [previewHtml]);
 
   const preset = useMemo(() => getEtiquetaPreset(modelo, formato), [modelo, formato]);
 
@@ -307,8 +331,24 @@ export function EtiquetasRecebimentoPanel() {
       copiasPorItem,
       codigos: codigosNaEtiqueta,
       logoNaEtiqueta,
+      paraPreviewInApp: true,
     });
     setPreviewHtml(html);
+  }
+
+  async function abrirPreVisualizacaoTelaGrande() {
+    if (!previewHtml?.trim() || !recebimentoAtual) return;
+    setPreviewBusy(true);
+    setMsg('');
+    try {
+      const titulo = `Etiquetas recebimento ${recebimentoAtual.notaFiscal || '—'}`;
+      const res = await abrirPreVisualizacaoHtmlRelatorio(previewHtml, { tituloCarregamento: titulo });
+      if (!res.ok) {
+        setMsg(traduzirErroImpressaoIsoPro(res.error ?? 'Não foi possível abrir a pré-visualização em tela grande.'));
+      }
+    } finally {
+      setPreviewBusy(false);
+    }
   }
 
   async function imprimirDoc() {
@@ -317,25 +357,35 @@ export function EtiquetasRecebimentoPanel() {
       setMsg('Selecione ao menos um item.');
       return;
     }
+    setImprimirBusy(true);
     setMsg('');
-    const html = await montarHtmlEtiquetasItensRecebimento({
-      recebimento: {
-        notaFiscal: recebimentoAtual.notaFiscal,
-        romaneio: recebimentoAtual.romaneio,
-        fornecedor: recebimentoAtual.fornecedor,
-        dataRecebimento: recebimentoAtual.dataRecebimento,
-      },
-      itens: itensSelecionados,
-      modelo,
-      formato,
-      larguraMm: preset.larguraMm,
-      alturaMm: preset.alturaMm,
-      copiasPorItem,
-      codigos: codigosNaEtiqueta,
-      logoNaEtiqueta,
-    });
-    if (!imprimirEtiquetasRecebimentoHtml(html)) {
-      setMsg('Nao foi possivel abrir a janela de impressao. Verifique o bloqueador de popups.');
+    try {
+      const html = await montarHtmlEtiquetasItensRecebimento({
+        recebimento: {
+          notaFiscal: recebimentoAtual.notaFiscal,
+          romaneio: recebimentoAtual.romaneio,
+          fornecedor: recebimentoAtual.fornecedor,
+          dataRecebimento: recebimentoAtual.dataRecebimento,
+        },
+        itens: itensSelecionados,
+        modelo,
+        formato,
+        larguraMm: preset.larguraMm,
+        alturaMm: preset.alturaMm,
+        copiasPorItem,
+        codigos: codigosNaEtiqueta,
+        logoNaEtiqueta,
+        paraPreviewInApp: false,
+      });
+      if (!(await imprimirEtiquetasRecebimentoHtml(html, recebimentoAtual.notaFiscal || 'etiquetas'))) {
+        setMsg(
+          traduzirErroImpressaoIsoPro(
+            'Não foi possível imprimir. Use «Tela grande» e o botão «Imprimir / PDF» na janela de pré-visualização.',
+          ),
+        );
+      }
+    } finally {
+      setImprimirBusy(false);
     }
   }
 
@@ -538,8 +588,8 @@ export function EtiquetasRecebimentoPanel() {
               <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void gerarPreview()} type="button">
                 Gerar pre-visualizacao
               </Button>
-              <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void imprimirDoc()} type="button">
-                Imprimir
+              <Button disabled={!podeEtiqueta || !itensSelecionados.length || imprimirBusy} onClick={() => void imprimirDoc()} type="button">
+                {imprimirBusy ? 'A imprimir…' : 'Imprimir'}
               </Button>
             </div>
           </section>
@@ -550,33 +600,13 @@ export function EtiquetasRecebimentoPanel() {
                 copiasPorItem={copiasPorItem}
                 iframeMinHeight={440}
                 itemCount={itensSelecionados.length}
-                onOpenLightbox={() => setPreviewLightboxOpen(true)}
+                onOpenLightbox={() => void abrirPreVisualizacaoTelaGrande()}
+                previewBusy={previewBusy}
                 previewHtml={previewHtml}
               />
             </div>
           ) : null}
         </>
-      ) : null}
-
-      {previewHtml ? (
-        <Modal
-          onClose={() => {
-            if (document.fullscreenElement) {
-              void document.exitFullscreen().catch(() => undefined);
-            }
-            setPreviewLightboxOpen(false);
-          }}
-          open={previewLightboxOpen}
-          size="fullscreen"
-          title="Pre-visualizacao de etiquetas"
-        >
-          <EtiquetaRecebimentoPreviewChrome
-            copiasPorItem={copiasPorItem}
-            iframeMinHeight={560}
-            itemCount={itensSelecionados.length}
-            previewHtml={previewHtml}
-          />
-        </Modal>
       ) : null}
 
       {msg ? <OperationalNotice tone="warning">{msg}</OperationalNotice> : null}

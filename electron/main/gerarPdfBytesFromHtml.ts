@@ -1,8 +1,13 @@
-import { BrowserWindow, type WebContents } from 'electron';
+import { BrowserWindow } from 'electron';
 import { escreverRelatorioHtmlTemp } from './reportHtmlTemp';
 import { lerMetadadosPdfRelatorio, montarOpcoesPrintToPdfRelatorio } from './pdfPrintOptions';
-
-const LOAD_TIMEOUT_MS = 90_000;
+import {
+  aguardarLayoutRelatorioHtml,
+  estabilizarDomAposLoadFile,
+  HTML_PDF_GEN_LOAD_TIMEOUT_MS,
+  resetarJanelaGeracaoPdf,
+} from './pdfWebContents';
+import { aguardarRenderizacaoPdfAntesExport } from './pdfHtmlExport';
 
 let pdfGenWindow: BrowserWindow | null = null;
 
@@ -44,26 +49,9 @@ function obterJanelaGeracaoPdf(): BrowserWindow {
   return pdfGenWindow;
 }
 
-/** Aguarda Paged.js concluir layout antes de gerar PDF. */
-export async function aguardarLayoutRelatorioHtml(
-  webContents: WebContents,
-  timeoutMs = 60_000,
-): Promise<void> {
-  await webContents.executeJavaScript(`
-    new Promise(function (resolve) {
-      if (!window.__relatorioUsaPagedJs) { resolve(); return; }
-      if (window.__relatorioPaginadoPronto) { resolve(); return; }
-      var t = setTimeout(function () { resolve(); }, ${timeoutMs});
-      document.addEventListener('relatorio-paginado-pronto', function () {
-        clearTimeout(t);
-        resolve();
-      }, { once: true });
-    })
-  `);
-}
-
 async function carregarHtmlNoBrowserWindow(win: BrowserWindow, htmlPath: string): Promise<void> {
   const wc = win.webContents;
+  await resetarJanelaGeracaoPdf(win);
 
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -72,7 +60,7 @@ async function carregarHtmlNoBrowserWindow(win: BrowserWindow, htmlPath: string)
           'Timeout ao carregar HTML para PDF. Verifique imagens externas ou tente sem «PDF na nuvem».',
         ),
       );
-    }, LOAD_TIMEOUT_MS);
+    }, HTML_PDF_GEN_LOAD_TIMEOUT_MS);
 
     const fail = (_e: unknown, code: number, desc: string) => {
       clearTimeout(timer);
@@ -107,14 +95,22 @@ export async function gerarPdfBytesFromHtml(html: string): Promise<Buffer> {
   try {
     bundle = await escreverRelatorioHtmlTemp(html);
     await carregarHtmlNoBrowserWindow(win, bundle.htmlPath);
+    await estabilizarDomAposLoadFile(win.webContents);
     await aguardarLayoutRelatorioHtml(win.webContents, 60_000);
+    await aguardarRenderizacaoPdfAntesExport(win.webContents);
 
     const pdfMeta = await lerMetadadosPdfRelatorio(win.webContents);
     if (pdfMeta) {
       await win.webContents.executeJavaScript(`document.body.classList.add('iso-pdf-header-native')`);
     }
     try {
-      return await win.webContents.printToPDF(montarOpcoesPrintToPdfRelatorio(pdfMeta));
+      try {
+        return await win.webContents.printToPDF(montarOpcoesPrintToPdfRelatorio(pdfMeta));
+      } catch (first) {
+        if (!pdfMeta) throw first;
+        console.warn('[I.S.O PRO] printToPDF (gerador) cabecalho nativo falhou; tentando CSS @page:', first);
+        return await win.webContents.printToPDF(montarOpcoesPrintToPdfRelatorio(null));
+      }
     } finally {
       if (pdfMeta) {
         await win.webContents
@@ -126,3 +122,5 @@ export async function gerarPdfBytesFromHtml(html: string): Promise<Buffer> {
     await bundle?.remove();
   }
 }
+
+export { aguardarLayoutRelatorioHtml } from './pdfWebContents';

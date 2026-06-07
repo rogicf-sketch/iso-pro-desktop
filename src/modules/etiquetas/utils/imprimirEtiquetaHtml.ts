@@ -1,4 +1,6 @@
-import { abrirImpressaoHtmlRelatorio, cssInstitucionalRelatorio, escapeHtmlRelatorio, htmlBlocoLogoInstitucional } from '../../../lib/htmlRelatorioInstitucional';
+import { cssInstitucionalRelatorio, escapeHtmlRelatorio, htmlBlocoLogoInstitucional } from '../../../lib/htmlRelatorioInstitucional';
+import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
+import { montarDocumentoHtmlInstitucionalPaged } from '../../../lib/relatorioPagedDocument';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { EtiquetaFormData } from '../types/etiqueta.types';
 
@@ -6,23 +8,20 @@ export function montarHtmlEtiqueta(form: EtiquetaFormData): string {
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso();
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const compacto = form.formato === 'termica_58' || form.formato === 'termica_80';
+  const largura = Math.max(20, form.larguraMm);
+  const altura = Math.max(15, form.alturaMm);
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <title>Etiqueta ${escapeHtmlRelatorio(form.codigo || '—')}</title>
-  <style>
+  const reportStyles = `
     ${cssInstitucionalRelatorio()}
     .etiq-body { margin-top: 12px; }
     .etiq-codigo { font-family: Consolas, 'Courier New', monospace; font-size: 14pt; margin: 8px 0; }
     .etiq-titulo { font-size: 18pt; margin: 8px 0 4px; }
-  </style>
-</head>
-<body>
+  `;
+
+  const contentHtml = `
   <div class="inst-topbar">
     <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
-    <span>${escapeHtmlRelatorio(form.formato)} • ${escapeHtmlRelatorio(String(form.larguraMm))}x${escapeHtmlRelatorio(String(form.alturaMm))} mm</span>
+    <span>${escapeHtmlRelatorio(form.formato)} • ${escapeHtmlRelatorio(String(largura))}x${escapeHtmlRelatorio(String(altura))} mm</span>
   </div>
   <header class="inst-header">
     ${htmlBlocoLogoInstitucional(logoUrl, compacto)}
@@ -38,11 +37,29 @@ export function montarHtmlEtiqueta(form: EtiquetaFormData): string {
     <p style="font-size:10pt;color:#64748b">Origem: ${escapeHtmlRelatorio(form.moduloOrigem)} ${form.referenciaId ? `• Ref ${escapeHtmlRelatorio(form.referenciaId)}` : ''}</p>
     ${form.observacoes ? `<p><strong>Observacoes:</strong></p><p>${escapeHtmlRelatorio(form.observacoes)}</p>` : ''}
     <p style="font-size:10pt;color:#64748b">Criado por: ${escapeHtmlRelatorio(form.criadoPor || '-')}</p>
-  </section>
-</body>
-</html>`;
+  </section>`;
+
+  return montarDocumentoHtmlInstitucionalPaged({
+    title: `Etiqueta ${escapeHtmlRelatorio(form.codigo || '—')}`,
+    bodyClass: 'etiq-lote-body',
+    reportStyles,
+    contentHtml,
+    includeToolbar: true,
+    pagedAtPage: {
+      size: `${largura}mm ${altura}mm`,
+      marginTopMm: 2,
+      marginRightMm: 2,
+      marginBottomMm: 2,
+      marginLeftMm: 2,
+      showPageNumbers: false,
+      firstPageNoRunningHeader: false,
+    },
+  });
 }
 
 export function imprimirEtiquetaHtml(form: EtiquetaFormData): boolean {
-  return abrirImpressaoHtmlRelatorio(montarHtmlEtiqueta(form));
+  const html = montarHtmlEtiqueta(form);
+  const fileName = nomeArquivoRelatorioPdf(form.codigo || 'documento', 'etiqueta');
+  void imprimirRelatorioProfissional({ html, fileName });
+  return true;
 }

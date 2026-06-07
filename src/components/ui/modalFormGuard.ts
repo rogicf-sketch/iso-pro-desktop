@@ -1,4 +1,4 @@
-export { MODAL_DISCARD_CONFIRM_MESSAGE } from './modalFormGuard.constants';
+export { MODAL_DISCARD_CONFIRM_MESSAGE, MODAL_DISCARD_CONFIRM_TITLE } from './modalFormGuard.constants';
 export { ModalFormGuardProvider } from './modalFormGuardProvider';
 export {
   useModalBeforeUnloadGuard,

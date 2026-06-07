@@ -27,7 +27,7 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
 });
 
 vi.mock('../../recebimentos/services/recebimentos.service', () => ({
-  carregarRecebimentosCompletos: vi.fn(() => Promise.resolve([])),
+  carregarIndiceTextoBuscaRecebimentos: vi.fn(() => Promise.resolve(new Map())),
 }));
 
 function etiquetaForm(overrides: Partial<EtiquetaFormData> = {}): EtiquetaFormData {

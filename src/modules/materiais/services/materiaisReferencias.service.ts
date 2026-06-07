@@ -1,4 +1,6 @@
 import type { ServiceResult } from '../../../types/common.types';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import { listarHistoricoAtendimentos } from '../../atendimento/services/atendimento.service';
 import { carregarTodosDocumentosOrdenados } from '../../documentos/services/documentos.service';
 import { codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
@@ -74,7 +76,7 @@ export async function analisarUsoMateriaisPorIds(ids: string[]): Promise<Service
       }
     }
 
-    const result: UsoMaterialNosModulos[] = unique.map((id) => {
+    let result: UsoMaterialNosModulos[] = unique.map((id) => {
       const codigo = codigoPorId[id] ?? id;
       const k = codigoMaterialKey(codigo);
       const u = usoPorKey.get(k) ?? { r: false, d: false, a: false };
@@ -85,6 +87,41 @@ export async function analisarUsoMateriaisPorIds(ids: string[]): Promise<Service
         atendimento: u.a,
       };
     });
+
+    if (hasSupabaseConfig()) {
+      const supabase = getSupabase();
+      const numericIds = unique.map((id) => Number(id)).filter((n) => Number.isFinite(n));
+      if (supabase && numericIds.length) {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('iso_pro_materiais_uso_nos_modulos', {
+          p_tenant_id: getActiveTenantId(),
+          p_material_ids: numericIds,
+        });
+        if (!rpcError && rpcData && typeof rpcData === 'object' && 'items' in (rpcData as object)) {
+          const items = (rpcData as { items?: Array<Record<string, unknown>> }).items ?? [];
+          const byCodigo = new Map(
+            items.map((it) => [
+              codigoMaterialKey(String(it.codigo ?? '')),
+              {
+                r: Boolean(it.recebimentos),
+                d: Boolean(it.documentos),
+                a: Boolean(it.atendimento),
+              },
+            ]),
+          );
+          result = result.map((row) => {
+            const k = codigoMaterialKey(row.codigo);
+            const remote = byCodigo.get(k);
+            if (!remote) return row;
+            return {
+              codigo: row.codigo,
+              recebimentos: row.recebimentos || remote.r,
+              documentos: row.documentos || remote.d,
+              atendimento: row.atendimento || remote.a,
+            };
+          });
+        }
+      }
+    }
 
     return { success: true, data: result };
   } catch (error) {

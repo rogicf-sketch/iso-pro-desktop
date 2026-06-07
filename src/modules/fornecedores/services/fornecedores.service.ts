@@ -2,6 +2,7 @@ import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
 import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
+import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -76,7 +77,7 @@ function writeAll(items: Fornecedor[]) {
 }
 
 async function loadFornecedores() {
-  return hasSupabaseConfig() ? await readSnapshotFornecedores().catch(() => readAll()) : readAll();
+  return readRemoteOrLocal({ readRemote: readSnapshotFornecedores, readLocal: readAll });
 }
 
 /**
@@ -85,7 +86,7 @@ async function loadFornecedores() {
  */
 export async function loadFornecedoresAtivosParaValidacaoRecebimento(): Promise<Fornecedor[]> {
   const { data } = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotFornecedores(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar fornecedores.',
@@ -166,7 +167,7 @@ async function writeSnapshotFornecedores(items: Fornecedor[]): Promise<void> {
 
 export async function listarFornecedores(filtro: FornecedorFiltro): Promise<ServiceResult<PaginatedResult<Fornecedor>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotFornecedores(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar fornecedores no Supabase.',
@@ -307,7 +308,7 @@ export async function montarExportacaoFornecedoresCsv(
   opcoes?: ExportacaoFornecedoresOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotFornecedores(),
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar fornecedores no Supabase.',

@@ -6,6 +6,7 @@ import {
 } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
+import { registerSnapshotDerivedCacheInvalidator } from '../../../lib/snapshotDerivedCache';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
 import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
@@ -136,13 +137,14 @@ function repararCacheMateriaisLocalDesdeNuvem(items: Material[]): void {
  * Ao entrar na aplicacao (apos login), tenta reparar cache local ilegivel antes de outros modulos lerem `readAll()`.
  */
 export async function tentarRepararCacheMateriaisLocalNaEntrada(): Promise<boolean> {
-  if (!shouldUseCloudMaterials() || !hasSupabaseConfig()) return false;
+  if (!hasSupabaseConfig()) return false;
   if (cacheMateriaisLocalLegivel()) return false;
 
   try {
-    const remoto = shouldTryRemoteRead()
-      ? await withRemoteReadTimeout(() => listRemoteMaterials())
-      : await listRemoteMaterials();
+    const remoto = await withRemoteReadTimeout(
+      () => listRemoteMaterials(),
+      MATERIAIS_NUVEM_READ_TIMEOUT_MS,
+    );
     repararCacheMateriaisLocalDesdeNuvem(remoto);
     return cacheMateriaisLocalLegivel();
   } catch {
@@ -205,7 +207,19 @@ function readAll(opts?: { silenciarAvisoCorrupto?: boolean }): Material[] {
 
 function writeAll(items: Material[]) {
   localStorage.setItem(materiaisStorageKey(), JSON.stringify(items));
+  invalidateMateriaisBaseCache();
 }
+
+let materiaisBaseCache: Material[] | null = null;
+let materiaisBaseCachePromise: Promise<Material[]> | null = null;
+
+/** Limpa cache em memoria do cadastro (apos gravacao local ou remota). */
+export function invalidateMateriaisBaseCache(): void {
+  materiaisBaseCache = null;
+  materiaisBaseCachePromise = null;
+}
+
+registerSnapshotDerivedCacheInvalidator(invalidateMateriaisBaseCache);
 
 function normalizarMaterialLeitura(m: Material): Material {
   return {
@@ -400,14 +414,15 @@ function formParaPayloadNuvem(form: MaterialFormData, codigoBarras: string) {
 /** Cadastro na nuvem pode ter milhares de linhas — timeout curto deixava a lista vazia na web. */
 const MATERIAIS_NUVEM_READ_TIMEOUT_MS = 45_000;
 
-async function loadMateriaisBase(): Promise<Material[]> {
+async function fetchMateriaisBaseFromSource(): Promise<Material[]> {
   if (!shouldUseCloudMaterials()) return readAll();
   if (!hasSupabaseConfig()) return readAll();
 
   try {
-    const remoto = shouldTryRemoteRead()
-      ? await withRemoteReadTimeout(() => listRemoteMaterials(), MATERIAIS_NUVEM_READ_TIMEOUT_MS)
-      : await listRemoteMaterials();
+    const remoto = await withRemoteReadTimeout(
+      () => listRemoteMaterials(),
+      MATERIAIS_NUVEM_READ_TIMEOUT_MS,
+    );
     repararCacheMateriaisLocalDesdeNuvem(remoto);
     return remoto;
   } catch (error) {
@@ -417,6 +432,23 @@ async function loadMateriaisBase(): Promise<Material[]> {
       return local;
     }
     throw new Error(traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)));
+  }
+}
+
+async function loadMateriaisBase(): Promise<Material[]> {
+  if (materiaisBaseCache) return materiaisBaseCache;
+  if (materiaisBaseCachePromise) return materiaisBaseCachePromise;
+
+  materiaisBaseCachePromise = (async () => {
+    const result = await fetchMateriaisBaseFromSource();
+    materiaisBaseCache = result;
+    return result;
+  })();
+
+  try {
+    return await materiaisBaseCachePromise;
+  } finally {
+    materiaisBaseCachePromise = null;
   }
 }
 
@@ -675,6 +707,7 @@ export async function salvarMaterial(
           .single();
 
         if (error) return { success: false, error: error.message };
+        invalidateMateriaisBaseCache();
         return { success: true, data: mapRemoteMaterial(data as RemoteMaterialRow) };
       }
 
@@ -686,6 +719,7 @@ export async function salvarMaterial(
         .single();
 
       if (error) return { success: false, error: error.message };
+      invalidateMateriaisBaseCache();
       return { success: true, data: mapRemoteMaterial(data as RemoteMaterialRow) };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao salvar no Supabase.' };
@@ -798,6 +832,7 @@ export async function toggleMaterialStatus(id: string, ativo: boolean): Promise<
 
       if (error) return { success: false, error: error.message };
 
+      invalidateMateriaisBaseCache();
       const row = data as RemoteMaterialRow & { ativo?: boolean | null };
       return {
         success: true,
@@ -929,6 +964,7 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
       if (error) {
         return { success: false, error: mensagemErroExclusaoMateriais(error.message) };
       }
+      invalidateMateriaisBaseCache();
       invalidateIsoProSnapshotCache();
       appendAuthAuditEvent({
         type: 'materiais_excluidos_definitivamente',
@@ -1447,6 +1483,7 @@ async function importarMateriaisCsvNuvemEmLotes(
     }
   }
 
+  invalidateMateriaisBaseCache();
   invalidateIsoProSnapshotCache();
 
   return {

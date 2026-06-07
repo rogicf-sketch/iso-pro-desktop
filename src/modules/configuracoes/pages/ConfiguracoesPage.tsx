@@ -1068,6 +1068,30 @@ export function ConfiguracoesPage() {
               <option value="false">Desativado</option>
               <option value="true">Ativado</option>
             </Select>
+            <Select
+              disabled={!canAdminister}
+              label="PDF na nuvem (quando online)"
+              onChange={(event) =>
+                setForm((current) => (current ? { ...current, pdfNuvemHabilitado: event.target.value === 'true' } : current))
+              }
+              value={String(form.pdfNuvemHabilitado !== false)}
+            >
+              <option value="true">Ativado — worker gera PDF com fontes fiáveis</option>
+              <option value="false">Desativado — só geração local</option>
+            </Select>
+            <Input
+              disabled={!canAdminister}
+              label="Timeout PDF nuvem (segundos, 15–300)"
+              min={15}
+              max={300}
+              type="number"
+              onChange={(event) =>
+                setForm((current) =>
+                  current ? { ...current, pdfNuvemTimeoutSegundos: Number(event.target.value) || 90 } : current,
+                )
+              }
+              value={String(form.pdfNuvemTimeoutSegundos ?? 90)}
+            />
           </div>
           <OperationalNotice tone="warning">
             O segredo de ligacao Auth permite chamar a Edge Function <code>iso_pro_link_auth_user</code> a partir do modulo Utilizadores (mesmo valor que{' '}

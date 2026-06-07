@@ -1,5 +1,6 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
+import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -104,9 +105,9 @@ function writeAll(items: Inventario[]) {
  * Se o snapshot remoto ainda nao tiver inventarios, mostra os exemplos de fabrica (mesma seed que o modo local).
  */
 async function loadInventarios(): Promise<Inventario[]> {
-  if (!hasSupabaseConfig()) return readAll();
+  if (!shouldTryRemoteRead()) return readAll();
   try {
-    const remote = await readSnapshotInventarios();
+    const remote = await withRemoteReadTimeout(() => readSnapshotInventarios());
     if (remote.length === 0) return seedData;
     return remote;
   } catch {
@@ -283,7 +284,7 @@ export async function listarInventarios(
   filtro: InventarioFiltro,
 ): Promise<ServiceResult<PaginatedResult<InventarioListItem>>> {
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: async () => {
       const remote = await readSnapshotInventarios();
       return remote.length === 0 ? seedData : remote;

@@ -6,7 +6,8 @@ import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
-import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
+import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { RncFilters } from '../components/RncFilters';
@@ -22,6 +23,7 @@ export function RncPage() {
   const { canAccessAction } = useAuth();
   const cloudStatus = getSupabaseOperationalStatus();
   const [dicaRirTexto, setDicaRirTexto] = useState<string | null>(null);
+  const [rncImpressaoAviso, setRncImpressaoAviso] = useState<string | null>(null);
 
   useEffect(() => {
     const st = location.state as { fromRirHint?: string } | null;
@@ -34,11 +36,18 @@ export function RncPage() {
   const visualizarRncRelatorio = useCallback(async (reg: RncRegistro) => {
     const h = await hydrateRncRegistro(reg);
     const html = montarHtmlRnc(h);
-    const res = await abrirPreVisualizacaoHtmlRelatorio(html);
+    const res = await preVisualizarRelatorioProfissional({
+      html,
+      fileName: nomeArquivoRelatorioPdf(h.codigo, 'RNC'),
+      titulo: `Pré-visualização — RNC ${h.codigo}`,
+      tipoNuvem: 'rnc',
+    });
     if (!res.ok) {
-      window.alert(
-        res.error ??
-          'Nao foi possivel abrir a pre-visualizacao. Permita pop-ups ou use Imprimir na lista para o dialogo do sistema.',
+      setRncImpressaoAviso(
+        traduzirErroImpressaoIsoPro(
+          res.error ??
+            'Não foi possível abrir a pré-visualização. Use «Imprimir» na lista para o diálogo do sistema.',
+        ),
       );
     }
   }, []);
@@ -103,6 +112,7 @@ export function RncPage() {
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
       <RncFilters filters={filters} onChange={setFilters} />
       {error ? <div className="error-box">{error}</div> : null}
+      {rncImpressaoAviso ? <OperationalNotice tone="critical">{rncImpressaoAviso}</OperationalNotice> : null}
       {success ? <OperationalNotice>{success}</OperationalNotice> : null}
       {loading ? (
         <OperationalNotice>Carregando RNC...</OperationalNotice>
@@ -116,10 +126,15 @@ export function RncPage() {
               void visualizarRncRelatorio(item);
             }}
             onPrint={(item) => {
+              setRncImpressaoAviso(null);
               void (async () => {
                 const ok = await imprimirRncHtmlAsync(item);
                 if (!ok) {
-                  window.alert('Nao foi possivel abrir a impressao. Verifique se o navegador bloqueou pop-ups.');
+                  setRncImpressaoAviso(
+                    traduzirErroImpressaoIsoPro(
+                      'Não foi possível abrir a impressão. Verifique a impressora ou use «Visualizar».',
+                    ),
+                  );
                 }
               })();
             }}

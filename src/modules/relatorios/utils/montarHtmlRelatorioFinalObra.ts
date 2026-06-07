@@ -1,11 +1,13 @@
 import {
-  cssBarraPreVisualizacaoImpressaoHtml,
   escapeHtmlRelatorio,
-  htmlBarraPreVisualizacaoImpressao,
   htmlBlocoLogoInstitucional,
   segmentoInstituicaoRodapeEletronico,
-  scriptBarraPreVisualizacaoImpressao,
 } from '../../../lib/htmlRelatorioInstitucional';
+import {
+  cssRunningHeaderInstitucional,
+  montarDocumentoHtmlInstitucionalPaged,
+  montarRunningHeaderInstitucional,
+} from '../../../lib/relatorioPagedDocument';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import {
@@ -24,14 +26,11 @@ type SecaoRfo = { id: string; num: string; titulo: string; corpo: string };
 
 function cssRelatorioFinalObra(): string {
   return `
-    ${cssBarraPreVisualizacaoImpressaoHtml()}
-    @page { margin: 18mm 16mm; }
-    body {
+    body.rfo-print-body {
       font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
       margin: 0; padding: 0; color: #1e293b; font-size: 10.5pt; line-height: 1.55;
-      background: #e8ecef;
     }
-    .rfo-page { max-width: 210mm; margin: 0 auto; background: #fff; box-shadow: 0 2px 16px rgba(15,23,42,0.06); }
+    .rfo-page { max-width: none; margin: 0; background: transparent; box-shadow: none; }
     .rfo-preview-strip {
       display: none;
     }
@@ -249,8 +248,11 @@ function cssRelatorioFinalObra(): string {
       margin: 0 0 10px; font-size: 10pt; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.08em; color: #64748b;
     }
-    .rfo-indice ol { margin: 0; padding: 0 0 0 1.25rem; columns: 2; column-gap: 28px; }
-    .rfo-indice li { margin: 4px 0; font-size: 9.5pt; break-inside: avoid; }
+    .rfo-indice ol {
+      margin: 0; padding: 0 0 0 1.25rem;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 4px 28px;
+    }
+    .rfo-indice li { margin: 0; font-size: 9.5pt; }
     .rfo-indice a { color: #111827; text-decoration: none; font-weight: 500; }
     .rfo-declaracao-box {
       padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fafbfc;
@@ -258,15 +260,17 @@ function cssRelatorioFinalObra(): string {
     .rfo-assinatura { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
     .rfo-assinatura-linha { border-top: 1px solid #334155; padding-top: 6px; font-size: 9pt; color: #334155; }
     @media print {
-      body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body.rfo-print-body { background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .rfo-page { max-width: none; box-shadow: none; }
       .rfo-preview-strip { display: none !important; }
-      .rfo-capa { page-break-after: always; break-after: page; padding-bottom: 0; }
+      .rfo-capa { break-after: page; page-break-after: always; padding-bottom: 0; }
       .rfo-sec { page-break-inside: auto; break-inside: auto; orphans: 3; widows: 3; }
       .rfo-sec-title { break-after: avoid; page-break-after: avoid; }
-      .rfo-tabela, .rfo-rir-panel, .rfo-rf-card, .rfo-modulo-ia, .rfo-indice {
+      .rfo-rir-panel, .rfo-rf-card, .rfo-modulo-ia {
         break-inside: avoid; page-break-inside: avoid;
       }
+      .rfo-tabela thead { display: table-header-group; }
+      .rfo-indice { break-inside: auto; page-break-inside: auto; }
       .rfo-tabela tr { break-inside: avoid; page-break-inside: avoid; }
       .rfo-destaque-table thead { display: table-header-group; }
       .rfo-destaque-table tr { break-inside: avoid; page-break-inside: avoid; }
@@ -443,8 +447,7 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
   const logo = resolverUrlLogoInstitucionalParaHtmlImpresso(cfg.logoInstitucionalUrl);
   const segRodape = segmentoInstituicaoRodapeEletronico(dados.contexto.rodapeNome, dados.contexto.rodapeCnpj);
   const geradoFmt = formatarDataRelatorioFinal(dados.contexto.geradoEm);
-  const barra = opts?.incluirBarraPreVisualizacao !== false ? htmlBarraPreVisualizacaoImpressao() : '';
-  const scriptBarra = opts?.incluirBarraPreVisualizacao !== false ? scriptBarraPreVisualizacaoImpressao() : '';
+  const includeToolbar = opts?.incluirBarraPreVisualizacao !== false;
   const { contexto, totais } = dados;
   const ap = dados.apresentacao ?? montarApresentacaoRelatorioFinalObra(dados, []);
   const analise = resolverAnaliseDestaques(dados);
@@ -568,15 +571,30 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
   const chromeCliente = esc(contexto.cliente || contexto.projeto || '—');
   const logoCapa = logo ? htmlBlocoLogoInstitucional(logo, false) : '';
   const previewStrip =
-    opts?.incluirBarraPreVisualizacao !== false && !contexto.registrado
+    includeToolbar && !contexto.registrado
       ? `<div class="rfo-preview-strip" aria-hidden="true">
           <span class="rfo-preview-strip__titulo">Pré-visualização — documento ainda não registrado</span>
           <span class="rfo-preview-strip__cliente">${chromeCliente}</span>
         </div>`
       : '';
 
-  const corpo = `
-    ${barra}
+  const runningName = 'rfoRunningHdr';
+  const logoCapaHtml = logo ? htmlBlocoLogoInstitucional(logo, false) : htmlBlocoLogoInstitucional('', false);
+  const runningHeader = montarRunningHeaderInstitucional({
+    classPrefix: 'rfo',
+    runningName,
+    logoHtml: logoCapaHtml,
+    title: 'Relatório Final de Obra',
+    code: esc(rotuloNumero),
+  });
+  const runningCss = cssRunningHeaderInstitucional({
+    classPrefix: 'rfo',
+    runningName,
+    logoHtml: logoCapaHtml,
+    title: '',
+  });
+
+  const contentHtml = `
     ${previewStrip}
     <div class="rfo-page">
       <header class="rfo-capa">
@@ -617,17 +635,15 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
     </div>
   `;
 
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <title>Relatório Final de Obra — ${esc(rotuloNumero)}</title>
-  <style>${cssRelatorioFinalObra()}</style>
-</head>
-<body>
-${corpo}
-${scriptBarra}
-</body>
-</html>`;
+  return montarDocumentoHtmlInstitucionalPaged({
+    title: `Relatório Final de Obra — ${esc(rotuloNumero)}`,
+    bodyClass: 'rfo-print-body',
+    reportStyles: cssRelatorioFinalObra(),
+    contentHtml,
+    runningHeaderHtml: runningHeader,
+    runningHeaderCss: runningCss,
+    includeToolbar,
+    pagedAtPage: { runningHeaderName: runningName, marginTopMm: 18, marginRightMm: 16, marginBottomMm: 14, marginLeftMm: 16 },
+  });
 }
 

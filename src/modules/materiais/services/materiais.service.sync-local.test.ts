@@ -43,6 +43,7 @@ vi.mock('../../../lib/supabase', () => ({
 }));
 
 vi.mock('../../../lib/isoProTenant', () => ({
+  ISO_PRO_DEFAULT_TENANT_ID: '00000000-0000-0000-0000-000000000001',
   getActiveTenantId: () => '00000000-0000-0000-0000-000000000001',
 }));
 

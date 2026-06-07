@@ -9,6 +9,7 @@ import { registerReportPdfHandlers } from './reportPdfIpc';
 import { registerRirFontsHandlers } from './rirFontsIpc';
 import { registerRirPdfGenerateHandlers } from './rirPdfGenerateIpc';
 import { registerSecurityHandlers } from './security';
+import { registerSupabaseFetchHandlers } from './supabaseFetchIpc';
 import { destruirGeradorPdf, preaquecerGeradorPdf } from './gerarPdfBytesFromHtml';
 import { createMainWindow } from './window';
 
@@ -23,6 +24,7 @@ app.commandLine.appendSwitch('lang', 'pt-BR');
 function bootstrap() {
   try {
     registerSecurityHandlers();
+    registerSupabaseFetchHandlers();
     registerConfigSecretsHandlers();
     registerBackupContextHandlers();
     registerBackupOracleAutoHandlers();
