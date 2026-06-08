@@ -1,6 +1,7 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   commitIsoProSnapshotWrite,
@@ -31,6 +32,8 @@ import type {
   RecebimentosImportacaoResumo,
 } from '../types/recebimento.types';
 import { recebimentoCorrespondeBuscaInteligente, textoRecebimentoExpandidoParaBusca } from '../utils/recebimentoBusca';
+import { dedupeRecebimentosPorChaveNegocio } from '../utils/recebimentosDedupe';
+import { textoModoRecebimentoListagem } from '../utils/modoRecebimentoExibicao';
 import {
   construirIndiceDisciplinaUnidadePorCodigoMaterial,
   construirIndicePesoPorCodigoMaterial,
@@ -308,19 +311,76 @@ function writeAll(items: Recebimento[]) {
   invalidateSnapshotDerivedCaches();
 }
 
+function mergeRecebimentosLocalComNuvem(local: Recebimento[], remote: Recebimento[]): Recebimento[] {
+  const byId = new Map<string, Recebimento>();
+  for (const rec of local) byId.set(rec.id, rec);
+  for (const rec of remote) byId.set(rec.id, rec);
+  return dedupeRecebimentosPorChaveNegocio(Array.from(byId.values()));
+}
+
+let inflightDesktopRecebimentosMerge: Promise<'ok' | 'skip' | 'fail'> | null = null;
+
+/** Desktop: funde cache local com snapshot Supabase (conferências web/mobile). */
+async function mesclarRecebimentosDesktopComNuvem(): Promise<'ok' | 'skip' | 'fail'> {
+  if (!hasSupabaseConfig() || !isIsoProDesktop()) return 'skip';
+  if (inflightDesktopRecebimentosMerge) return inflightDesktopRecebimentosMerge;
+
+  inflightDesktopRecebimentosMerge = (async () => {
+    try {
+      invalidateIsoProSnapshotCache();
+      const remote = await withRemoteReadTimeout(() => readSnapshotRecebimentos());
+      const local = readAll();
+      writeAll(mergeRecebimentosLocalComNuvem(local, remote));
+      return 'ok';
+    } catch {
+      return 'fail';
+    } finally {
+      inflightDesktopRecebimentosMerge = null;
+    }
+  })();
+
+  return inflightDesktopRecebimentosMerge;
+}
+
+/** Leitura operacional: sync desktop + dedupe por NF/fornecedor/romaneio. */
+async function carregarRecebimentosBaseParaLeitura(): Promise<{
+  data: Recebimento[];
+  meta: NonNullable<ServiceResult<Recebimento[]>['meta']>;
+}> {
+  if (hasSupabaseConfig() && isIsoProDesktop()) {
+    const merged = await mesclarRecebimentosDesktopComNuvem();
+    const data = dedupeRecebimentosPorChaveNegocio(readAll());
+    return {
+      data,
+      meta: {
+        source: merged === 'ok' ? 'supabase' : 'local',
+        ...(merged === 'fail'
+          ? { fallbackReason: 'Nao foi possivel sincronizar recebimentos com a nuvem; exportacao pode estar desatualizada.' }
+          : {}),
+      },
+    };
+  }
+
+  const fallback = await withLocalFallback({
+    shouldTryRemote: shouldTryRemoteRead(),
+    loadRemote: async () => {
+      invalidateIsoProSnapshotCache();
+      return dedupeRecebimentosPorChaveNegocio(await readSnapshotRecebimentos());
+    },
+    loadLocal: () => dedupeRecebimentosPorChaveNegocio(readAll()),
+    fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
+  });
+  return { data: fallback.data, meta: fallback.meta };
+}
+
 async function loadRecebimentos(): Promise<Recebimento[]> {
-  const raw = await readRemoteOrLocal({ readRemote: readSnapshotRecebimentos, readLocal: readAll });
-  return enriquecerRecebimentosComPesoCadastroMateriais(raw);
+  const { data } = await carregarRecebimentosBaseParaLeitura();
+  return enriquecerRecebimentosComPesoCadastroMateriais(data);
 }
 
 /** Carrega todos os recebimentos (Supabase com fallback local) — usado no planejamento de documentos. */
 export async function carregarRecebimentosCompletos(): Promise<Recebimento[]> {
-  const { data } = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotRecebimentos(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
-  });
+  const { data } = await carregarRecebimentosBaseParaLeitura();
   return enriquecerRecebimentosComPesoCadastroMateriais(data);
 }
 
@@ -331,12 +391,7 @@ export async function carregarRecebimentosCompletos(): Promise<Recebimento[]> {
 export async function carregarIndiceTextoBuscaRecebimentos(
   referenciaIds?: Iterable<string>,
 ): Promise<Map<string, string>> {
-  const { data } = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotRecebimentos(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
-  });
+  const { data } = await carregarRecebimentosBaseParaLeitura();
   const idSet = referenciaIds ? new Set(referenciaIds) : null;
   const map = new Map<string, string>();
   for (const r of data) {
@@ -685,14 +740,10 @@ function validateConferenciaPayload(
 export async function listarRecebimentos(
   filtro: RecebimentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<RecebimentoListItem>>> {
-  const fallbackResult = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotRecebimentos(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
-  });
-  const items = aplicarFiltrosListaRecebimentos(fallbackResult.data, filtro);
-  const { meta } = fallbackResult;
+  const base = await carregarRecebimentosBaseParaLeitura();
+  const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
+  const items = aplicarFiltrosListaRecebimentos(enriched, filtro);
+  const { meta } = base;
 
   const start = (filtro.page - 1) * filtro.pageSize;
   const end = start + filtro.pageSize;
@@ -712,13 +763,9 @@ export async function listarRecebimentos(
 /** IDs de todos os recebimentos que correspondem ao filtro (ignora paginacao). */
 export async function obterIdsRecebimentosFiltrados(filtro: RecebimentoFiltro): Promise<ServiceResult<string[]>> {
   try {
-    const fallbackResult = await withLocalFallback({
-      shouldTryRemote: shouldTryRemoteRead(),
-      loadRemote: () => readSnapshotRecebimentos(),
-      loadLocal: () => readAll(),
-      fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
-    });
-    const filtered = aplicarFiltrosListaRecebimentos(fallbackResult.data, filtro);
+    const base = await carregarRecebimentosBaseParaLeitura();
+    const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
+    const filtered = aplicarFiltrosListaRecebimentos(enriched, filtro);
     return { success: true, data: filtered.map((r) => r.id) };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Falha ao listar recebimentos.' };
@@ -731,14 +778,10 @@ export async function obterResumosRecebimentosParaExclusao(
   const unique = [...new Set(ids)].filter(Boolean);
   if (!unique.length) return { success: true, data: [] };
   try {
-    const fallbackResult = await withLocalFallback({
-      shouldTryRemote: shouldTryRemoteRead(),
-      loadRemote: () => readSnapshotRecebimentos(),
-      loadLocal: () => readAll(),
-      fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
-    });
+    const base = await carregarRecebimentosBaseParaLeitura();
+    const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
     const idSet = new Set(unique);
-    const res = fallbackResult.data
+    const res = enriched
       .filter((r) => idSet.has(r.id))
       .map((r) => ({ notaFiscal: r.notaFiscal, romaneio: r.romaneio, fornecedor: r.fornecedor }))
       .sort((a, b) => a.fornecedor.localeCompare(b.fornecedor) || a.notaFiscal.localeCompare(b.notaFiscal));
@@ -1137,19 +1180,14 @@ export async function finalizarConferenciaRecebimento(payload: {
 }
 
 async function carregarTodosRecebimentosOrdenados(): Promise<ServiceResult<Recebimento[]>> {
-  const fallback = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotRecebimentos(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
-  });
-  const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(fallback.data);
+  const base = await carregarRecebimentosBaseParaLeitura();
+  const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
   const items = aplicarFiltrosListaRecebimentos(enriched, {
     busca: '',
     status: 'todos',
     modo: 'todos',
   });
-  return { success: true, data: items, meta: fallback.meta };
+  return { success: true, data: items, meta: base.meta };
 }
 
 function chaveNegocioRecebimentoForm(form: RecebimentoFormData): string {
@@ -1346,7 +1384,7 @@ export async function montarExportacaoRecebimentosCsvResumo(
         li.notaFiscal,
         li.romaneio,
         li.conferente,
-        li.modoRecebimento,
+        textoModoRecebimentoListagem(li.modoRecebimento, li.status, li.dataConferencia),
         li.status,
         String(li.totalItens),
         formatDecimalExcelPtBr(Number(li.quantidadeRecebidaTotal)),
@@ -1412,7 +1450,7 @@ export async function montarExportacaoRecebimentosCsvItens(
           rec.notaFiscal,
           rec.romaneio,
           rec.conferente,
-          rec.modoRecebimento,
+          textoModoRecebimentoListagem(rec.modoRecebimento, rec.status, rec.dataConferencia),
           rec.status,
           rec.observacoes,
           it.codigoMaterial,

@@ -437,6 +437,12 @@ export function useRecebimentos() {
       return;
     }
     baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
+    if (result.meta?.fallbackReason) {
+      setSuccess(
+        `Exportacao Excel (CSV) concluida — ${result.meta.fallbackReason}`,
+      );
+      return;
+    }
     setSuccess('Exportacao Excel (CSV) concluida — nota fiscal, fornecedor, romaneio e linhas de material.');
   }
 
