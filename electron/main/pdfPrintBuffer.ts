@@ -28,8 +28,16 @@ export async function imprimirBufferPdfComDialogo(pdfBuffer: Buffer): Promise<vo
 
     await new Promise<void>((resolve, reject) => {
       win.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
-        if (success) resolve();
-        else reject(new Error(failureReason || 'Impressão cancelada ou falhou.'));
+        if (success) {
+          resolve();
+          return;
+        }
+        const r = (failureReason ?? '').toLowerCase();
+        if (r.includes('cancel') || r.includes('cancelad') || r.includes('anulad') || r.includes('abort')) {
+          resolve();
+          return;
+        }
+        reject(new Error(failureReason || 'Impressão cancelada ou falhou.'));
       });
     });
   } finally {

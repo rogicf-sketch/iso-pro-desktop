@@ -11,7 +11,7 @@ import {
 } from './pdfWebContents';
 import { aguardarRenderizacaoPdfAntesExport, extrairHtmlLimpoParaPdf } from './pdfHtmlExport';
 import { gerarPdfBytesFromHtml } from './gerarPdfBytesFromHtml';
-import { imprimirBufferPdfComDialogo } from './pdfPrintBuffer';
+import { imprimirHtmlRelatorioWebContents } from './pdfPrintHtml';
 
 /**
  * Impressão de HTML via janela oculta no processo principal.
@@ -134,7 +134,7 @@ export function registerPrintHandlers() {
     }
   });
 
-  /** Impressão HTML: gera PDF (printToPDF + Folha 1/N) e abre diálogo — igual ao «Guardar PDF». */
+  /** Impressão HTML rápida (Chromium print) + rodapé Folha X/N via CSS @page. */
   ipcMain.handle('desktop-print:html', async (_event, html: unknown) => {
     if (typeof html !== 'string' || !html.trim()) {
       return { ok: false as const, error: 'HTML inválido ou vazio.' };
@@ -161,11 +161,7 @@ export function registerPrintHandlers() {
       bundle = await escreverRelatorioHtmlTemp(html);
       await win.webContents.loadFile(bundle.htmlPath);
       await estabilizarDomAposLoadFile(win.webContents);
-      await aguardarLayoutRelatorioHtmlCondicional(win.webContents);
-      await aguardarRenderizacaoPdfAntesExport(win.webContents);
-
-      const pdfBuffer = await printToPdfRelatorioRobusto(win.webContents);
-      await imprimirBufferPdfComDialogo(pdfBuffer);
+      await imprimirHtmlRelatorioWebContents(win.webContents);
 
       return { ok: true as const };
     } catch (e) {
@@ -240,17 +236,11 @@ export function registerPrintHandlers() {
     }
   });
 
-  /** Impressão da pré-visualização: PDF canónico (Folha 1/N) — mesmo motor que «Guardar PDF». */
+  /** Impressão da pré-visualização: HTML directo (rápido) + Folha X/N em CSS. */
   ipcMain.handle('desktop-print:visible', async (event) => {
     const wc = event.sender;
     try {
-      await aguardarLayoutRelatorioHtmlCondicional(wc);
-      await aguardarRenderizacaoPdfAntesExport(wc);
-
-      const htmlLimpo = await extrairHtmlLimpoParaPdf(wc);
-      const pdfBuffer = await gerarPdfBytesFromHtml(htmlLimpo);
-      await imprimirBufferPdfComDialogo(pdfBuffer);
-
+      await imprimirHtmlRelatorioWebContents(wc);
       return { ok: true as const };
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);

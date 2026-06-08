@@ -13,9 +13,9 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   loadConfigSecrets: () => ipcRenderer.invoke('desktop-config-secrets:load'),
   saveConfigSecrets: (secrets) => ipcRenderer.invoke('desktop-config-secrets:save', secrets),
   isConfigSecretsAvailable: () => ipcRenderer.invoke('desktop-config-secrets:is-available'),
-  /** Recibos / relatórios HTML — impressão via PDF canónico (Folha 1/N, igual a «Guardar PDF»). */
+  /** Recibos / relatórios HTML — impressão rápida (HTML + Folha 1/N em CSS). */
   printHtml: (html) => ipcRenderer.invoke('desktop-print:html', html),
-  /** Impressão da janela de pré-visualização (PDF canónico — Folha 1/N). */
+  /** Impressão da janela de pré-visualização (HTML directo — rápido). */
   printJanelaAtual: () => ipcRenderer.invoke('desktop-print:visible'),
   /** PDF com fundos/cores alinhados à pré-visualização (sem depender do diálogo Imprimir). */
   saveHtmlAsPdf: (html) => ipcRenderer.invoke('desktop-pdf:html', html),

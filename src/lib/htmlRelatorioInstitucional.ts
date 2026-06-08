@@ -72,7 +72,7 @@ export function htmlBarraPreVisualizacaoImpressao(): string {
       <button type="button" data-iso-pro-action="print">Imprimir ou guardar como PDF</button>
       <button type="button" data-iso-pro-action="save-pdf" class="iso-pro-doc-preview-toolbar__secondary">Guardar PDF…</button>
     </div>
-    <span>«Imprimir» e «Guardar PDF» usam o mesmo motor (Folha 1/N). No diálogo do sistema, escolha a impressora ou «Guardar como PDF».</span>
+    <span>«Imprimir» abre o diálogo de impressão (rápido, com Folha 1/N). «Guardar PDF» gera o ficheiro oficial para arquivo.</span>
   </div>`;
 }
 
