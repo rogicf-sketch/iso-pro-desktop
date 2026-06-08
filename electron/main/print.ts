@@ -11,6 +11,7 @@ import {
 } from './pdfWebContents';
 import { aguardarRenderizacaoPdfAntesExport, extrairHtmlLimpoParaPdf } from './pdfHtmlExport';
 import { gerarPdfBytesFromHtml } from './gerarPdfBytesFromHtml';
+import { imprimirBufferPdfComDialogo } from './pdfPrintBuffer';
 
 /**
  * Impressão de HTML via janela oculta no processo principal.
@@ -133,6 +134,7 @@ export function registerPrintHandlers() {
     }
   });
 
+  /** Impressão HTML: gera PDF (printToPDF + Folha 1/N) e abre diálogo — igual ao «Guardar PDF». */
   ipcMain.handle('desktop-print:html', async (_event, html: unknown) => {
     if (typeof html !== 'string' || !html.trim()) {
       return { ok: false as const, error: 'HTML inválido ou vazio.' };
@@ -160,17 +162,17 @@ export function registerPrintHandlers() {
       await win.webContents.loadFile(bundle.htmlPath);
       await estabilizarDomAposLoadFile(win.webContents);
       await aguardarLayoutRelatorioHtmlCondicional(win.webContents);
+      await aguardarRenderizacaoPdfAntesExport(win.webContents);
 
-      await new Promise<void>((resolve, reject) => {
-        win.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
-          if (success) resolve();
-          else reject(new Error(failureReason || 'Impressão cancelada ou falhou.'));
-        });
-      });
+      const pdfBuffer = await printToPdfRelatorioRobusto(win.webContents);
+      await imprimirBufferPdfComDialogo(pdfBuffer);
 
       return { ok: true as const };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const raw = e instanceof Error ? e.message : String(e);
+      const msg = raw.includes('Printing failed')
+        ? 'Nao foi possivel imprimir. Use «Visualizar» e «Guardar PDF», ou reinicie a aplicacao.'
+        : raw;
       return { ok: false as const, error: msg };
     } finally {
       clearTimeout(printTimeout);
@@ -238,22 +240,23 @@ export function registerPrintHandlers() {
     }
   });
 
-  /** Impressão da janela de pré-visualização já aberta (sem reenviar HTML). */
+  /** Impressão da pré-visualização: PDF canónico (Folha 1/N) — mesmo motor que «Guardar PDF». */
   ipcMain.handle('desktop-print:visible', async (event) => {
     const wc = event.sender;
     try {
       await aguardarLayoutRelatorioHtmlCondicional(wc);
+      await aguardarRenderizacaoPdfAntesExport(wc);
 
-      await new Promise<void>((resolve, reject) => {
-        wc.print({ silent: false, printBackground: true }, (success, failureReason) => {
-          if (success) resolve();
-          else reject(new Error(failureReason || 'Impressão cancelada ou falhou.'));
-        });
-      });
+      const htmlLimpo = await extrairHtmlLimpoParaPdf(wc);
+      const pdfBuffer = await gerarPdfBytesFromHtml(htmlLimpo);
+      await imprimirBufferPdfComDialogo(pdfBuffer);
 
       return { ok: true as const };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const raw = e instanceof Error ? e.message : String(e);
+      const msg = raw.includes('Printing failed')
+        ? 'Nao foi possivel imprimir. Use «Guardar PDF» na pre-visualizacao ou tente novamente.'
+        : raw;
       return { ok: false as const, error: msg };
     }
   });

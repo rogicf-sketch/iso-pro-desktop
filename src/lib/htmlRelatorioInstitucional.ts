@@ -72,7 +72,7 @@ export function htmlBarraPreVisualizacaoImpressao(): string {
       <button type="button" data-iso-pro-action="print">Imprimir ou guardar como PDF</button>
       <button type="button" data-iso-pro-action="save-pdf" class="iso-pro-doc-preview-toolbar__secondary">Guardar PDF…</button>
     </div>
-    <span>«Guardar PDF» mantém o aspeto da pré-visualização (cores de fundo). Na impressão tradicional, em «Mais definições», ative «Gráficos de fundo».</span>
+    <span>«Imprimir» e «Guardar PDF» usam o mesmo motor (Folha 1/N). No diálogo do sistema, escolha a impressora ou «Guardar como PDF».</span>
   </div>`;
 }
 

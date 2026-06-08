@@ -29,7 +29,7 @@ export function injetarBarraPreviewElectronNoHtml(html: string): string {
     border:1px solid #64748b;background:#1e293b;color:#f1f5f9;cursor:pointer;
   ">Guardar PDF…</button>
   <span id="iso-electron-preview-hint" style="flex:1 1 220px;font-size:12px;color:#94a3b8;line-height:1.35;">
-    Pré-visualização I.S.O PRO — «Guardar PDF» inclui Folha 1/N no rodapé. Use os botões acima (não Ctrl+P).
+    Pré-visualização I.S.O PRO — «Imprimir / PDF» e «Guardar PDF» usam o mesmo motor (Folha 1/N). Não use Ctrl+P.
   </span>
   <span id="iso-electron-preview-status" role="status" style="font-size:12px;color:#38bdf8;min-width:120px;text-align:right;"></span>
 </div>
