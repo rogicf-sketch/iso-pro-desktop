@@ -216,6 +216,72 @@ function loadLocalState() {
   };
 }
 
+/** Mescla lotes do snapshot remoto (mobile/web) com o cache local do desktop. */
+function mergeAtendimentosHistorico(local: Atendimento[], remote: Atendimento[]): Atendimento[] {
+  const porNumero = new Map<string, Atendimento>();
+  for (const a of local) {
+    if (a?.numero) porNumero.set(a.numero, a);
+  }
+  for (const a of remote) {
+    if (a?.numero) porNumero.set(a.numero, a);
+  }
+  return Array.from(porNumero.values()).sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+}
+
+/** Atualiza quantidades atendidas nos desenhos a partir da nuvem (baixas feitas no telemóvel). */
+function mergeDocumentosAtendimentoLocal(local: DocumentoStored[], remote: DocumentoStored[]): DocumentoStored[] {
+  const porId = new Map(local.map((d) => [String(d.id), d]));
+  for (const rem of remote) {
+    const id = String(rem.id);
+    const prev = porId.get(id);
+    if (!prev) {
+      porId.set(id, rem);
+      continue;
+    }
+    const itensPorId = new Map(prev.itens.map((it) => [String(it.id), { ...it }]));
+    for (const itRem of rem.itens) {
+      const key = String(itRem.id);
+      const itLoc = itensPorId.get(key);
+      if (itLoc) {
+        itensPorId.set(key, { ...itLoc, quantidadeAtendida: itRem.quantidadeAtendida });
+      } else {
+        itensPorId.set(key, itRem);
+      }
+    }
+    const itens = Array.from(itensPorId.values());
+    porId.set(id, { ...prev, ...rem, itens, status: deriveDocumentoStatus({ ...prev, itens }) });
+  }
+  return Array.from(porId.values());
+}
+
+let inflightDesktopAtendimentoMerge: Promise<'ok' | 'skip' | 'fail'> | null = null;
+
+async function mesclarAtendimentoDesktopComNuvem(): Promise<'ok' | 'skip' | 'fail'> {
+  if (!hasSupabaseConfig() || !isIsoProDesktop()) return 'skip';
+  if (inflightDesktopAtendimentoMerge) return inflightDesktopAtendimentoMerge;
+
+  inflightDesktopAtendimentoMerge = (async () => {
+    try {
+      const remote = await withRemoteReadTimeout(() => readRemoteState());
+      const local = loadLocalState();
+      const atendimentos = mergeAtendimentosHistorico(local.atendimentos, remote.atendimentos);
+      const documentos = mergeDocumentosAtendimentoLocal(local.documentos, remote.documentos);
+      writeJson(atendimentosStorageKey(), atendimentos);
+      writeJson(documentosKeyAtendimento(), documentos);
+      if (remote.materiais.length) {
+        writeJson(materiaisKeyAtendimento(), remote.materiais);
+      }
+      return 'ok';
+    } catch {
+      return 'fail';
+    } finally {
+      inflightDesktopAtendimentoMerge = null;
+    }
+  })();
+
+  return inflightDesktopAtendimentoMerge;
+}
+
 async function readSnapshotPayload(): Promise<SnapshotPayload> {
   return await readIsoProSnapshotPayload<SnapshotPayload>();
 }
@@ -473,6 +539,7 @@ async function resolveDocumentosEMateriaisAtendimento(): Promise<{
       };
     }
   }
+  await mesclarAtendimentoDesktopComNuvem();
   const local = loadLocalState();
   const recebimentos = await carregarRecebimentosCompletos();
   const payloadLocal = buildLocalPayloadParaReconciliacao(local, recebimentos);
@@ -811,10 +878,15 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
 }
 
 export async function listarHistoricoAtendimentos(): Promise<Atendimento[]> {
-  const items = await readRemoteOrLocal({
-    readRemote: async () => (await readRemoteState()).atendimentos,
-    readLocal: () => readJson<Atendimento>(atendimentosStorageKey()),
-  });
+  if (shouldTryRemoteRead()) {
+    const items = await readRemoteOrLocal({
+      readRemote: async () => (await readRemoteState()).atendimentos,
+      readLocal: () => readJson<Atendimento>(atendimentosStorageKey()),
+    });
+    return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+  }
+  await mesclarAtendimentoDesktopComNuvem();
+  const items = readJson<Atendimento>(atendimentosStorageKey());
   return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
 
@@ -1054,6 +1126,12 @@ export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResul
           error instanceof Error ? error.message : 'Falha ao consultar historico de atendimentos no Supabase.',
         );
       }
+    }
+  } else if (hasSupabaseConfig() && isIsoProDesktop()) {
+    const merged = await mesclarAtendimentoDesktopComNuvem();
+    if (merged === 'ok') source = 'supabase';
+    else if (merged === 'fail') {
+      fallbackReason = 'Nao foi possivel alinhar o historico com a nuvem (mobile/web). Verifique ligacao ao Supabase.';
     }
   }
 
