@@ -240,30 +240,33 @@ async function readSnapshotInventarios(): Promise<Inventario[]> {
 async function writeSnapshotInventarios(items: Inventario[]): Promise<void> {
   await commitIsoProSnapshotPatch(async () => {
     const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['inventarios']);
+    const inventarios = items.map((item) => ({
+      id: item.id,
+      codigo: item.codigo,
+      descricao: item.descricao,
+      responsavel: item.responsavel,
+      dataInventario: item.dataInventario,
+      status: item.status,
+      contagemMobileHabilitada: item.contagemMobileHabilitada,
+      observacoes: item.observacoes,
+      itens: item.itens.map((invItem) => ({
+        id: invItem.id,
+        codigoMaterial: invItem.codigoMaterial,
+        descricaoMaterial: invItem.descricaoMaterial,
+        unidade: invItem.unidade,
+        saldoSistema: invItem.saldoSistema,
+        quantidadeContada: invItem.quantidadeContada,
+        localizacaoContada: invItem.localizacaoContada ?? '',
+      })),
+    }));
+    const dataAtualizacao = new Date().toISOString();
     return {
       baselineUpdatedAt,
-      patch: {
-        inventarios: items.map((item) => ({
-          id: item.id,
-          codigo: item.codigo,
-          descricao: item.descricao,
-          responsavel: item.responsavel,
-          dataInventario: item.dataInventario,
-          status: item.status,
-          contagemMobileHabilitada: item.contagemMobileHabilitada,
-          observacoes: item.observacoes,
-          itens: item.itens.map((invItem) => ({
-            id: invItem.id,
-            codigoMaterial: invItem.codigoMaterial,
-            descricaoMaterial: invItem.descricaoMaterial,
-            unidade: invItem.unidade,
-            saldoSistema: invItem.saldoSistema,
-            quantidadeContada: invItem.quantidadeContada,
-            localizacaoContada: invItem.localizacaoContada ?? '',
-          })),
-        })),
-        dataAtualizacao: new Date().toISOString(),
-      },
+      // Lista completa + merge-by-id: alinhado ao mobile; evita wipe se um writer
+      // futuro enviar delta parcial sem substituir a chave inteira.
+      mergeKeys: ['inventarios'] as const,
+      patch: { inventarios, dataAtualizacao },
+      patchWithoutMerge: { inventarios, dataAtualizacao },
     };
   });
   await runDualWriteBestEffort('inventarios', async () => {
