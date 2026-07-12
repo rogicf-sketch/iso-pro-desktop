@@ -235,15 +235,6 @@ export async function authenticateIsoProPreferJwt(
     return rpc;
   }
 
-  // Formato antigo: resolver ok com email mas sem user — tentar JWT na mesma.
-  if (resolved.ok === true && 'email' in resolved && resolved.jwtReady === true) {
-    const jwt = await signInResolvedEmail(resolved.email, senha);
-    if (jwt.kind === 'ok' || jwt.kind === 'mfa_required') {
-      return { ok: true, user: rpc.user, authPath: 'jwt', jwt };
-    }
-    return { ok: true, user: rpc.user, authPath: 'rpc_fallback', jwt };
-  }
-
   return { ok: true, user: rpc.user, authPath: 'rpc_only', jwt: { kind: 'skipped' } };
 }
 
