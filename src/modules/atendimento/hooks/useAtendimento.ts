@@ -319,16 +319,63 @@ export function useAtendimento() {
       return 120_000;
     },
     queryFn: async (): Promise<AtendimentoCorePayload> => {
-      const [docsResult, histResult, colaboradoresAtivos] = await Promise.all([
-        listarDocumentosPendentesComMeta(),
-        listarHistoricoAtendimentosComMeta(),
-        listarColaboradoresAtivos(),
-      ]);
-      if (!docsResult.success || !histResult.success) {
-        throw new Error(
-          docsResult.error ?? histResult.error ?? 'Nao foi possivel carregar os dados de atendimento.',
-        );
+      // Boot prioritário: lotes + colaboradores (UI «Lotes registrados»).
+      // Pendentes de desenho em paralelo, mas sem bloquear se forem mais lentos:
+      // se pendentes demorarem, devolvemos histórico já e o React Query refetch preenche docs.
+      const histPromise = listarHistoricoAtendimentosComMeta();
+      const colabPromise = listarColaboradoresAtivos();
+      const docsPromise = listarDocumentosPendentesComMeta();
+
+      const [histResult, colaboradoresAtivos] = await Promise.all([histPromise, colabPromise]);
+      if (!histResult.success) {
+        throw new Error(histResult.error ?? 'Nao foi possivel carregar o historico de atendimento.');
       }
+
+      const docsResult = await Promise.race([
+        docsPromise,
+        new Promise<Awaited<ReturnType<typeof listarDocumentosPendentesComMeta>>>((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                success: true,
+                data: [],
+                meta: { source: 'local', fallbackReason: 'Pendentes a carregar em segundo plano.' },
+              }),
+            2500,
+          );
+        }),
+      ]);
+
+      // Se a corrida devolveu vazio por timeout, continua a carregar pendentes em fundo.
+      if (
+        docsResult.success &&
+        (docsResult.data?.length ?? 0) === 0 &&
+        docsResult.meta?.fallbackReason?.includes('segundo plano')
+      ) {
+        void docsPromise.then((late) => {
+          if (late.success && (late.data?.length ?? 0) > 0) {
+            void queryClient.setQueryData(atendimentoCoreQueryKey(user?.login), (prev: AtendimentoCorePayload | undefined) =>
+              prev
+                ? {
+                    ...prev,
+                    documentos: late.data ?? [],
+                    fallbackReason: late.meta?.fallbackReason ?? prev.fallbackReason,
+                  }
+                : prev,
+            );
+          }
+        });
+      }
+
+      if (!docsResult.success) {
+        return {
+          documentos: [],
+          historico: histResult.data ?? [],
+          colaboradores: colaboradoresAtivos,
+          fallbackReason: docsResult.error ?? histResult.meta?.fallbackReason ?? '',
+        };
+      }
+
       return {
         documentos: docsResult.data ?? [],
         historico: histResult.data ?? [],

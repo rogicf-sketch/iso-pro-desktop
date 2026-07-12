@@ -1134,24 +1134,12 @@ function validateRequestedItems(items: Array<{ documentoItemId: string; quantida
 export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[]> {
   if (shouldTryRemoteRead()) {
     try {
-      const cloud = await withRemoteReadTimeout(() => listDocumentosPendentesAtendimentoFromCloud());
+      const cloud = await withRemoteReadTimeout(() =>
+        listDocumentosPendentesAtendimentoFromCloud({ limit: 150 }),
+      );
       if (cloud.source === 'tables' && !cloud.error) {
-        const [saldoMap, payloadLight] = await Promise.all([
-          obterSaldoMapOperacional(),
-          withRemoteReadTimeout(() => readSnapshotPayloadLight()),
-        ]);
-        let materiais = mapSnapshotMateriais(payloadLight, saldoMap);
-        if (shouldUseCloudMaterials()) {
-          try {
-            const cadastro = await carregarMateriaisDoCadastro();
-            materiais = mergeMateriaisSnapshotComCadastroNuvem(materiais, cadastro, saldoMap);
-          } catch {
-            /* mantem snapshot */
-          }
-        }
-        const materialByCode = new Map(
-          materiais.map((material) => [codigoMaterialKey(material.codigo), material]),
-        );
+        // Boot leve: saldo operacional sem baixar cadastro completo (2k+ materiais).
+        const saldoMap = await obterSaldoMapOperacional();
 
         return cloud.documentos
           .map((doc) => {
@@ -1172,23 +1160,19 @@ export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[
                 .map((item) => {
                   const codigo = String(item.codigo ?? '');
                   const key = codigoMaterialKey(codigo);
-                  const material = materialByCode.get(key);
-                  const saldoOperacional = saldoMap.get(key);
-                  const saldo =
-                    saldoOperacional !== undefined ? saldoOperacional : (material?.saldoAtual ?? 0);
                   const quantidadeProjeto = Number(item.quantidade ?? 0) || 0;
                   const quantidadeAtendida = Number(item.quantidadeAtendida ?? 0) || 0;
                   const pendente = Math.max(0, quantidadeProjeto - quantidadeAtendida);
                   return {
                     documentoItemId: String(item.id ?? ''),
-                    materialId: material?.id ?? null,
+                    materialId: null as string | null,
                     codigoMaterial: codigo,
                     descricaoMaterial: String(item.descricao ?? ''),
                     unidade: String(item.unidade ?? 'UN'),
                     quantidadeProjeto,
                     quantidadeAtendida,
                     quantidadePendente: pendente,
-                    saldoDisponivel: saldo,
+                    saldoDisponivel: saldoMap.get(key) ?? 0,
                     quantidadeNestaOperacao: 0,
                   };
                 })
@@ -1203,7 +1187,6 @@ export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[
     }
   }
 
-  // Sem RPC de pendentes: nao carregar snapshot documentos[] (timeout ~20s).
   return [];
 }
 
