@@ -59,7 +59,8 @@ Nota: isto protege fluxos **Supabase Auth** (JWT). Login legado via RPC `iso_pro
 4. **P1 (2026-07-12):** `mobile_logs` INSERT com WITH CHECK real + SELECT só service_role; revogar claim/complete/fail/process_one da outbox para anon — migration `20260712020000` — **feito em prod**
    - Advisor: `rls_policy_always_true` **1 → 0**
    - Advisor: `anon_security_definer_*` **13 → 9** (auth + enqueue + flush + audit)
-5. Onda JWT-only: revogar auth RPC anon quando 100% login Supabase Auth
+5. **P2 (2026-07-12):** revogar `enqueue` / `enqueue_from_patch` de anon (só trigger DEFINER + service_role); clientes ficam com `flush` + `status` — migration `20260712030000` — **feito em prod**
+6. Onda JWT-only: revogar auth RPC anon quando 100% login Supabase Auth
 
 ---
 

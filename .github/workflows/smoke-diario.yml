@@ -1,4 +1,4 @@
-# Smoke diário operacional (SRE) — lê Supabase de produção/staging sem gravar.
+﻿# Smoke diÃ¡rio operacional (SRE) â€” lÃª Supabase de produÃ§Ã£o/staging sem gravar.
 # Secrets: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
 # Opcional: ISO_PRO_E2E_TENANT_ID
 
@@ -6,7 +6,7 @@ name: Smoke diario ops
 
 on:
   schedule:
-    # 07:00 UTC ≈ 04:00 BRT
+    # 07:00 UTC â‰ˆ 04:00 BRT
     - cron: '0 7 * * *'
   workflow_dispatch:
 
@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
           cache: npm

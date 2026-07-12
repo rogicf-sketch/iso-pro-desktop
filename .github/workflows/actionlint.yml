@@ -1,4 +1,4 @@
-# Valida sintaxe e boas práticas dos workflows (.github/workflows).
+﻿# Valida sintaxe e boas prÃ¡ticas dos workflows (.github/workflows).
 # https://github.com/rhysd/actionlint
 
 name: Lint workflows
@@ -18,7 +18,7 @@ jobs:
   actionlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run actionlint
         shell: bash

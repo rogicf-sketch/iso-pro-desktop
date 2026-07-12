@@ -1,9 +1,9 @@
-# CI sem certificado: typecheck, testes, lint, build (Vite + Electron), ícone Windows, smoke E2E web (Playwright), auditoria (lista B).
-# Local (qualidade): npm run ci — smoke web: npm run build:web && npm run test:e2e
+﻿# CI sem certificado: typecheck, testes, lint, build (Vite + Electron), Ã­cone Windows, smoke E2E web (Playwright), auditoria (lista B).
+# Local (qualidade): npm run ci â€” smoke web: npm run build:web && npm run test:e2e
 
 name: CI
 
-run-name: CI · ${{ github.event_name }} · ${{ github.ref_name }}
+run-name: CI Â· ${{ github.event_name }} Â· ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -24,9 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
           cache: npm

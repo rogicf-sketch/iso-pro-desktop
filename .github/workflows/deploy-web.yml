@@ -1,5 +1,5 @@
-# Deploy web de produção (Nginx via SSH) — nível mundial / CD.
-# Manual: Actions → Deploy web → Run workflow
+﻿# Deploy web de produÃ§Ã£o (Nginx via SSH) â€” nÃ­vel mundial / CD.
+# Manual: Actions â†’ Deploy web â†’ Run workflow
 # Tag: git tag web-v0.1.90 && git push origin web-v0.1.90
 
 name: Deploy web
@@ -23,9 +23,9 @@ jobs:
     timeout-minutes: 25
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
           cache: npm

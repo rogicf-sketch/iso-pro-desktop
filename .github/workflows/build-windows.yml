@@ -1,19 +1,19 @@
-# Gera instalador NSIS + portable em Windows (sem assinatura por defeito).
+﻿# Gera instalador NSIS + portable em Windows (sem assinatura por defeito).
 # Push de tag v* (ex.: v0.2.0): build + artefacto + GitHub Release com .exe anexados.
-# Prerelease: tag no formato semver com sufixo (ex.: v0.2.0-beta.1), não basta um hífen em qualquer sítio.
-# Variável RELEASE_ATTACH_PORTABLE=false na repo → Release só com instalador NSIS (*Setup*.exe), não anexa o portable
+# Prerelease: tag no formato semver com sufixo (ex.: v0.2.0-beta.1), nÃ£o basta um hÃ­fen em qualquer sÃ­tio.
+# VariÃ¡vel RELEASE_ATTACH_PORTABLE=false na repo â†’ Release sÃ³ com instalador NSIS (*Setup*.exe), nÃ£o anexa o portable
 # (o artefacto do workflow continua com todos os .exe).
-# Por defeito exige que o commit da tag esteja na história do branch padrão do repo
-# (Settings → General → Default branch); desativa com SKIP_TAG_ON_MAIN_CHECK=true.
+# Por defeito exige que o commit da tag esteja na histÃ³ria do branch padrÃ£o do repo
+# (Settings â†’ General â†’ Default branch); desativa com SKIP_TAG_ON_MAIN_CHECK=true.
 # Assinatura no CI: secrets WINDOWS_PFX_BASE64 (PFX em base64) + WINDOWS_CERTIFICATE_PASSWORD;
 # se ambos estiverem definidos, corre npm run dist:win:signed.
-# RELEASE_AS_DRAFT=true → cria a Release como rascunho (revisão antes de publicar).
-# RELEASE_SKIP_TESTS=true → não corre npm run test (só em situações pontuais).
-# Ver também comentários em electron-builder.yml.
+# RELEASE_AS_DRAFT=true â†’ cria a Release como rascunho (revisÃ£o antes de publicar).
+# RELEASE_SKIP_TESTS=true â†’ nÃ£o corre npm run test (sÃ³ em situaÃ§Ãµes pontuais).
+# Ver tambÃ©m comentÃ¡rios em electron-builder.yml.
 
 name: Build Windows
 
-run-name: Build Windows · ${{ github.ref_name }}
+run-name: Build Windows Â· ${{ github.ref_name }}
 
 permissions:
   contents: write
@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       skip_tests:
-        description: 'Saltar testes (npm run test) — usar só quando necessário'
+        description: 'Saltar testes (npm run test) â€” usar sÃ³ quando necessÃ¡rio'
         required: false
         default: false
         type: boolean
@@ -39,11 +39,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
           cache: npm
