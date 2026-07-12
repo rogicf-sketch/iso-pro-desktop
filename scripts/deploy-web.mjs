@@ -57,8 +57,8 @@ loadDeployEnvFile();
 
 const sshKey = String(process.env.DEPLOY_SSH_KEY ?? '').trim();
 const sshTarget = String(process.env.DEPLOY_SSH_TARGET ?? '').trim();
-const remotePath = String(process.env.DEPLOY_REMOTE_PATH ?? '/var/www/iso-pro').trim();
-const remoteStaging = String(process.env.DEPLOY_REMOTE_STAGING ?? '~/iso-pro-deploy-staging').trim();
+const remotePath = String(process.env.DEPLOY_REMOTE_PATH || '/var/www/iso-pro').trim();
+const remoteStaging = String(process.env.DEPLOY_REMOTE_STAGING || '$HOME/iso-pro-deploy-staging').trim();
 const skipBuild = String(process.env.DEPLOY_SKIP_BUILD ?? '').trim().toLowerCase() === '1';
 
 if (!sshKey || !sshTarget) {

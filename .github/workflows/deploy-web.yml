@@ -62,6 +62,14 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           DEPLOY_SSH_TARGET: ${{ secrets.DEPLOY_SSH_TARGET }}
-          DEPLOY_REMOTE_PATH: ${{ secrets.DEPLOY_REMOTE_PATH }}
-          DEPLOY_REMOTE_STAGING: ${{ secrets.DEPLOY_REMOTE_STAGING }}
-        run: npm run deploy:web
+        run: |
+          set -euo pipefail
+          export DEPLOY_REMOTE_PATH="${{ secrets.DEPLOY_REMOTE_PATH }}"
+          if [ -z "${DEPLOY_REMOTE_PATH}" ]; then
+            export DEPLOY_REMOTE_PATH=/var/www/iso-pro
+          fi
+          export DEPLOY_REMOTE_STAGING="${{ secrets.DEPLOY_REMOTE_STAGING }}"
+          if [ -z "${DEPLOY_REMOTE_STAGING}" ]; then
+            export DEPLOY_REMOTE_STAGING='$HOME/iso-pro-deploy-staging'
+          fi
+          npm run deploy:web
