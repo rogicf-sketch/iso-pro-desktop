@@ -50,6 +50,7 @@
     "jwt:ativar-servidor": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/ativar-jwt-servidor.ps1",
     "jwt:ativar-piloto": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/ativar-jwt-servidor.ps1 -AutoPiloto",
     "jwt:validar-piloto": "node scripts/validar-piloto-jwt.mjs",
+    "jwt:auditar-link": "node scripts/auditar-auth-link.mjs",
     "jwt:ativar-mfa-piloto": "node scripts/ativar-mfa-piloto.mjs",
     "jwt:abrir-secret-dashboard": "powershell -NoProfile -ExecutionPolicy Bypass -File ./release/abrir-secret-jwt-dashboard.ps1",
     "sentry:validate-dsn": "node scripts/validate-sentry-dsn.mjs",

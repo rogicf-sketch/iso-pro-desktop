@@ -16,13 +16,25 @@ Aplica-se ao **iso-pro-desktop** (Web **0.1.75+**, Windows **0.1.75+**) e **iso_
 | Obra / tenant UUID | `00000000-0000-0000-0000-000000000001` |
 | URL Supabase | https://huvktaxsosxrfpvdigxq.supabase.co |
 | URL produção web | https://isoprogestaodemateriais.com.br |
-| Versão PC/Web testada | 0.1.87+ |
-| Versão mobile testada | 1.0.58+ |
+| Versão PC/Web testada | 0.1.89+ / Deploy `web-v0.1.91` (JWT-prefer) |
+| Versão mobile testada | 1.0.61+ (`69f875a` JWT-prefer) |
 | Responsável TI | |
 | Data início | 2026-07-11 |
 | Data go-live JWT | |
+| PR1 dual-path (sem cutover) | **Feito** 2026-07-12 — migration `20260712120000` + login prefer JWT |
 
 ---
+
+## Fase PR1 — Dual-path (já em produção; sem revogar anon)
+
+| # | Item | OK? | Data |
+|---|------|-----|------|
+| P1.1 | Migration `20260712120000_iso_pro_resolver_auth_return_user.sql` (`db push`) | [x] | 2026-07-12 |
+| P1.2 | Desktop/Web login `authenticateIsoProPreferJwt` + audit `authPath` | [x] | `4615b01` / `web-v0.1.91` |
+| P1.3 | Mobile login prefer JWT | [x] | `69f875a` |
+| P1.4 | `npm run jwt:auditar-link` — listar `rpc_only` vs `jwt_ready` | [ ] | |
+| P1.5 | Ligar restantes activos (Fase 4) até `rpc_only = 0` | [ ] | |
+| P1.6 | Só então: staging + revogar EXECUTE anon em `iso_pro_autenticar_usuario` | [ ] | **não agora** |
 
 ## Fase 0 — Pré-requisitos (obrigatório)
 
