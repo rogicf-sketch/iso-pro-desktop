@@ -23,7 +23,22 @@ import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const TENANT = process.env.ISO_PRO_E2E_TENANT_ID?.trim() || '00000000-0000-0000-0000-000000000001';
+const DEFAULT_TENANT = '00000000-0000-0000-0000-000000000001';
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function resolveTenantId() {
+  const raw = String(process.env.ISO_PRO_E2E_TENANT_ID ?? '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
+  if (!raw) return { tenant: DEFAULT_TENANT, source: 'default' };
+  if (!UUID_RE.test(raw)) {
+    return { tenant: DEFAULT_TENANT, source: 'default_invalid_secret' };
+  }
+  return { tenant: raw, source: 'env' };
+}
+
+const { tenant: TENANT, source: TENANT_SOURCE } = resolveTenantId();
 
 function loadEnv() {
   const out = { ...process.env };
@@ -87,7 +102,7 @@ function decodeJwtPayload(token) {
 }
 
 console.log('=== I.S.O PRO — smoke diario ops ===');
-console.log(`tenant: ${TENANT}`);
+console.log(`tenant: ${TENANT} (source=${TENANT_SOURCE})`);
 
 if (!url || !anon) {
   fail('env', 'Falta VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY');
