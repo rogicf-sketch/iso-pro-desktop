@@ -51,11 +51,13 @@ Nota: isto protege fluxos **Supabase Auth** (JWT). Login legado via RPC `iso_pro
 
 ## Ordem cirúrgica (não fazer tudo de uma vez)
 
-1. **Auth:** activar HaveIBeenPwned no provider Email (secção acima)
+1. **Auth:** activar HaveIBeenPwned no provider Email (secção acima) — **feito**
 2. **search_path** nas 8 funções — **feito** (migration `20260711200000`)
-3. **Staging + restauro** antes de revogar `anon` EXECUTE / apertar RLS
-4. Revogar EXECUTE anon em funções só-admin (`prune_*`, sync membership) após smoke staging
-5. Policies RLS por tenant/JWT — onda dedicada
+3. **P0 (2026-07-12):** drop policies legadas `*_insert/update/delete/select_anon` com `true` que OR-bypassavam `*_tenant_rls` + revogar EXECUTE anon em PDF/prune/trigger/link-admin — migration `20260712010000` — **feito em prod**
+   - Advisor: `rls_policy_always_true` **30 → 1** (resta `mobile_logs_acesso_insert_anon`, sem `tenant_id`)
+   - Advisor: `anon_security_definer_*` **23 → 13** (só auth legado + outbox + audit)
+4. Staging curto se fores apertar outbox/`mobile_logs` ou login JWT-only
+5. Onda JWT-only: revogar auth RPC anon quando 100% login Supabase Auth
 
 ---
 

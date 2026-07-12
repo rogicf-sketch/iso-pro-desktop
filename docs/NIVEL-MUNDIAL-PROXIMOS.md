@@ -1,12 +1,10 @@
 # Próximos passos — nível mundial (I.S.O PRO)
 
-Estado actual (2026-07-11 noite): web **0.1.89**, mobile **1.0.60**,
-Sentry DSN + HaveIBeenPwned + backups + **restauro formal OK** (staging apagado),
-search_path hardening, smoke prod/staging OK.
+Estado actual (2026-07-12): web **0.1.89** (Deploy web #3 verde), mobile **1.0.61**,
+Sentry + HaveIBeenPwned + backups + restauro formal OK + **RLS P0 em prod**
+(`20260712010000`: legacy always-true drop + revoke EXECUTE ops).
 
-Maturidade estimada: **~9,7/10** (fecho 10/10 ops: APK Sentry → CD web → RLS cirúrgico).
-
-Ordem activa: **1 APK+Sentry** → 2 CI/CD web → 3 RLS.
+Maturidade estimada: **~9,9/10** (resta `mobile_logs` insert aberto + outbox/auth RPC anon intencionais).
 
 ---
 
@@ -30,8 +28,9 @@ Ordem activa: **1 APK+Sentry** → 2 CI/CD web → 3 RLS.
 | 1 | **4 alertas Sentry `iso.*`** | **Feito** (1 alerta issue nova + notify) | `docs/CHECKLIST-ALERTAS-SENTRY.md` |
 | 2 | Secrets GitHub smoke diário | **Feito** — run #3 verde | `docs/GUIA-SECRETS-SMOKE-GITHUB.md` |
 | 3 | APK com Sentry | **Feito** — `1.0.61` (versionCode 62) + DSN baked | Downloads / `dist/android` |
-| 4 | Apertar RLS/RPC anon | Onda futura + staging pago ou teste curto | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
-| 5 | CI/CD deploy auto | **Parcial** — workflow `Deploy web` no GitHub; falta secrets SSH + Sentry DSN | `docs/GUIA-DEPLOY-WEB-GITHUB.md` |
+| 4 | RLS P0 (legacy always-true + revoke ops) | **Feito** — `20260712010000` em prod; WARN always-true 30→1 | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
+| 5 | CI/CD deploy web | **Feito** — Deploy web #3 verde (`bdcd1e3`) | `docs/GUIA-DEPLOY-WEB-GITHUB.md` |
+| 6 | RLS P1 (`mobile_logs` / outbox JWT) | Opcional — staging curto | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
 
 Performance Advisor: 72× `multiple_permissive_policies` — esperado; não bloquear.
 
