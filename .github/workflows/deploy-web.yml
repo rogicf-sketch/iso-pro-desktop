@@ -70,6 +70,6 @@ jobs:
           fi
           export DEPLOY_REMOTE_STAGING="${{ secrets.DEPLOY_REMOTE_STAGING }}"
           if [ -z "${DEPLOY_REMOTE_STAGING}" ]; then
-            export DEPLOY_REMOTE_STAGING='$HOME/iso-pro-deploy-staging'
+            export DEPLOY_REMOTE_STAGING='~/iso-pro-deploy-staging'
           fi
           npm run deploy:web

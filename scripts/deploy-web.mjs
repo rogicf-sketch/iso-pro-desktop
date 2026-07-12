@@ -58,7 +58,7 @@ loadDeployEnvFile();
 const sshKey = String(process.env.DEPLOY_SSH_KEY ?? '').trim();
 const sshTarget = String(process.env.DEPLOY_SSH_TARGET ?? '').trim();
 const remotePath = String(process.env.DEPLOY_REMOTE_PATH || '/var/www/iso-pro').trim();
-const remoteStaging = String(process.env.DEPLOY_REMOTE_STAGING || '$HOME/iso-pro-deploy-staging').trim();
+const remoteStagingRaw = String(process.env.DEPLOY_REMOTE_STAGING || '~/iso-pro-deploy-staging').trim();
 const skipBuild = String(process.env.DEPLOY_SKIP_BUILD ?? '').trim().toLowerCase() === '1';
 
 if (!sshKey || !sshTarget) {
@@ -85,10 +85,33 @@ if (!fs.existsSync(distDir)) {
   process.exit(1);
 }
 
-const sshCommon = ['-o', 'BatchMode=yes', '-i', sshKey];
+const sshCommon = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-i', sshKey];
 const sshDest = [...sshCommon, sshTarget];
 
+function resolveRemoteStagingPath(raw) {
+  const s = String(raw || '').trim() || '~/iso-pro-deploy-staging';
+  if (!(s.includes('$HOME') || s.startsWith('~'))) return s;
+  const r = spawnSync('ssh', [...sshDest, 'printf %s "$HOME"'], {
+    encoding: 'utf8',
+    cwd: root,
+  });
+  if (r.status !== 0) {
+    console.error('deploy-web: nao foi possivel resolver $HOME no servidor.');
+    if (r.stderr) console.error(r.stderr);
+    process.exit(r.status ?? 1);
+  }
+  const home = String(r.stdout || '').trim();
+  if (!home) {
+    console.error('deploy-web: $HOME remoto vazio.');
+    process.exit(1);
+  }
+  return s.replace(/^\$HOME/, home).replace(/^~(?=$|\/)/, home);
+}
+
+const remoteStaging = resolveRemoteStagingPath(remoteStagingRaw);
+
 console.log('deploy-web: a preparar staging no servidor …');
+console.log(`deploy-web: staging remoto = ${remoteStaging}`);
 run('ssh', [
   ...sshDest,
   `rm -rf ${remoteStaging} && mkdir -p ${remoteStaging}`,
