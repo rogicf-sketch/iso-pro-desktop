@@ -9,10 +9,29 @@ vi.mock('./isoProTenant', () => ({
   getActiveTenantId: vi.fn(() => 'tenant-1'),
 }));
 
+vi.mock('./isoProAuthRpc', () => ({
+  autenticarUsuarioIsoProRpc: vi.fn(),
+  mapIsoProAuthRpcUser: (u: unknown) => u,
+}));
+
 import { getSupabase } from './supabase';
-import { isIsoProJwtSessionActive, resolverAuthEmailSessao } from './isoProJwtSession';
+import { autenticarUsuarioIsoProRpc } from './isoProAuthRpc';
+import {
+  authenticateIsoProPreferJwt,
+  isIsoProJwtSessionActive,
+  resolverAuthEmailSessao,
+} from './isoProJwtSession';
 
 const mockedGetSupabase = vi.mocked(getSupabase);
+const mockedAutenticar = vi.mocked(autenticarUsuarioIsoProRpc);
+
+const sampleUser = {
+  id: 'u1',
+  login: 'admin',
+  nome: 'Admin',
+  perfil: { id: 'p1', nome: 'Admin' },
+  permissoes: [],
+};
 
 describe('isoProJwtSession', () => {
   beforeEach(() => {
@@ -30,15 +49,22 @@ describe('isoProJwtSession', () => {
   it('resolverAuthEmailSessao mapeia email quando RPC ok', async () => {
     mockedGetSupabase.mockReturnValue({
       rpc: vi.fn(async () => ({
-        data: { ok: true, jwtReady: true, email: 'admin@empresa.com', authUserId: 'auth-1' },
+        data: {
+          ok: true,
+          jwtReady: true,
+          email: 'admin@empresa.com',
+          authUserId: 'auth-1',
+          user: sampleUser,
+        },
         error: null,
       })),
     } as never);
 
     const r = await resolverAuthEmailSessao('admin', 'secret');
     expect(r.ok).toBe(true);
-    if (r.ok) {
+    if (r.ok && r.jwtReady) {
       expect(r.email).toBe('admin@empresa.com');
+      expect(r.user?.id).toBe('u1');
     }
   });
 
@@ -46,7 +72,7 @@ describe('isoProJwtSession', () => {
     expect(isIsoProJwtSessionActive()).toBe(false);
   });
 
-  it('bootstrap JWT activo por omissao (sem opt-out)', async () => {
+  it('authenticateIsoProPreferJwt usa path jwt quando signIn ok', async () => {
     const signInWithPassword = vi.fn(async () => ({ data: { session: {} }, error: null }));
     const getAuthenticatorAssuranceLevel = vi.fn(async () => ({
       data: { currentLevel: 'aal1', nextLevel: 'aal1' },
@@ -54,25 +80,58 @@ describe('isoProJwtSession', () => {
     }));
     mockedGetSupabase.mockReturnValue({
       rpc: vi.fn(async () => ({
-        data: { ok: true, jwtReady: true, email: 'admin@isopro.local', authUserId: 'auth-1' },
+        data: {
+          ok: true,
+          jwtReady: true,
+          email: 'admin@isopro.local',
+          authUserId: 'auth-1',
+          user: sampleUser,
+        },
         error: null,
       })),
       auth: { signInWithPassword, mfa: { getAuthenticatorAssuranceLevel, listFactors: vi.fn() } },
     } as never);
 
-    const { tryBootstrapJwtSessionAfterLogin } = await import('./isoProJwtSession');
-    const outcome = await tryBootstrapJwtSessionAfterLogin('admin', 'secret');
-    expect(outcome).toEqual({ kind: 'ok' });
-    expect(signInWithPassword).toHaveBeenCalledWith({
-      email: 'admin@isopro.local',
-      password: 'secret',
-    });
+    const outcome = await authenticateIsoProPreferJwt('admin', 'secret');
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.authPath).toBe('jwt');
+      expect(outcome.jwt).toEqual({ kind: 'ok' });
+    }
+    expect(mockedAutenticar).not.toHaveBeenCalled();
+  });
+
+  it('authenticateIsoProPreferJwt rpc_only quando jwtReady false com user', async () => {
+    mockedGetSupabase.mockReturnValue({
+      rpc: vi.fn(async () => ({
+        data: {
+          ok: true,
+          jwtReady: false,
+          user: sampleUser,
+          error: 'Utilizador sem ligacao Supabase Auth (auth_user_id).',
+        },
+        error: null,
+      })),
+    } as never);
+
+    const outcome = await authenticateIsoProPreferJwt('admin', 'secret');
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.authPath).toBe('rpc_only');
+      expect(outcome.user.login).toBe('admin');
+    }
   });
 
   it('devolve mfa_required quando nextLevel aal2', async () => {
     mockedGetSupabase.mockReturnValue({
       rpc: vi.fn(async () => ({
-        data: { ok: true, jwtReady: true, email: 'admin@isopro.local', authUserId: 'auth-1' },
+        data: {
+          ok: true,
+          jwtReady: true,
+          email: 'admin@isopro.local',
+          authUserId: 'auth-1',
+          user: sampleUser,
+        },
         error: null,
       })),
       auth: {
@@ -90,8 +149,11 @@ describe('isoProJwtSession', () => {
       },
     } as never);
 
-    const { tryBootstrapJwtSessionAfterLogin } = await import('./isoProJwtSession');
-    const outcome = await tryBootstrapJwtSessionAfterLogin('admin', 'secret');
-    expect(outcome).toEqual({ kind: 'mfa_required', factorId: 'factor-mfa' });
+    const outcome = await authenticateIsoProPreferJwt('admin', 'secret');
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.authPath).toBe('jwt');
+      expect(outcome.jwt).toEqual({ kind: 'mfa_required', factorId: 'factor-mfa' });
+    }
   });
 });

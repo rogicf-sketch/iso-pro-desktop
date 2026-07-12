@@ -33,10 +33,10 @@ até onda JWT-only.
 | 6 | RLS P1 (`mobile_logs` + outbox internas) | **Feito** — `20260712020000` | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
 | 7 | RLS P2 (enqueue* só service/trigger) | **Feito** — `20260712030000`; Actions checkout/setup-node **v5** | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
 | 8 | Alertas infra (disco/CPU) | **Feito** — revisto Compute and Disk (0,33/8 GB); sem toggle; email de quota do plano | `docs/GUIA-ALERTAS-INFRA-CLIQUES.md` |
-| 9 | JWT-only (revogar auth RPC anon) | Epic futuro — staging + Auth 100% | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
-| 10 | **Leitura SWR** (cache já + nuvem fundo) | **Feito** — prefer 450ms; inventário/materiais + withLocalFallback | UX campo |
-| 11 | Concorrência inventário/materiais offline | Após #10 — mergeKeys + saldo aditivo | Estoque obra grande |
-| 12 | Stress 2× offline mesmo SKU | Prova #11 | Teste / checklist |
+| 9 | JWT-only (revogar auth RPC anon) | Epic — **PR1 feito**: login prefer JWT + fallback RPC + audit `authPath`; migration `20260712120000` (resolver devolve `user`). Revogar anon só após Auth 100% + staging | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
+| 10 | **Leitura SWR** (cache já + nuvem fundo) | **Feito** — prefer 450ms; inventário/materiais + withLocalFallback; Deploy `web-v0.1.90` | UX campo |
+| 11 | Concorrência inventário/materiais offline | **Feito** — mergeKeys + merge itens (max) + keep-cloud saldo | Estoque obra grande |
+| 12 | Stress 2× offline mesmo SKU | **Feito** — suite `offlineConcurrency.stress.test.ts` | Teste / checklist |
 
 Performance Advisor: 72× `multiple_permissive_policies` — esperado; não bloquear.
 

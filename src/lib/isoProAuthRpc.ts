@@ -51,6 +51,11 @@ function mapRpcUser(raw: IsoProAuthRpcUser): IsoProAuthRpcUser {
   };
 }
 
+/** Normaliza o `user` devolvido por RPCs de autenticação / resolver. */
+export function mapIsoProAuthRpcUser(raw: IsoProAuthRpcUser): IsoProAuthRpcUser {
+  return mapRpcUser(raw);
+}
+
 export async function autenticarUsuarioIsoProRpc(
   tenantId: string,
   login: string,

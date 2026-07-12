@@ -1,7 +1,7 @@
 import { isElectronApp } from '../../../lib/isElectronApp';
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
-import { clearIsoProJwtSession, tryBootstrapJwtSessionAfterLogin } from '../../../lib/isoProJwtSession';
+import { authenticateIsoProPreferJwt, clearIsoProJwtSession } from '../../../lib/isoProJwtSession';
 import { verifyIsoProMfaChallenge } from '../../../lib/isoProMfa';
 import { captureOperationalEvent } from '../../../lib/errorReporting';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
@@ -418,37 +418,41 @@ function mapAuthRpcUserToAuthUser(
 async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
   const login = payload.login.trim().toLowerCase();
   const senha = payload.senha.trim();
-  const tenantId = getActiveTenantId();
 
-  const rpc = await autenticarUsuarioIsoProRpc(tenantId, login, senha);
-  if (rpc.ok) {
-    const sessionUser = mapAuthRpcUserToAuthUser(rpc.user);
+  const result = await authenticateIsoProPreferJwt(login, senha);
+  if (result.ok) {
+    const sessionUser = mapAuthRpcUserToAuthUser(result.user);
     setVolatileSessionPasswordAfterSuccessfulLogin(senha);
-    const jwtOutcome = await tryBootstrapJwtSessionAfterLogin(login, senha);
-    if (jwtOutcome.kind === 'mfa_required') {
-      captureOperationalEvent('mfa_challenge', { login }, 'info');
-      throw new IsoProMfaRequiredError(jwtOutcome.factorId, sessionUser, payload.permanecerLogado);
+    if (result.jwt.kind === 'mfa_required') {
+      captureOperationalEvent('mfa_challenge', { login, authPath: result.authPath }, 'info');
+      throw new IsoProMfaRequiredError(result.jwt.factorId, sessionUser, payload.permanecerLogado);
     }
+    captureOperationalEvent('auth_path', { login, path: result.authPath }, 'info');
+    appendAuthAuditEvent({
+      type: 'login_success',
+      actorLogin: sessionUser.login,
+      detail: `Login remoto authPath=${result.authPath} (JWT preferencial; RPC fallback intacto).`,
+    });
     persistAuthSession(sessionUser, payload.permanecerLogado);
     markSessionCloudValidationOk();
     return sessionUser;
   }
 
-  if (rpc.rpcMissing) {
+  if (result.rpcMissing) {
     throw new AuthServiceError(
       'Servidor Supabase desatualizado: falta a funcao iso_pro_autenticar_usuario. Execute «npx supabase db push» no projeto e tente novamente.',
       'remote_unavailable',
     );
   }
 
-  if (/network|fetch|timeout|failed to fetch/i.test(rpc.error)) {
+  if (/network|fetch|timeout|failed to fetch/i.test(result.error)) {
     throw new AuthServiceError(
-      formatSupabaseConnectionError(traduzirErroOperacionalIsoPro(rpc.error)),
+      formatSupabaseConnectionError(traduzirErroOperacionalIsoPro(result.error)),
       'remote_unavailable',
     );
   }
 
-  throw new AuthServiceError(rpc.error || 'Login ou senha invalidos.', 'invalid_credentials');
+  throw new AuthServiceError(result.error || 'Login ou senha invalidos.', 'invalid_credentials');
 }
 
 /** Após código MFA correcto: grava sessão ISO PRO (JWT já em aal2). */
