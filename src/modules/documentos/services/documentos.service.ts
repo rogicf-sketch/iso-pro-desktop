@@ -21,7 +21,7 @@ import {
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
-import { upsertDocumentosPlanejamentoEmLotes, listDocumentosPlanejamentoPageFromCloud, listDocumentosPlanejamentoIdsFromCloud, syncDocumentosPlanejamentoFromSnapshot } from '../../../lib/documentosPlanejamentoTabelas';
+import { upsertDocumentosPlanejamentoEmLotes, listDocumentosPlanejamentoPageFromCloud, listDocumentosPlanejamentoIdsFromCloud } from '../../../lib/documentosPlanejamentoTabelas';
 import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
 import { parseDecimalFlexible, roundPesoKg } from '../../../lib/parseDecimal';
 import { executeWrite, getErrorMessage } from '../../../lib/service-result';
@@ -669,27 +669,14 @@ export async function listarDocumentos(
   try {
     // Escala: lista paginada nas tabelas (não carrega 11k na memória).
     if (hasSupabaseConfig()) {
-      let page = await listDocumentosPlanejamentoPageFromCloud({
+      const page = await listDocumentosPlanejamentoPageFromCloud({
         busca: filtro.busca,
         status: filtro.status,
         offset: (filtro.page - 1) * filtro.pageSize,
         limit: filtro.pageSize,
       });
 
-      // Tabelas “inactivas” (source snapshot) com JWT residual: sync + 2.ª leitura.
-      if (!page.error && page.source !== 'tables') {
-        try {
-          await syncDocumentosPlanejamentoFromSnapshot();
-        } catch {
-          /* ignore */
-        }
-        page = await listDocumentosPlanejamentoPageFromCloud({
-          busca: filtro.busca,
-          status: filtro.status,
-          offset: (filtro.page - 1) * filtro.pageSize,
-          limit: filtro.pageSize,
-        });
-      }
+      // Nao chamar sync_from_snapshot aqui — em 1k+ desenhos causa timeout e lista vazia.
 
       if (!page.error && page.source === 'tables') {
         const items: DocumentoListItem[] = page.documentos.map((d) => {

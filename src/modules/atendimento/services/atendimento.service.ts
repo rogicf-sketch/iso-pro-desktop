@@ -731,9 +731,8 @@ async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
         };
         return buildSaldoMap(payloadComAgg);
       }
-      const payload = await withRemoteReadTimeout(() => readSnapshotPayload());
-      const documentosRec = documentosReconciliadosDoPayload(payload);
-      return buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
+      // Nunca cair no snapshot completo com documentos[] (timeout ~20s no boot).
+      return buildSaldoMap(payloadLight);
     } catch {
       return new Map();
     }
@@ -743,36 +742,6 @@ async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
   const payload = buildLocalPayloadParaReconciliacao(local, recebimentos);
   const documentosRec = documentosReconciliadosDoPayload(payload);
   return buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
-}
-
-async function resolveDocumentosEMateriaisAtendimento(): Promise<{
-  documentos: DocumentoStored[];
-  materiais: MaterialStored[];
-}> {
-  if (shouldTryRemoteRead()) {
-    try {
-      const state = await withRemoteReadTimeout(() => readRemoteState());
-      return { documentos: state.documentos, materiais: state.materiais };
-    } catch {
-      const local = loadLocalState();
-      const recebimentos = await carregarRecebimentosCompletos();
-      const payload = buildLocalPayloadParaReconciliacao(local, recebimentos);
-      const documentos = documentosReconciliadosDoPayload(payload);
-      return {
-        documentos,
-        materiais: await enrichMateriaisSaldoFromLocalMovement(local.materiais, documentos),
-      };
-    }
-  }
-  await mesclarAtendimentoDesktopComNuvem();
-  const local = loadLocalState();
-  const recebimentos = await carregarRecebimentosCompletos();
-  const payloadLocal = buildLocalPayloadParaReconciliacao(local, recebimentos);
-  const documentos = documentosReconciliadosDoPayload(payloadLocal);
-  return {
-    documentos,
-    materiais: await enrichMateriaisSaldoFromLocalMovement(local.materiais, documentos),
-  };
 }
 
 function mapSnapshotMateriais(payload: SnapshotPayload, saldoMapParam?: Map<string, number>): MaterialStored[] {
@@ -1230,90 +1199,37 @@ export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[
           .sort((a, b) => a.numero.localeCompare(b.numero));
       }
     } catch {
-      /* fallback legado */
+      /* ignore — sem fallback pesado */
     }
   }
 
-  const { documentos, materiais } = await resolveDocumentosEMateriaisAtendimento();
-
-  const materialByCode = new Map(materiais.map((material) => [codigoMaterialKey(material.codigo), material]));
-  const saldoMap = await obterSaldoMapOperacional();
-
-  return documentos
-    .filter((doc) => doc.status !== 'cancelado')
-    .map((doc) => ({
-      id: doc.id,
-      numero: doc.numero,
-      revisao: doc.revisao,
-      descricao: doc.descricao,
-      responsavel: doc.responsavel,
-      status: doc.status,
-      linhas: doc.itens
-        .map((item) => {
-          const key = codigoMaterialKey(item.codigoMaterial);
-          const material = materialByCode.get(key);
-          const saldoOperacional = saldoMap.get(key);
-          /** Antes: só `material?.saldoAtual` — se o código não entrou no merge snapshot+cadastro, ficava 0 com NF já conferida. */
-          const saldo =
-            saldoOperacional !== undefined ? saldoOperacional : (material?.saldoAtual ?? 0);
-          const pendente = Math.max(0, item.quantidadeProjeto - item.quantidadeAtendida);
-
-          return {
-            documentoItemId: item.id,
-            materialId: material?.id ?? null,
-            codigoMaterial: item.codigoMaterial,
-            descricaoMaterial: item.descricaoMaterial,
-            unidade: item.unidade,
-            quantidadeProjeto: item.quantidadeProjeto,
-            quantidadeAtendida: item.quantidadeAtendida,
-            quantidadePendente: pendente,
-            saldoDisponivel: saldo,
-            quantidadeNestaOperacao: 0,
-          };
-        })
-        .filter((item) => item.quantidadePendente > 0),
-    }))
-    .filter((doc) => doc.linhas.length > 0)
-    .sort((a, b) => a.numero.localeCompare(b.numero));
+  // Sem RPC de pendentes: nao carregar snapshot documentos[] (timeout ~20s).
+  return [];
 }
 
 export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<AtendimentoDocumento[]>> {
   let source: 'supabase' | 'local' = 'local';
   let fallbackReason = '';
 
-  if (shouldTryRemoteRead()) {
-    try {
-      const cloud = await withRemoteReadTimeout(
-        () => listDocumentosPendentesAtendimentoFromCloud(),
-        REMOTE_READ_TIMEOUT_HEAVY_MS,
-      );
-      if (cloud.source === 'tables' && !cloud.error) {
-        source = 'supabase';
-      } else {
-        // Nao baixar snapshot documentos[] completo (11k) — era ~20s no Atendimento.
-        console.warn(
-          '[I.S.O PRO] Pendentes escala indisponivel; mantem caminho leve sem readRemoteState.',
-          cloud.error ?? cloud.source,
-        );
-      }
-    } catch (error) {
-      if (!isIsoProDesktop()) {
-        fallbackReason = traduzirErroOperacionalIsoPro(
-          error instanceof Error ? error.message : 'Falha ao consultar documentos pendentes no Supabase.',
-        );
-      }
-    }
+  try {
+    const data = await listarDocumentosPendentes();
+    if (shouldTryRemoteRead()) source = 'supabase';
+    return {
+      success: true,
+      data,
+      meta: {
+        source,
+        fallbackReason: fallbackReason || undefined,
+      },
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(
+        error instanceof Error ? error.message : 'Falha ao consultar documentos pendentes.',
+      ),
+    };
   }
-
-  const data = await listarDocumentosPendentes();
-  return {
-    success: true,
-    data,
-    meta: {
-      source,
-      fallbackReason: fallbackReason || undefined,
-    },
-  };
 }
 
 export async function listarHistoricoAtendimentos(): Promise<Atendimento[]> {
