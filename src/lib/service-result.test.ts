@@ -150,7 +150,21 @@ describe('service-result', () => {
       expect(r.meta.source).toBe('supabase');
     });
 
-    it('cai no local quando loadRemote falha', async () => {
+    it('cai no local quando loadRemote falha (rede)', async () => {
+      const r = await withLocalFallback({
+        shouldTryRemote: true,
+        loadRemote: async () => {
+          throw new Error('Failed to fetch');
+        },
+        loadLocal: () => ({ a: 3 }),
+        fallbackMessage: 'fallback msg',
+      });
+      expect(r.data).toEqual({ a: 3 });
+      expect(r.meta.source).toBe('local');
+      expect(r.meta.fallbackReason).toBe(MSG_ERRO_LEITURA_NUVEM);
+    });
+
+    it('cai no local quando loadRemote falha por timeout', async () => {
       const r = await withLocalFallback({
         shouldTryRemote: true,
         loadRemote: async () => {
@@ -161,7 +175,9 @@ describe('service-result', () => {
       });
       expect(r.data).toEqual({ a: 3 });
       expect(r.meta.source).toBe('local');
-      expect(r.meta.fallbackReason).toBe(MSG_ERRO_LEITURA_NUVEM);
+      expect(r.meta.fallbackReason).toBe(
+        'A consulta a nuvem demorou demais; a usar dados em cache. Clique Recarregar da nuvem ou tente de novo.',
+      );
     });
   });
 });

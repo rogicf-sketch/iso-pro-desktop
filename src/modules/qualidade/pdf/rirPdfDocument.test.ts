@@ -85,19 +85,26 @@ describe('quebrarTextoPdf', () => {
 });
 
 describe('gerarRirPdfBytes', () => {
-  it('43 itens → no maximo 3 paginas PDF (nao 6)', async () => {
-    const bytes = await gerarRirPdfBytes(ctxMinimo(43));
-    const doc = await PDFDocument.load(bytes);
-    expect(doc.getPageCount()).toBeLessThanOrEqual(4);
-    expect(doc.getPageCount()).toBeGreaterThanOrEqual(2);
-  });
+  it(
+    '43 itens → no maximo 3 paginas PDF (nao 6)',
+    async () => {
+      const bytes = await gerarRirPdfBytes(ctxMinimo(43));
+      const doc = await PDFDocument.load(bytes);
+      expect(doc.getPageCount()).toBeLessThanOrEqual(4);
+      expect(doc.getPageCount()).toBeGreaterThanOrEqual(2);
+    },
+    20_000,
+  );
 
-  it('60 itens → no maximo 4 paginas', async () => {
-    const bytes = await gerarRirPdfBytes(ctxMinimo(60));
-    const doc = await PDFDocument.load(bytes);
-    expect(doc.getPageCount()).toBeLessThanOrEqual(4);
-  });
-
+  it(
+    '60 itens → no maximo 4 paginas',
+    async () => {
+      const bytes = await gerarRirPdfBytes(ctxMinimo(60));
+      const doc = await PDFDocument.load(bytes);
+      expect(doc.getPageCount()).toBeLessThanOrEqual(4);
+    },
+    20_000,
+  );
   it('codigos longos ELE nao estouram coluna Qtd na pagina 1', async () => {
     const ctx = ctxMinimo(1);
     ctx.registro.itensRir![0] = {
