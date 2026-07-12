@@ -32,7 +32,7 @@ até onda JWT-only.
 | 5 | CI/CD deploy web | **Feito** — Deploy web #3 verde | `docs/GUIA-DEPLOY-WEB-GITHUB.md` |
 | 6 | RLS P1 (`mobile_logs` + outbox internas) | **Feito** — `20260712020000` | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
 | 7 | RLS P2 (enqueue* só service/trigger) | **Feito** — `20260712030000`; Actions checkout/setup-node **v5** | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
-| 8 | Alertas infra (disco/CPU) | **Tu** — 5 min no painel | `docs/GUIA-ALERTAS-INFRA-CLIQUES.md` |
+| 8 | Alertas infra (disco/CPU) | **Feito** — revisto Compute and Disk (0,33/8 GB); sem toggle; email de quota do plano | `docs/GUIA-ALERTAS-INFRA-CLIQUES.md` |
 | 9 | JWT-only (revogar auth RPC anon) | Epic futuro — staging + Auth 100% | `docs/TRIAGEM-SECURITY-ADVISOR.md` |
 
 Performance Advisor: 72× `multiple_permissive_policies` — esperado; não bloquear.

@@ -18,11 +18,11 @@ Links directos (2026):
 
 | # | Métrica | Onde olhar | Limiar sugerido | Canal | OK? | Data |
 |---|---------|------------|-----------------|-------|-----|------|
-| 1 | Disk usage | Settings → Infrastructure | ≥ 80% | email org | [ ] | |
-| 2 | CPU | Settings → Infrastructure / Reports | ≥ 80% sustentado | email org | [ ] | |
-| 3 | Memory | Settings → Infrastructure | ≥ 80% | email org | [ ] | |
-| 4 | Connection pool | Database → Settings (pooling) + Reports | ≥ 80% do limite | email org | [ ] | |
-| 5 | Advisors críticos | Advisors → Security / Performance | resolver ou aceitar risco | — | [x] | 2026-07-11: 0 ERROR; triagem em `docs/TRIAGEM-SECURITY-ADVISOR.md` |
+| 1 | Disk usage | Settings → Infrastructure / Compute and Disk | ≥ 80% | email org (quota plano) | [x] | 2026-07-12: **0,33 / 8 GB**; sem toggle de alerta no painel Pro — coberto por email de quota (~20% do limite) |
+| 2 | CPU | Settings → Compute and Disk / Observability | ≥ 80% sustentado | email org | [x] | 2026-07-12: revisto Compute; alertas = notificação org/plano |
+| 3 | Memory | Observability → Database | ≥ 80% | email org | [x] | 2026-07-12: ~906 MB em Observability (ok no tamanho actual) |
+| 4 | Connection pool | Database → Settings (pooling) + Reports | ≥ 80% do limite | email org | [x] | 2026-07-12: aceite via email de quota + revisão Reports |
+| 5 | Advisors críticos | Advisors → Security / Performance | resolver ou aceitar risco | — | [x] | 2026-07-12: 0 ERROR; P0–P2; WARN auth+flush intencionais |
 
 Nota: no plano Pro/Team, notificações de organização (Organization → Notifications / Billing alerts) cobrem uso/limites. Confirma email do owner no Settings da org.
 ---

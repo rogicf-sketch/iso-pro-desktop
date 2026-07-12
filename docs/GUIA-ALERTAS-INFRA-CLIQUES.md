@@ -35,8 +35,8 @@ Projecto: https://supabase.com/dashboard/project/huvktaxsosxrfpvdigxq
 
 | # | Feito? |
 |---|--------|
-| Email org recebe alertas | [ ] |
-| Infrastructure revisto (≥80% = agir) | [ ] |
-| Reports DB olhado esta semana | [ ] |
+| Email org recebe alertas | [x] 2026-07-12 — Pro envia email perto dos limites do plano |
+| Infrastructure / Compute and Disk revisto | [x] 2026-07-12 — disco 0,33/8 GB; sem toggle dedicado |
+| Reports / Observability DB olhado | [x] 2026-07-12 |
 
-Assinatura / data: _______________
+Assinatura / data: ops fecho 2026-07-12
