@@ -1,6 +1,5 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
-import { withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   listInventariosPageFromCloud,
@@ -16,6 +15,12 @@ import {
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
+import {
+  REMOTE_READ_PREFER_MS,
+  REMOTE_READ_TIMEOUT_MS,
+  shouldTryRemoteRead,
+  withRemoteReadTimeout,
+} from '../../../lib/dataReadPolicy';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import type { Inventario, InventarioFiltro, InventarioFormData, InventarioListItem } from '../types/inventario.types';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
@@ -113,20 +118,58 @@ function writeAll(items: Inventario[]) {
 
 /**
  * Leitura para listagem, detalhe e exportacao.
- * Com Supabase: prioriza nuvem e mantem copia local alinhada; se a nuvem estiver vazia, usa local (exemplos de fabrica).
+ * Web: prioriza nuvem com SWR (nao bloqueia 15s). Desktop: local ja; sync suave em fundo.
  */
 async function loadInventarios(): Promise<Inventario[]> {
   if (!hasSupabaseConfig()) return readAll();
-  try {
-    const remote = await withRemoteReadTimeout(() => readSnapshotInventarios());
-    if (remote.length > 0) {
-      writeAll(remote);
-      return remote;
-    }
-  } catch {
+
+  if (!shouldTryRemoteRead()) {
+    void (async () => {
+      try {
+        const remote = await withRemoteReadTimeout(() => readSnapshotInventarios(), REMOTE_READ_TIMEOUT_MS);
+        if (remote.length > 0) writeAll(remote);
+      } catch {
+        /* sync suave — ignorar */
+      }
+    })();
     return readAll();
   }
-  return readAll();
+
+  const fallback = await withLocalFallback({
+    shouldTryRemote: true,
+    loadRemote: async () => {
+      const remote = await readSnapshotInventarios();
+      if (remote.length > 0) {
+        writeAll(remote);
+        return remote;
+      }
+      return readAll();
+    },
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar inventarios no Supabase.',
+  });
+  return fallback.data;
+}
+
+/** Pagina local sincrona para initialData do React Query (SWR). */
+export function listarInventariosLocalSync(
+  filtro: InventarioFiltro,
+): { items: InventarioListItem[]; total: number } {
+  let items = readAll();
+  if (filtro.busca.trim()) {
+    const busca = filtro.busca.trim().toLowerCase();
+    items = items.filter((item) => buildSearchText(item).includes(busca));
+  }
+  if (filtro.status !== 'todos') {
+    items = items.filter((item) => item.status === filtro.status);
+  }
+  items = [...items].sort((a, b) => b.dataInventario.localeCompare(a.dataInventario));
+  const start = (filtro.page - 1) * filtro.pageSize;
+  const end = start + filtro.pageSize;
+  return {
+    items: items.slice(start, end).map(toListItem),
+    total: items.length,
+  };
 }
 
 /** Base para criar/editar/fechar: nuvem quando existir; senao lista local (evita gravar [] por cima do que o operador ve no PC). */
@@ -321,14 +364,56 @@ function validateInventarioForClosing(item: Inventario): string | null {
 export async function listarInventarios(
   filtro: InventarioFiltro,
 ): Promise<ServiceResult<PaginatedResult<InventarioListItem>>> {
+  const localPage = listarInventariosLocalSync(filtro);
+
+  // Desktop / offline: local imediato
+  if (!shouldTryRemoteRead()) {
+    if (hasSupabaseConfig()) {
+      void withRemoteReadTimeout(
+        () =>
+          listInventariosPageFromCloud({
+            busca: filtro.busca,
+            offset: (filtro.page - 1) * filtro.pageSize,
+            limit: filtro.pageSize,
+            status: filtro.status,
+          }),
+        REMOTE_READ_TIMEOUT_MS,
+      ).catch(() => undefined);
+    }
+    return {
+      success: true,
+      data: {
+        items: localPage.items,
+        total: localPage.total,
+        page: filtro.page,
+        pageSize: filtro.pageSize,
+      },
+      meta: { source: 'local' },
+    };
+  }
+
+  // Web: SWR — nuvem se responder rapido; senao local em ~450ms
   if (hasSupabaseConfig()) {
-    try {
-      const page = await listInventariosPageFromCloud({
-        busca: filtro.busca,
-        offset: (filtro.page - 1) * filtro.pageSize,
-        limit: filtro.pageSize,
-        status: filtro.status,
-      });
+    const cloudPromise = withRemoteReadTimeout(
+      () =>
+        listInventariosPageFromCloud({
+          busca: filtro.busca,
+          offset: (filtro.page - 1) * filtro.pageSize,
+          limit: filtro.pageSize,
+          status: filtro.status,
+        }),
+      REMOTE_READ_TIMEOUT_MS,
+    );
+
+    const raced = await Promise.race([
+      cloudPromise.then((page) => ({ kind: 'cloud' as const, page })),
+      new Promise<{ kind: 'prefer' }>((resolve) => {
+        setTimeout(() => resolve({ kind: 'prefer' }), REMOTE_READ_PREFER_MS);
+      }),
+    ]);
+
+    if (raced.kind === 'cloud') {
+      const page = raced.page;
       if (page.source === 'tables' && !page.error) {
         const items: InventarioListItem[] = page.inventarios.map((row) => {
           const statusRaw = String(row.status ?? 'aberto');
@@ -358,13 +443,23 @@ export async function listarInventarios(
           meta: { source: 'supabase' },
         };
       }
-    } catch {
-      /* fallback */
+    } else {
+      void cloudPromise.catch(() => undefined);
+      return {
+        success: true,
+        data: {
+          items: localPage.items,
+          total: localPage.total,
+          page: filtro.page,
+          pageSize: filtro.pageSize,
+        },
+        meta: { source: 'local', staleWhileRevalidate: true },
+      };
     }
   }
 
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: hasSupabaseConfig(),
+    shouldTryRemote: true,
     loadRemote: async () => {
       const remote = await readSnapshotInventarios();
       if (remote.length === 0) return readAll();

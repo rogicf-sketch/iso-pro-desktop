@@ -7,6 +7,7 @@ import { useMateriais } from './useMateriais';
 
 const mocks = vi.hoisted(() => ({
   listarMateriais: vi.fn(),
+  listarMateriaisLocalSync: vi.fn(() => ({ items: [], total: 0 })),
   listarDisciplinas: vi.fn(),
   listarUnidadesCadastro: vi.fn(),
 }));
@@ -42,6 +43,7 @@ vi.mock('../services/materiais.service', async (importOriginal) => {
   return {
     ...mod,
     listarMateriais: mocks.listarMateriais,
+    listarMateriaisLocalSync: mocks.listarMateriaisLocalSync,
     listarDisciplinas: mocks.listarDisciplinas,
     listarUnidadesCadastro: mocks.listarUnidadesCadastro,
   };
@@ -92,11 +94,9 @@ describe('useMateriais — lista', () => {
     const { result } = renderHook(() => useMateriais(), { wrapper: TestQueryProvider });
 
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.items).toHaveLength(1);
+      expect(result.current.items[0]?.codigo).toBe('TB-1');
     });
-
-    expect(result.current.items).toHaveLength(1);
-    expect(result.current.items[0]?.codigo).toBe('TB-1');
     expect(result.current.total).toBe(1);
     expect(result.current.disciplinas).toEqual(['Tubulacao']);
     expect(result.current.unidades).toEqual(['UN', 'M']);

@@ -65,5 +65,20 @@ describe('dataReadPolicy', () => {
         }),
       ).resolves.toEqual(['fallback']);
     });
+
+    it('serve local apos preferMs se remoto demorar (SWR)', async () => {
+      vi.useFakeTimers();
+      vi.spyOn(supabase, 'hasSupabaseConfig').mockReturnValue(true);
+      vi.spyOn(pdfCloudConfig, 'isIsoProDesktop').mockReturnValue(false);
+      const pending = readRemoteOrLocal({
+        readRemote: () => new Promise<string[]>(() => {}),
+        readLocal: () => ['stale'],
+        preferMs: 100,
+        timeoutMs: 5_000,
+      });
+      vi.advanceTimersByTime(100);
+      await expect(pending).resolves.toEqual(['stale']);
+      vi.useRealTimers();
+    });
   });
 });

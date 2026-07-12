@@ -11,7 +11,7 @@ import { registerSnapshotDerivedCacheInvalidator } from '../../../lib/snapshotDe
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
 import { listMateriaisPageFromCloud } from '../../../lib/materiaisListaPaginada';
-import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { REMOTE_READ_PREFER_MS, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { getErrorMessage } from '../../../lib/service-result';
 import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
@@ -111,6 +111,9 @@ const seedData: Material[] = [
     observacao: 'Item mantido para historico.',
   },
 ];
+
+/** Cadastro na nuvem pode ter milhares de linhas — timeout curto deixava a lista vazia na web. */
+const MATERIAIS_NUVEM_READ_TIMEOUT_MS = 45_000;
 
 function cacheMateriaisLocalLegivel(): boolean {
   const raw = localStorage.getItem(materiaisStorageKey());
@@ -413,9 +416,6 @@ function formParaPayloadNuvem(form: MaterialFormData, codigoBarras: string) {
   };
 }
 
-/** Cadastro na nuvem pode ter milhares de linhas — timeout curto deixava a lista vazia na web. */
-const MATERIAIS_NUVEM_READ_TIMEOUT_MS = 45_000;
-
 async function fetchMateriaisBaseFromSource(): Promise<Material[]> {
   if (!shouldUseCloudMaterials()) return readAll();
   if (!hasSupabaseConfig()) return readAll();
@@ -624,16 +624,57 @@ export function aplicarFiltrosMateriais(items: Material[], filtro: MaterialFiltr
   return [...filtered].sort((a, b) => a.codigo.localeCompare(b.codigo));
 }
 
+/** Pagina local sincrona para initialData / SWR. */
+export function listarMateriaisLocalSync(
+  filtro: MaterialFiltro,
+): { items: MaterialListItem[]; total: number } {
+  const items = aplicarFiltrosMateriais(readAll({ silenciarAvisoCorrupto: true }), filtro);
+  const start = (filtro.page - 1) * filtro.pageSize;
+  const end = start + filtro.pageSize;
+  return {
+    items: items.slice(start, end).map(toListItem),
+    total: items.length,
+  };
+}
+
 export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceResult<PaginatedResult<MaterialListItem>>> {
+  const localPage = listarMateriaisLocalSync(filtro);
+
+  if (!shouldTryRemoteRead()) {
+    return {
+      success: true,
+      data: {
+        items: localPage.items,
+        total: localPage.total,
+        page: filtro.page,
+        pageSize: filtro.pageSize,
+      },
+      meta: { source: 'local' },
+    };
+  }
+
   if (shouldUseCloudMaterials()) {
-    try {
-      const page = await listMateriaisPageFromCloud({
-        busca: filtro.busca,
-        offset: (filtro.page - 1) * filtro.pageSize,
-        limit: filtro.pageSize,
-        disciplina: filtro.disciplina,
-        ativo: filtro.ativo,
-      });
+    const cloudPromise = withRemoteReadTimeout(
+      () =>
+        listMateriaisPageFromCloud({
+          busca: filtro.busca,
+          offset: (filtro.page - 1) * filtro.pageSize,
+          limit: filtro.pageSize,
+          disciplina: filtro.disciplina,
+          ativo: filtro.ativo,
+        }),
+      MATERIAIS_NUVEM_READ_TIMEOUT_MS,
+    );
+
+    const raced = await Promise.race([
+      cloudPromise.then((page) => ({ kind: 'cloud' as const, page })),
+      new Promise<{ kind: 'prefer' }>((resolve) => {
+        setTimeout(() => resolve({ kind: 'prefer' }), REMOTE_READ_PREFER_MS);
+      }),
+    ]);
+
+    if (raced.kind === 'cloud') {
+      const page = raced.page;
       if (page.source === 'tables' && !page.error) {
         const mapped: Material[] = page.materiais.map((row) => ({
           id: String(row.id ?? ''),
@@ -661,8 +702,18 @@ export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceRe
           meta: { source: 'supabase' },
         };
       }
-    } catch {
-      /* fallback legado */
+    } else {
+      void cloudPromise.catch(() => undefined);
+      return {
+        success: true,
+        data: {
+          items: localPage.items,
+          total: localPage.total,
+          page: filtro.page,
+          pageSize: filtro.pageSize,
+        },
+        meta: { source: 'local', staleWhileRevalidate: true },
+      };
     }
   }
 
@@ -680,6 +731,7 @@ export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceRe
       page: filtro.page,
       pageSize: filtro.pageSize,
     },
+    meta: { source: 'local' },
   };
 }
 

@@ -179,5 +179,22 @@ describe('service-result', () => {
         'A consulta a nuvem demorou demais; a usar dados em cache. Clique Recarregar da nuvem ou tente de novo.',
       );
     });
+
+    it('serve local apos preferMs se remoto demorar (SWR)', async () => {
+      vi.useFakeTimers();
+      const pending = withLocalFallback({
+        shouldTryRemote: true,
+        loadRemote: () => new Promise<{ a: number }>(() => {}),
+        loadLocal: () => ({ a: 7 }),
+        fallbackMessage: 'x',
+        preferMs: 100,
+      });
+      vi.advanceTimersByTime(100);
+      const r = await pending;
+      expect(r.data).toEqual({ a: 7 });
+      expect(r.meta.source).toBe('local');
+      expect(r.meta.staleWhileRevalidate).toBe(true);
+      vi.useRealTimers();
+    });
   });
 });

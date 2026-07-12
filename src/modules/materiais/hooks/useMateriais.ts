@@ -16,6 +16,7 @@ import {
   importarMateriaisDoArquivoCsv,
   listarDisciplinas,
   listarMateriais,
+  listarMateriaisLocalSync,
   listarUnidadesCadastro,
   montarModeloCsvImportacaoMateriais,
   montarExportacaoMateriaisCsv,
@@ -142,15 +143,30 @@ export function useMateriais() {
         total: result.data.total,
         disciplinas: disciplinasResult,
         unidades: unidadesResult,
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
+    initialData: () => {
+      const page = listarMateriaisLocalSync(filtersForLista);
+      return {
+        items: page.items,
+        total: page.total,
+        disciplinas: [] as string[],
+        unidades: [] as string[],
+        listSource: 'local' as const,
+        staleWhileRevalidate: false,
+      };
+    },
+    initialDataUpdatedAt: 0,
   });
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
   const disciplinas = listQuery.data?.disciplinas ?? [];
   const unidades = listQuery.data?.unidades ?? [];
-  const loading = listQuery.isLoading;
+  const loading = listQuery.isLoading && items.length === 0;
+  const refreshing = listQuery.isFetching && items.length > 0;
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -545,6 +561,7 @@ export function useMateriais() {
     items,
     total,
     loading,
+    refreshing,
     error: error || listError,
     success,
     hasCloudConfig,

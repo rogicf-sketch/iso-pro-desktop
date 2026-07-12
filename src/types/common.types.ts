@@ -15,6 +15,8 @@ export type ServiceResult<T> = {
     writeBlocked?: boolean;
     /** Copia nuvem→`localStorage` de materiais bloqueada pelo guarda de contagens; UI pode oferecer repetir com forcar. */
     syncMateriaisLocalBloqueado?: boolean;
+    /** Leitura serviu cache local enquanto a nuvem ainda podia estar a responder (SWR). */
+    staleWhileRevalidate?: boolean;
   };
 };
 

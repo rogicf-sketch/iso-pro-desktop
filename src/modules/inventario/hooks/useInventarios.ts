@@ -9,6 +9,7 @@ import {
   buscarInventarioPorId,
   fecharInventario,
   listarInventarios,
+  listarInventariosLocalSync,
   montarExportacaoInventarioCsv,
   salvarInventario,
   validateInventario,
@@ -62,13 +63,26 @@ export function useInventarios() {
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
         listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
+    initialData: () => {
+      const page = listarInventariosLocalSync(filtersForLista);
+      return {
+        items: page.items,
+        total: page.total,
+        fallbackReason: '',
+        listSource: 'local' as const,
+        staleWhileRevalidate: false,
+      };
+    },
+    initialDataUpdatedAt: 0,
   });
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
-  const loading = listQuery.isLoading;
+  const loading = listQuery.isLoading && items.length === 0;
+  const refreshing = listQuery.isFetching && items.length > 0;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
   const listSource = listQuery.data?.listSource ?? 'local';
   const listError =
@@ -189,6 +203,7 @@ export function useInventarios() {
     items,
     total,
     loading,
+    refreshing,
     error: error || listError,
     success,
     fallbackReason,

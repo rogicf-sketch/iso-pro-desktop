@@ -7,6 +7,7 @@ import { useInventarios } from './useInventarios';
 
 const mocks = vi.hoisted(() => ({
   listarInventarios: vi.fn(),
+  listarInventariosLocalSync: vi.fn(() => ({ items: [], total: 0 })),
 }));
 
 vi.mock('../../../components/ui/ConfirmDialogProvider', () => ({
@@ -29,6 +30,7 @@ vi.mock('../services/inventario.service', async (importOriginal) => {
   return {
     ...mod,
     listarInventarios: mocks.listarInventarios,
+    listarInventariosLocalSync: mocks.listarInventariosLocalSync,
   };
 });
 
@@ -44,6 +46,8 @@ describe('useInventarios — lista', () => {
       defaultOptions: { queries: { retry: false } },
     });
     mocks.listarInventarios.mockReset();
+    mocks.listarInventariosLocalSync.mockReset();
+    mocks.listarInventariosLocalSync.mockReturnValue({ items: [], total: 0 });
   });
 
   it('carrega itens e total apos sucesso', async () => {
@@ -72,11 +76,9 @@ describe('useInventarios — lista', () => {
     const { result } = renderHook(() => useInventarios(), { wrapper: TestQueryProvider });
 
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.items).toHaveLength(1);
+      expect(result.current.items[0]?.codigo).toBe('INV-2026-001');
     });
-
-    expect(result.current.items).toHaveLength(1);
-    expect(result.current.items[0]?.codigo).toBe('INV-2026-001');
     expect(result.current.total).toBe(1);
     expect(mocks.listarInventarios).toHaveBeenCalled();
   });
