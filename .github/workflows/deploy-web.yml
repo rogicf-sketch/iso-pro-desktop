@@ -1,0 +1,67 @@
+# Deploy web de produção (Nginx via SSH) — nível mundial / CD.
+# Manual: Actions → Deploy web → Run workflow
+# Tag: git tag web-v0.1.90 && git push origin web-v0.1.90
+
+name: Deploy web
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'web-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare SSH key
+        env:
+          DEPLOY_SSH_KEY_BODY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_SSH_KEY_BODY:-}" ]; then
+            echo "Falta secret DEPLOY_SSH_PRIVATE_KEY"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY_BODY" > "$HOME/iso_pro_deploy_key"
+          chmod 600 "$HOME/iso_pro_deploy_key"
+          echo "DEPLOY_SSH_KEY=$HOME/iso_pro_deploy_key" >> "$GITHUB_ENV"
+
+      - name: Known hosts
+        env:
+          DEPLOY_SSH_TARGET: ${{ secrets.DEPLOY_SSH_TARGET }}
+        run: |
+          set -euo pipefail
+          host="${DEPLOY_SSH_TARGET#*@}"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Deploy web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          DEPLOY_SSH_TARGET: ${{ secrets.DEPLOY_SSH_TARGET }}
+          DEPLOY_REMOTE_PATH: ${{ secrets.DEPLOY_REMOTE_PATH }}
+          DEPLOY_REMOTE_STAGING: ${{ secrets.DEPLOY_REMOTE_STAGING }}
+        run: npm run deploy:web
