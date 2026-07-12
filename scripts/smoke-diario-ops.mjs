@@ -48,8 +48,13 @@ function isRpcMissing(message) {
 }
 
 const env = loadEnv();
-const url = String(env.VITE_SUPABASE_URL || env.SUPABASE_URL || '').trim();
-const anon = String(env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || '').trim();
+const url = String(env.VITE_SUPABASE_URL || env.SUPABASE_URL || '')
+  .trim()
+  .replace(/^["']|["']$/g, '');
+const anon = String(env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || '')
+  .trim()
+  .replace(/^["']|["']$/g, '')
+  .replace(/\s+/g, '');
 
 const checks = [];
 let failed = 0;
@@ -70,14 +75,60 @@ function warn(name, detail) {
   console.warn(`WARN ${name} — ${detail}`);
 }
 
+function decodeJwtPayload(token) {
+  try {
+    const part = String(token || '').split('.')[1];
+    if (!part) return null;
+    const json = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 console.log('=== I.S.O PRO — smoke diario ops ===');
 console.log(`tenant: ${TENANT}`);
-console.log(`url:    ${url || '(ausente)'}`);
 
 if (!url || !anon) {
   fail('env', 'Falta VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY');
   process.exit(1);
 }
+
+let host = '';
+try {
+  host = new URL(url).hostname;
+} catch {
+  fail('env_url', `VITE_SUPABASE_URL invalida: ${url}`);
+  process.exit(1);
+}
+
+const jwt = decodeJwtPayload(anon);
+const jwtRef = jwt && typeof jwt.ref === 'string' ? jwt.ref : null;
+const jwtRole = jwt && typeof jwt.role === 'string' ? jwt.role : null;
+const hostRef = host.replace(/\.supabase\.co$/i, '');
+
+console.log(`host:   ${host}`);
+console.log(`anon:   len=${anon.length} role=${jwtRole ?? '?'} ref=${jwtRef ?? '?'} prefix=${anon.slice(0, 6)}…`);
+
+if (!anon.startsWith('eyJ')) {
+  fail(
+    'env_anon',
+    'VITE_SUPABASE_ANON_KEY deve ser JWT legacy (eyJ...), nao sb_publishable_/sb_secret_',
+  );
+  process.exit(1);
+}
+if (jwtRole && jwtRole !== 'anon') {
+  fail('env_anon', `Esperado role=anon, veio role=${jwtRole}`);
+  process.exit(1);
+}
+if (jwtRef && hostRef && jwtRef !== hostRef) {
+  fail(
+    'env_mismatch',
+    `URL host ref="${hostRef}" nao bate com JWT ref="${jwtRef}". Corrige VITE_SUPABASE_URL ou ANON_KEY.`,
+  );
+  process.exit(1);
+}
+pass('env_keys', `host/ref alinhados (${hostRef})`);
 
 const supabase = createClient(url, anon, {
   auth: { persistSession: false, autoRefreshToken: false },
