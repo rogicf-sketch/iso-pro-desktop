@@ -316,16 +316,21 @@ export async function clearIsoProJwtSession(): Promise<void> {
 
 /** Se a sessao Auth estiver desalinhada (RLS a esconder dados), volta a anon. */
 export async function ensureIsoProDataSessionReadable(): Promise<void> {
-  if (!isIsoProJwtSessionActive()) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token ?? '';
-    const jwtTenant = token ? tenantIdFromAccessToken(token) : null;
+    if (!token) {
+      if (isIsoProJwtSessionActive()) setJwtSessionActive(false);
+      return;
+    }
+    const jwtTenant = tenantIdFromAccessToken(token);
     if (!jwtTenant || jwtTenant !== getActiveTenantId()) {
       await clearIsoProJwtSession();
+      return;
     }
+    if (!isIsoProJwtSessionActive()) setJwtSessionActive(true);
   } catch {
     await clearIsoProJwtSession();
   }

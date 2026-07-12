@@ -1,7 +1,6 @@
 import {
   clearIsoProJwtSession,
   ensureIsoProDataSessionReadable,
-  isIsoProJwtSessionActive,
 } from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from './supabase';
@@ -56,12 +55,10 @@ export async function listMateriaisPageFromCloud(options?: {
 
   if (
     (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(String(error.message))) ||
-    (!error && isIsoProJwtSessionActive() && Number((data as { total?: number } | null)?.total ?? 0) === 0)
+    (!error && Number((data as { total?: number } | null)?.total ?? 0) === 0)
   ) {
-    if (isIsoProJwtSessionActive()) {
-      await clearIsoProJwtSession();
-      ({ data, error } = await invoke());
-    }
+    await clearIsoProJwtSession();
+    ({ data, error } = await invoke());
   }
 
   if (error) return { materiais: [], total: 0, source: 'error', error: error.message };

@@ -1290,8 +1290,11 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
       if (cloud.source === 'tables' && !cloud.error) {
         source = 'supabase';
       } else {
-        await withRemoteReadTimeout(() => readRemoteState(), REMOTE_READ_TIMEOUT_HEAVY_MS);
-        source = 'supabase';
+        // Nao baixar snapshot documentos[] completo (11k) — era ~20s no Atendimento.
+        console.warn(
+          '[I.S.O PRO] Pendentes escala indisponivel; mantem caminho leve sem readRemoteState.',
+          cloud.error ?? cloud.source,
+        );
       }
     } catch (error) {
       if (!isIsoProDesktop()) {

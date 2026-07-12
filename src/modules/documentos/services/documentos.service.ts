@@ -21,7 +21,7 @@ import {
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
-import { upsertDocumentosPlanejamentoEmLotes, listDocumentosPlanejamentoPageFromCloud, listDocumentosPlanejamentoIdsFromCloud } from '../../../lib/documentosPlanejamentoTabelas';
+import { upsertDocumentosPlanejamentoEmLotes, listDocumentosPlanejamentoPageFromCloud, listDocumentosPlanejamentoIdsFromCloud, syncDocumentosPlanejamentoFromSnapshot } from '../../../lib/documentosPlanejamentoTabelas';
 import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
 import { parseDecimalFlexible, roundPesoKg } from '../../../lib/parseDecimal';
 import { executeWrite, getErrorMessage } from '../../../lib/service-result';
@@ -669,12 +669,28 @@ export async function listarDocumentos(
   try {
     // Escala: lista paginada nas tabelas (não carrega 11k na memória).
     if (hasSupabaseConfig()) {
-      const page = await listDocumentosPlanejamentoPageFromCloud({
+      let page = await listDocumentosPlanejamentoPageFromCloud({
         busca: filtro.busca,
         status: filtro.status,
         offset: (filtro.page - 1) * filtro.pageSize,
         limit: filtro.pageSize,
       });
+
+      // Tabelas “inactivas” (source snapshot) com JWT residual: sync + 2.ª leitura.
+      if (!page.error && page.source !== 'tables') {
+        try {
+          await syncDocumentosPlanejamentoFromSnapshot();
+        } catch {
+          /* ignore */
+        }
+        page = await listDocumentosPlanejamentoPageFromCloud({
+          busca: filtro.busca,
+          status: filtro.status,
+          offset: (filtro.page - 1) * filtro.pageSize,
+          limit: filtro.pageSize,
+        });
+      }
+
       if (!page.error && page.source === 'tables') {
         const items: DocumentoListItem[] = page.documentos.map((d) => {
           const statusRaw = String(d.status ?? 'pendente');
@@ -704,9 +720,31 @@ export async function listarDocumentos(
             page: filtro.page,
             pageSize: filtro.pageSize,
           },
-          meta: { source: 'supabase' },
+          meta: {
+            source: 'supabase',
+            ...(page.total === 0
+              ? { fallbackReason: 'Nenhum desenho nas tabelas de escala para este filtro.' }
+              : {}),
+          },
         };
       }
+
+      // Nunca cair no seed local DOC-1001/1002 com Supabase ligado — mascara a nuvem.
+      return {
+        success: true,
+        data: {
+          items: [],
+          total: 0,
+          page: filtro.page,
+          pageSize: filtro.pageSize,
+        },
+        meta: {
+          source: 'supabase',
+          fallbackReason:
+            page.error ||
+            'Nao foi possivel listar desenhos na nuvem. Saia, Ctrl+F5 e entre de novo.',
+        },
+      };
     }
 
     const { enriched: comStatusPlanejamento } = await obterBundlePlanejamentoDocumentos();

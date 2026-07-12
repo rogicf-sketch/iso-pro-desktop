@@ -1,4 +1,7 @@
-import { ensureIsoProDataSessionReadable, isIsoProJwtSessionActive, clearIsoProJwtSession } from './isoProJwtSession';
+import {
+  clearIsoProJwtSession,
+  ensureIsoProDataSessionReadable,
+} from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase, hasSupabaseConfig } from './supabase';
 
@@ -127,14 +130,17 @@ export async function listDocumentosPlanejamentoPageFromCloud(options?: {
 
   let { data, error } = await invoke();
 
-  if (
-    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(error.message)) ||
-    (!error && isIsoProJwtSessionActive() && Number((data as { total?: number } | null)?.total ?? 0) === 0)
-  ) {
-    if (isIsoProJwtSessionActive()) {
-      await clearIsoProJwtSession();
-      ({ data, error } = await invoke());
-    }
+  const totalOf = (raw: unknown) => Number((raw as { total?: number } | null)?.total ?? 0);
+  const sourceOf = (raw: unknown) => String((raw as { _source?: string } | null)?._source ?? '');
+
+  const needsAnonRetry =
+    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(String(error.message))) ||
+    (!error && (totalOf(data) === 0 || sourceOf(data) === 'snapshot'));
+
+  if (needsAnonRetry) {
+    // Sessao Auth residual (mesmo sem flag) esconde linhas via RLS → seed local DOC-1001.
+    await clearIsoProJwtSession();
+    ({ data, error } = await invoke());
   }
 
   if (error) return { documentos: [], total: 0, source: 'error', error: error.message };
