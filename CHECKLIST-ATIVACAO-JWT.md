@@ -32,9 +32,11 @@ Aplica-se ao **iso-pro-desktop** (Web **0.1.75+**, Windows **0.1.75+**) e **iso_
 | P1.1 | Migration `20260712120000_iso_pro_resolver_auth_return_user.sql` (`db push`) | [x] | 2026-07-12 |
 | P1.2 | Desktop/Web login `authenticateIsoProPreferJwt` + audit `authPath` | [x] | `4615b01` / `web-v0.1.91` |
 | P1.3 | Mobile login prefer JWT | [x] | `69f875a` |
-| P1.4 | `npm run jwt:auditar-link` — listar `rpc_only` vs `jwt_ready` | [ ] | |
-| P1.5 | Ligar restantes activos (Fase 4) até `rpc_only = 0` | [ ] | |
+| P1.4 | `npm run jwt:auditar-link` — listar `rpc_only` vs `jwt_ready` | [x] | 2026-07-12: admin + ceci `jwt_ready`; restantes activos ainda podem ser `rpc_only` |
+| P1.5 | Ligar restantes activos (Fase 4) até `rpc_only = 0` | [ ] | **não bloqueia** operação (fallback RPC) |
 | P1.6 | Só então: staging + revogar EXECUTE anon em `iso_pro_autenticar_usuario` | [ ] | **não agora** |
+| P1.7 | Mobile APK com JWT-prefer + Sentry `auth_path` (`client: mobile`) | [x] | 2026-07-12: APK 1.0.61 — login OK + 1 atendimento OK |
+| P1.8 | Acompanhar Sentry `iso.auth_path` (web + mobile) ≥ alguns dias | [ ] | paths esperados: `jwt` / `rpc_fallback` / `rpc_only` |
 
 ## Fase 0 — Pré-requisitos (obrigatório)
 

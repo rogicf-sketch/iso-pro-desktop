@@ -1,3 +1,8 @@
+import {
+  clearIsoProJwtSession,
+  ensureIsoProDataSessionReadable,
+  isIsoProJwtSessionActive,
+} from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from './supabase';
 
@@ -31,17 +36,34 @@ export async function listMateriaisPageFromCloud(options?: {
   if (!hasSupabaseConfig() || !shouldUseCloudMaterials()) {
     return { materiais: [], total: 0, source: 'none', error: 'Materiais nuvem indisponiveis.' };
   }
-  const supabase = getSupabase();
-  if (!supabase) return { materiais: [], total: 0, source: 'none', error: 'Supabase indisponivel.' };
 
-  const { data, error } = await supabase.rpc('iso_pro_list_materiais_page', {
-    p_tenant_id: getActiveTenantId(),
-    p_busca: options?.busca?.trim() || null,
-    p_offset: options?.offset ?? 0,
-    p_limit: options?.limit ?? 50,
-    p_disciplina: options?.disciplina?.trim() || null,
-    p_ativo: options?.ativo && options.ativo !== 'todos' ? options.ativo : null,
-  });
+  await ensureIsoProDataSessionReadable();
+
+  const invoke = async () => {
+    const supabase = getSupabase();
+    if (!supabase) return { data: null as unknown, error: { message: 'Supabase indisponivel.' } };
+    return supabase.rpc('iso_pro_list_materiais_page', {
+      p_tenant_id: getActiveTenantId(),
+      p_busca: options?.busca?.trim() || null,
+      p_offset: options?.offset ?? 0,
+      p_limit: options?.limit ?? 50,
+      p_disciplina: options?.disciplina?.trim() || null,
+      p_ativo: options?.ativo && options.ativo !== 'todos' ? options.ativo : null,
+    });
+  };
+
+  let { data, error } = await invoke();
+
+  if (
+    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(String(error.message))) ||
+    (!error && isIsoProJwtSessionActive() && Number((data as { total?: number } | null)?.total ?? 0) === 0)
+  ) {
+    if (isIsoProJwtSessionActive()) {
+      await clearIsoProJwtSession();
+      ({ data, error } = await invoke());
+    }
+  }
+
   if (error) return { materiais: [], total: 0, source: 'error', error: error.message };
   const row = (data ?? {}) as {
     materiais?: unknown;

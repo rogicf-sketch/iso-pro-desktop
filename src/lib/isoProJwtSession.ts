@@ -62,7 +62,30 @@ function setJwtSessionActive(active: boolean): void {
   } catch {
     /* ignore */
   }
-  resetSupabaseClient();
+  // Nao resetar o cliente aqui: destruia a sessao em memoria e, com persistSession
+  // a mudar de false→true, o browser podia ficar authenticated sem claim tenant
+  // (Materiais/Planejamento a mostrar so o seed local DOC-1001 / EL-0102).
+}
+
+function tenantIdFromAccessToken(accessToken: string): string | null {
+  try {
+    const payloadB64 = accessToken.split('.')[1];
+    if (!payloadB64) return null;
+    const padded = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+    const padLen = (4 - (padded.length % 4)) % 4;
+    const json = atob(padded + '='.repeat(padLen));
+    const claims = JSON.parse(json) as {
+      tenant_id?: string;
+      app_metadata?: { tenant_id?: string };
+      user_metadata?: { tenant_id?: string };
+    };
+    const raw =
+      claims.tenant_id ?? claims.app_metadata?.tenant_id ?? claims.user_metadata?.tenant_id ?? '';
+    const t = String(raw).trim();
+    return t || null;
+  } catch {
+    return null;
+  }
 }
 
 function parseUserFromResolverBody(body: Record<string, unknown>): IsoProAuthRpcUser | null {
@@ -164,15 +187,40 @@ async function signInResolvedEmail(email: string, senha: string): Promise<JwtBoo
     return { kind: 'failed', reason: 'Supabase nao configurado.' };
   }
 
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password: senha.trim(),
   });
 
   if (error) {
     setJwtSessionActive(false);
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      /* ignore */
+    }
     console.warn('[I.S.O PRO] JWT bootstrap falhou; modo anon mantido:', error.message);
     return { kind: 'failed', reason: error.message };
+  }
+
+  const accessToken = data.session?.access_token ?? '';
+  const jwtTenant = accessToken ? tenantIdFromAccessToken(accessToken) : null;
+  const activeTenant = getActiveTenantId();
+  if (!jwtTenant || jwtTenant !== activeTenant) {
+    console.warn('[I.S.O PRO] JWT sem tenant_id alinhado; modo anon (rpc_fallback).', {
+      jwtTenant,
+      activeTenant,
+    });
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      /* ignore */
+    }
+    setJwtSessionActive(false);
+    return {
+      kind: 'failed',
+      reason: 'JWT sem claim tenant_id (hook/membership). Continua em modo anon.',
+    };
   }
 
   const mfa = await detectMfaRequired();
@@ -263,6 +311,24 @@ export async function clearIsoProJwtSession(): Promise<void> {
     }
   }
   setJwtSessionActive(false);
+  resetSupabaseClient();
+}
+
+/** Se a sessao Auth estiver desalinhada (RLS a esconder dados), volta a anon. */
+export async function ensureIsoProDataSessionReadable(): Promise<void> {
+  if (!isIsoProJwtSessionActive()) return;
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token ?? '';
+    const jwtTenant = token ? tenantIdFromAccessToken(token) : null;
+    if (!jwtTenant || jwtTenant !== getActiveTenantId()) {
+      await clearIsoProJwtSession();
+    }
+  } catch {
+    await clearIsoProJwtSession();
+  }
 }
 
 export function setIsoProJwtAuthOptIn(enabled: boolean): void {

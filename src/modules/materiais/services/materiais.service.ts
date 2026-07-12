@@ -702,7 +702,7 @@ export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceRe
           meta: { source: 'supabase' },
         };
       }
-    } else {
+    } else if (localPage.total > 10) {
       void cloudPromise.catch(() => undefined);
       return {
         success: true,
@@ -714,6 +714,40 @@ export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceRe
         },
         meta: { source: 'local', staleWhileRevalidate: true },
       };
+    } else {
+      // Cache local parece seed/demo (≤10) — nao mascarar a nuvem; espera a RPC.
+      try {
+        const page = await cloudPromise;
+        if (page.source === 'tables' && !page.error && page.total > 0) {
+          const mapped: Material[] = page.materiais.map((row) => ({
+            id: String(row.id ?? ''),
+            codigo: String(row.codigo ?? ''),
+            codigoBarras: String(row.codigoBarras ?? ''),
+            descricao: String(row.descricao ?? ''),
+            diametro: String(row.diametro ?? ''),
+            disciplina: String(row.disciplina ?? ''),
+            unidade: String(row.unidade ?? 'UN'),
+            peso: Number(row.peso) || 0,
+            estoqueMinimo: Number(row.estoqueMinimo) || 0,
+            saldoAtual: 0,
+            ativo: row.ativo !== false,
+            observacao: String(row.observacao ?? ''),
+          }));
+          const withSaldo = await aplicarSaldoCalculadoNosMateriais(mapped);
+          return {
+            success: true,
+            data: {
+              items: withSaldo.map(toListItem),
+              total: page.total,
+              page: filtro.page,
+              pageSize: filtro.pageSize,
+            },
+            meta: { source: 'supabase' },
+          };
+        }
+      } catch {
+        /* cai no fallback abaixo */
+      }
     }
   }
 

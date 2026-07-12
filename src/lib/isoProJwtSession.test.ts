@@ -33,6 +33,12 @@ const sampleUser = {
   permissoes: [],
 };
 
+function accessTokenWithTenant(tenantId: string): string {
+  const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }));
+  const payload = btoa(JSON.stringify({ tenant_id: tenantId, role: 'authenticated' }));
+  return `${header}.${payload}.sig`;
+}
+
 describe('isoProJwtSession', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,7 +79,10 @@ describe('isoProJwtSession', () => {
   });
 
   it('authenticateIsoProPreferJwt usa path jwt quando signIn ok', async () => {
-    const signInWithPassword = vi.fn(async () => ({ data: { session: {} }, error: null }));
+    const signInWithPassword = vi.fn(async () => ({
+      data: { session: { access_token: accessTokenWithTenant('tenant-1') } },
+      error: null,
+    }));
     const getAuthenticatorAssuranceLevel = vi.fn(async () => ({
       data: { currentLevel: 'aal1', nextLevel: 'aal1' },
       error: null,
@@ -135,7 +144,10 @@ describe('isoProJwtSession', () => {
         error: null,
       })),
       auth: {
-        signInWithPassword: vi.fn(async () => ({ data: { session: {} }, error: null })),
+        signInWithPassword: vi.fn(async () => ({
+          data: { session: { access_token: accessTokenWithTenant('tenant-1') } },
+          error: null,
+        })),
         mfa: {
           getAuthenticatorAssuranceLevel: vi.fn(async () => ({
             data: { currentLevel: 'aal1', nextLevel: 'aal2' },

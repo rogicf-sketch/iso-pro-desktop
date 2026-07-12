@@ -1,3 +1,4 @@
+import { ensureIsoProDataSessionReadable, isIsoProJwtSessionActive, clearIsoProJwtSession } from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase, hasSupabaseConfig } from './supabase';
 
@@ -109,16 +110,33 @@ export async function listDocumentosPlanejamentoPageFromCloud(options?: {
   if (!hasSupabaseConfig()) {
     return { documentos: [], total: 0, source: 'none', error: 'Supabase nao configurado.' };
   }
-  const supabase = getSupabase();
-  if (!supabase) return { documentos: [], total: 0, source: 'none', error: 'Supabase indisponivel.' };
 
-  const { data, error } = await supabase.rpc('iso_pro_list_documentos_planejamento_page', {
-    p_tenant_id: getActiveTenantId(),
-    p_busca: options?.busca?.trim() || null,
-    p_offset: options?.offset ?? 0,
-    p_limit: options?.limit ?? 50,
-    p_status: options?.status && options.status !== 'todos' ? options.status : null,
-  });
+  await ensureIsoProDataSessionReadable();
+
+  const invoke = async () => {
+    const supabase = getSupabase();
+    if (!supabase) return { data: null as unknown, error: { message: 'Supabase indisponivel.' } };
+    return supabase.rpc('iso_pro_list_documentos_planejamento_page', {
+      p_tenant_id: getActiveTenantId(),
+      p_busca: options?.busca?.trim() || null,
+      p_offset: options?.offset ?? 0,
+      p_limit: options?.limit ?? 50,
+      p_status: options?.status && options.status !== 'todos' ? options.status : null,
+    });
+  };
+
+  let { data, error } = await invoke();
+
+  if (
+    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(error.message)) ||
+    (!error && isIsoProJwtSessionActive() && Number((data as { total?: number } | null)?.total ?? 0) === 0)
+  ) {
+    if (isIsoProJwtSessionActive()) {
+      await clearIsoProJwtSession();
+      ({ data, error } = await invoke());
+    }
+  }
+
   if (error) return { documentos: [], total: 0, source: 'error', error: error.message };
   const row = (data ?? {}) as {
     documentos?: unknown;
