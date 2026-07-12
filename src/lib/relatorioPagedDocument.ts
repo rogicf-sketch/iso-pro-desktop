@@ -119,7 +119,10 @@ export function montarDocumentoHtmlInstitucionalPaged(opts: DocumentoHtmlRelator
   const lang = opts.lang ?? 'pt-BR';
   const toolbar = opts.includeToolbar !== false;
   const usePaged = opts.usePagedJs !== false;
-  const pagedCss = usePaged ? cssPagedMediaAtPage(opts.pagedAtPage ?? { runningHeaderName: 'isoRunHdr' }) : '';
+  const pagedCss =
+    opts.pagedAtPage != null || usePaged
+      ? cssPagedMediaAtPage(opts.pagedAtPage ?? { runningHeaderName: 'isoRunHdr' })
+      : '';
   const previewCss = usePaged ? cssPagedMediaPreview() : cssRelatorioNativoPreview();
   const runningCss = usePaged ? (opts.runningHeaderCss ?? '') : '';
   const barraCss = toolbar ? cssBarraPreVisualizacaoImpressaoHtml() : '';
@@ -144,7 +147,7 @@ export function montarDocumentoHtmlInstitucionalPaged(opts: DocumentoHtmlRelator
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${opts.title}</title>
   <style>
-    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html { color-scheme: light; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     ${barraCss}
     ${opts.reportStyles}
     ${runningCss}

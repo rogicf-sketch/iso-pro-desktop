@@ -51,6 +51,89 @@ export function resolverUrlLogoRecibo(dados: DadosReciboAtendimento): string {
   return resolverUrlLogoInstitucional(dados.logoUrl);
 }
 
+/** Badge / bloco compacto do tipo de retirada (auditoria). */
+function htmlBlocoTipoRetirada(
+  dados: Pick<DadosReciboAtendimento, 'detalhesRetiradaExterna'>,
+): string {
+  if (dados.detalhesRetiradaExterna) {
+    const e = dados.detalhesRetiradaExterna;
+    return `
+    <section class="bloco recibo-bloco-tipo recibo-bloco-tipo--externa">
+      <h2>Retirada externa</h2>
+      <div class="grid2 recibo-grid-externo">
+        <p><strong>Documento (ID):</strong> ${escapeHtmlRelatorio(e.documentoIdentificacao)}</p>
+        <p><strong>Telefone:</strong> ${escapeHtmlRelatorio(e.telefone)}</p>
+        <p><strong>Autorizador interno:</strong> ${escapeHtmlRelatorio(e.autorizadorInterno)}</p>
+        <p><strong>Motivo da retirada:</strong> ${escapeHtmlRelatorio(e.motivoRetirada)}</p>
+      </div>
+    </section>`;
+  }
+  return `
+    <p class="recibo-tipo-badge" role="note">
+      <strong>Retirada interna</strong> — material entregue a colaborador cadastrado; identificacao vinculada ao registro deste atendimento (arquivo e auditoria).
+    </p>`;
+}
+
+export function htmlAssinaturasRecibo(
+  atendenteNome: string,
+  atendenteMeta: string,
+  atendidoNome: string,
+  atendidoMeta: string,
+  rotulos?: { atendente?: string; atendido?: string },
+): string {
+  const rotuloAt = rotulos?.atendente ?? 'Atendente (operador)';
+  const rotuloRec = rotulos?.atendido ?? 'Atendido (quem retirou)';
+  return `
+  <section class="assinaturas" aria-label="Assinaturas">
+    <div class="assinatura-box">
+      <p class="rotulo-ass">${escapeHtmlRelatorio(rotuloAt)}</p>
+      <div class="espaco-assinatura" aria-hidden="true"></div>
+      <div class="linha-ass" aria-hidden="true"></div>
+      <div class="bloco-ass-pessoa">
+        <p class="ass-nome-principal">${escapeHtmlRelatorio(atendenteNome)}</p>
+        <p class="ass-meta-linha">${escapeHtmlRelatorio(atendenteMeta)}</p>
+      </div>
+    </div>
+    <div class="assinatura-box">
+      <p class="rotulo-ass">${escapeHtmlRelatorio(rotuloRec)}</p>
+      <div class="espaco-assinatura" aria-hidden="true"></div>
+      <div class="linha-ass" aria-hidden="true"></div>
+      <div class="bloco-ass-pessoa">
+        <p class="ass-nome-principal">${escapeHtmlRelatorio(atendidoNome)}</p>
+        <p class="ass-meta-linha">${escapeHtmlRelatorio(atendidoMeta)}</p>
+      </div>
+    </div>
+  </section>`;
+}
+
+function htmlLinhaItemRecibo(
+  idx: number,
+  codigo: string,
+  descricao: string,
+  unidade: string,
+  quantidade: number,
+  documentoNumero?: string,
+): string {
+  const colDoc =
+    documentoNumero != null && documentoNumero !== ''
+      ? `<td class="col-doc">${escapeHtmlRelatorio(documentoNumero)}</td>`
+      : '';
+  return `<tr>
+          <td class="col-num">${idx + 1}</td>${colDoc}
+          <td class="col-codigo">${escapeHtmlRelatorio(codigo)}</td>
+          <td class="col-desc">${escapeHtmlRelatorio(descricao)}</td>
+          <td class="col-un">${escapeHtmlRelatorio(unidade)}</td>
+          <td class="col-qtd">${escapeHtmlRelatorio(String(quantidade))}</td>
+        </tr>`;
+}
+
+function reciboAtendimentoTemVariosDocumentos(at: Atendimento): boolean {
+  const nums = new Set(
+    at.itens.map((it) => String(it.documentoNumero ?? '').trim()).filter((n) => n && n !== '-'),
+  );
+  return nums.size > 1 || at.documentoNumero === 'MULTIPLOS';
+}
+
 export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   const at = dados.atendimento;
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso(dados.logoUrl);
@@ -65,37 +148,29 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     }
   })();
 
-  const docTitulo = `${escapeHtmlRelatorio(at.documentoNumero)} Rev. ${escapeHtmlRelatorio(dados.documentoRevisao)}`;
+  const docTitulo =
+    at.documentoNumero === 'MULTIPLOS' || reciboAtendimentoTemVariosDocumentos(at)
+      ? 'Varios desenhos (ver coluna Documento)'
+      : `${escapeHtmlRelatorio(at.documentoNumero)} Rev. ${escapeHtmlRelatorio(dados.documentoRevisao)}`;
 
-  const blocoExterno = dados.detalhesRetiradaExterna
-    ? `
-    <section class="bloco">
-      <h2>Dados do retirante (externo)</h2>
-      <p><strong>Documento (ID):</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.documentoIdentificacao)}</p>
-      <p><strong>Telefone:</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.telefone)}</p>
-      <p><strong>Autorizador interno:</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.autorizadorInterno)}</p>
-      <p><strong>Motivo da retirada:</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.motivoRetirada)}</p>
-    </section>`
-    : `
-    <section class="bloco">
-      <h2>Retirada interna</h2>
-      <p>Material retirado por colaborador cadastrado (identificacao vinculada ao registro do atendimento).</p>
-    </section>`;
+  const blocoExterno = htmlBlocoTipoRetirada(dados);
 
+  const mostrarColDoc = reciboAtendimentoTemVariosDocumentos(at);
   const linhasHtml = at.itens
-    .map(
-      (it, idx) =>
-        `<tr>
-          <td>${idx + 1}</td>
-          <td>${escapeHtmlRelatorio(it.codigoMaterial)}</td>
-          <td>${escapeHtmlRelatorio(it.descricaoMaterial)}</td>
-          <td>${escapeHtmlRelatorio(it.unidade)}</td>
-          <td class="num">${escapeHtmlRelatorio(String(it.quantidadeAtendida))}</td>
-        </tr>`,
+    .map((it, idx) =>
+      htmlLinhaItemRecibo(
+        idx,
+        it.codigoMaterial,
+        it.descricaoMaterial,
+        it.unidade,
+        it.quantidadeAtendida,
+        mostrarColDoc ? (it.documentoNumero?.trim() || at.documentoNumero || '—') : undefined,
+      ),
     )
     .join('');
 
   const total = totalQuantidadeItens(at);
+  const classeDensidade = at.itens.length > 6 ? ' recibo-body--denso' : '';
 
   const extraRecibo = cssReciboAtendimentoBase();
 
@@ -111,7 +186,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     ${extraRecibo}
   </style>
 </head>
-<body class="recibo-body">
+<body class="recibo-body${classeDensidade}">
   ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
   <div class="inst-topbar recibo-topbar">
@@ -119,9 +194,9 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     <span>Recibo ${escapeHtmlRelatorio(at.numero)}</span>
   </div>
 
-  <header class="recibo-header-main">
+  <header class="recibo-header-main recibo-header-main--titulo-centro">
     <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
-    <div class="inst-title-col">
+    <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de retirada de material</h1>
     </div>
   </header>
@@ -143,44 +218,35 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
 
   <section class="bloco recibo-bloco-itens">
     <h2>Itens desta retirada</h2>
-    <table>
+    <div class="recibo-tabela-wrap">
+    <table class="recibo-tabela-itens">
       <thead>
         <tr>
-          <th>#</th>
-          <th>Codigo</th>
-          <th>Descricao do material</th>
-          <th>UN</th>
-          <th>Quantidade</th>
+          <th class="col-num">#</th>${mostrarColDoc ? '<th class="col-doc">Documento</th>' : ''}
+          <th class="col-codigo">Codigo</th>
+          <th class="col-desc">Descricao do material</th>
+          <th class="col-un">UN</th>
+          <th class="col-qtd">Qtd</th>
         </tr>
       </thead>
       <tbody>${linhasHtml}</tbody>
     </table>
-    <div class="recibo-total-linha"><strong>Total de unidades (esta operacao):</strong> ${escapeHtmlRelatorio(String(total))}</div>
+    </div>
   </section>
 
-  <section class="assinaturas">
-    <div class="assinatura-box">
-      <div class="linha-ass"></div>
-      <p class="rotulo-ass">Atendente (operador)</p>
-      <div class="bloco-ass-pessoa">
-        <p class="ass-nome-principal">${escapeHtmlRelatorio(nomeExibicaoAtendenteAssinatura(at))}</p>
-        <p class="ass-meta-linha">${escapeHtmlRelatorio(
-          linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.atendenteMatricula), textoReciboOuEmDash(at.atendenteFuncao)),
-        )}</p>
-      </div>
-    </div>
-    <div class="assinatura-box">
-      <div class="linha-ass"></div>
-      <p class="rotulo-ass">Atendido (quem retirou)</p>
-      <div class="bloco-ass-pessoa">
-        <p class="ass-nome-principal">${escapeHtmlRelatorio(at.recebedor.trim() || dados.nomeAtendido.trim() || '—')}</p>
-        <p class="ass-meta-linha">${escapeHtmlRelatorio(
-          linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.recebedorMatricula), textoReciboOuEmDash(at.recebedorFuncao)),
-        )}</p>
-      </div>
-    </div>
-  </section>
-  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(at.numero)}.</p>
+  <div class="recibo-fechamento">
+    <div class="recibo-total-linha"><strong>Total de unidades (esta operacao):</strong> ${escapeHtmlRelatorio(String(total))}</div>
+
+  <div class="recibo-rodape-fin">
+  ${htmlAssinaturasRecibo(
+    nomeExibicaoAtendenteAssinatura(at),
+    linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.atendenteMatricula), textoReciboOuEmDash(at.atendenteFuncao)),
+    at.recebedor.trim() || dados.nomeAtendido.trim() || '—',
+    linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.recebedorMatricula), textoReciboOuEmDash(at.recebedorFuncao)),
+  )}
+  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(at.numero)}.</p>
+  </div>
+  </div>
   </div>
   ${scriptBarraPreVisualizacaoImpressao()}
 </body>
@@ -222,7 +288,7 @@ function totalQuantidadeSecao(at: Atendimento): number {
   return at.itens.reduce((acc, it) => acc + (Number(it.quantidadeAtendida) || 0), 0);
 }
 
-function cssReciboAtendimentoBase(): string {
+export function cssReciboAtendimentoBase(): string {
   return `
     body.recibo-body { padding: 0; color: #0f172a; }
     @media screen {
@@ -241,6 +307,10 @@ function cssReciboAtendimentoBase(): string {
         border: 1px solid rgba(148, 163, 184, 0.45);
       }
     }
+    @page {
+      size: A4 portrait;
+      margin: 10mm 12mm 11mm;
+    }
     @media print {
       body.recibo-body { background: #fff !important; padding: 0 !important; }
       .recibo-sheet {
@@ -248,9 +318,175 @@ function cssReciboAtendimentoBase(): string {
         border: none !important;
         border-radius: 0 !important;
         max-width: none !important;
-        padding: 8px 0 0 !important;
+        padding: 0 !important;
         margin: 0 !important;
       }
+      .recibo-topbar {
+        margin-bottom: 8px !important;
+        padding: 6px 10px !important;
+        font-size: 8.5pt !important;
+      }
+      .recibo-header-main {
+        margin-bottom: 10px !important;
+        padding-bottom: 10px !important;
+        gap: 10px !important;
+      }
+      .recibo-header-main--titulo-centro {
+        position: relative !important;
+        display: block !important;
+        min-height: 48px !important;
+      }
+      .recibo-header-main--titulo-centro .recibo-logo-wrap {
+        position: relative !important;
+        z-index: 2 !important;
+        display: inline-block !important;
+      }
+      .recibo-header-main--titulo-centro .recibo-titulo-centro {
+        position: absolute !important;
+        left: 0 !important;
+        right: 0 !important;
+        top: 50% !important;
+        transform: translateY(-50%) !important;
+        width: 100% !important;
+        text-align: center !important;
+        z-index: 1 !important;
+      }
+      .recibo-header-main--titulo-centro .recibo-titulo-centro h1 {
+        font-size: 13pt !important;
+        text-align: center !important;
+        display: inline-block !important;
+        max-width: 72% !important;
+      }
+      .recibo-header-main--titulo-centro .recibo-titulo-centro h1::after {
+        margin-top: 6px !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        height: 2px !important;
+        width: 48px !important;
+      }
+      .recibo-subtitulo-consolidado {
+        font-size: 9pt !important;
+        margin-top: 4px !important;
+      }
+      .recibo-logo-wrap .inst-logo-img {
+        max-height: 44px !important;
+        max-width: 112px !important;
+        padding: 4px !important;
+      }
+      .recibo-bloco-info {
+        padding: 10px 12px !important;
+        margin-bottom: 8px !important;
+      }
+      .recibo-bloco-info .grid2 p,
+      .recibo-doc-desc,
+      .recibo-grid-externo p {
+        font-size: 9pt !important;
+        margin: 3px 0 !important;
+      }
+      .recibo-bloco-info .recibo-doc-desc {
+        margin-top: 8px !important;
+        padding-top: 8px !important;
+      }
+      .recibo-tipo-badge {
+        margin: 0 0 8px !important;
+        padding: 6px 10px !important;
+        font-size: 8.5pt !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .recibo-bloco-tipo--externa {
+        padding: 8px 12px !important;
+        margin-bottom: 8px !important;
+      }
+      .bloco h2 { margin-bottom: 6px !important; font-size: 7.5pt !important; }
+      .recibo-bloco-itens { margin-bottom: 8px !important; }
+      .recibo-bloco-itens h2 { margin-bottom: 6px !important; }
+      .recibo-tabela-wrap { margin-top: 4px !important; }
+      .recibo-tabela-itens { font-size: 9pt !important; }
+      .recibo-tabela-itens th,
+      .recibo-tabela-itens td {
+        padding: 5px 10px !important;
+      }
+      .recibo-tabela-itens thead th {
+        padding: 6px 10px !important;
+        font-size: 7.5pt !important;
+      }
+      .recibo-total-linha {
+        margin-top: 8px !important;
+        padding: 6px 10px !important;
+        font-size: 9.5pt !important;
+      }
+      .recibo-total-geral {
+        margin-top: 10px !important;
+        padding: 8px 12px !important;
+        font-size: 10pt !important;
+      }
+      .recibo-rodape-fin {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .recibo-fechamento {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .assinaturas {
+        margin-top: 10px !important;
+        gap: 18px !important;
+      }
+      .assinatura-box {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        text-align: center !important;
+      }
+      .linha-ass {
+        margin: 0 0 6px !important;
+        width: 88% !important;
+        max-width: 280px !important;
+      }
+      .espaco-assinatura {
+        width: 88% !important;
+        max-width: 280px !important;
+        min-height: 36px !important;
+      }
+      .rotulo-ass { margin: 0 0 2px !important; font-size: 8pt !important; text-align: center !important; width: 100%; }
+      .ass-nome-principal { font-size: 10pt !important; margin: 0 0 2px !important; text-align: center !important; width: 100%; }
+      .ass-meta-linha { font-size: 8.5pt !important; text-align: center !important; width: 100%; }
+      .bloco-ass-pessoa {
+        margin: 0 !important;
+        width: 88% !important;
+        max-width: 280px !important;
+        text-align: center !important;
+      }
+      body.recibo-body--denso .recibo-tabela-itens { font-size: 8.25pt !important; }
+      body.recibo-body--denso .recibo-tabela-itens th,
+      body.recibo-body--denso .recibo-tabela-itens td {
+        padding: 3px 8px !important;
+      }
+      body.recibo-body--denso .recibo-tabela-itens .col-desc { line-height: 1.28 !important; }
+      body.recibo-body--denso .recibo-tabela-itens thead th { font-size: 7pt !important; padding: 4px 8px !important; }
+      .recibo-doc-foot {
+        margin-top: 8px !important;
+        padding-top: 6px !important;
+        font-size: 7pt !important;
+      }
+      .recibo-bloco-itens tbody tr:nth-child(even) { background: transparent !important; }
+      .recibo-tabela-itens tbody tr:nth-child(even) { background: #f8fafc !important; }
+      .recibo-total-linha,
+      .recibo-total-geral,
+      .recibo-bloco-info,
+      .recibo-tipo-badge,
+      .recibo-bloco-tipo--externa {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .recibo-secao-doc h2,
+      .recibo-secao-meta,
+      .recibo-secao-doc .recibo-total-linha {
+        page-break-after: avoid;
+      }
+      .recibo-bloco-itens thead { display: table-header-group; }
+      .recibo-tabela-itens tr { page-break-inside: avoid; }
     }
     .recibo-topbar.inst-topbar {
       margin-bottom: 22px;
@@ -282,7 +518,45 @@ function cssReciboAtendimentoBase(): string {
       padding-bottom: 20px;
       border-bottom: 1px solid #e2e8f0;
     }
-    .recibo-header-main .inst-title-col h1 {
+    .recibo-header-main--titulo-centro {
+      position: relative;
+      display: block;
+      min-height: 56px;
+    }
+    .recibo-header-main--titulo-centro .recibo-logo-wrap {
+      position: relative;
+      z-index: 2;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .recibo-header-main--titulo-centro .recibo-titulo-centro {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 100%;
+      text-align: center;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .recibo-header-main--titulo-centro .recibo-titulo-centro h1 {
+      display: inline-block;
+      text-align: center;
+      max-width: 72%;
+    }
+    .recibo-header-main--titulo-centro .recibo-titulo-centro h1::after {
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .recibo-subtitulo-consolidado {
+      margin: 8px 0 0;
+      font-size: 11pt;
+      color: #475569;
+      text-align: center;
+    }
+    .recibo-header-main .inst-title-col h1,
+    .recibo-header-main .recibo-titulo-centro h1 {
       font-size: 1.45rem;
       font-weight: 700;
       letter-spacing: -0.025em;
@@ -292,7 +566,8 @@ function cssReciboAtendimentoBase(): string {
       border-bottom: none;
       line-height: 1.25;
     }
-    .recibo-header-main .inst-title-col h1::after {
+    .recibo-header-main .inst-title-col h1::after,
+    .recibo-header-main .recibo-titulo-centro h1::after {
       content: '';
       display: block;
       margin-top: 12px;
@@ -316,6 +591,26 @@ function cssReciboAtendimentoBase(): string {
       padding-top: 12px;
       border-top: 1px dashed #cbd5e1;
     }
+    .recibo-tipo-badge {
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      font-size: 10pt;
+      line-height: 1.45;
+      color: #334155;
+      background: linear-gradient(90deg, #f0fdfa 0%, #f8fafc 100%);
+      border: 1px solid #99f6e4;
+      border-left: 4px solid #0d9488;
+      border-radius: 8px;
+    }
+    .recibo-tipo-badge strong { color: #0f766e; font-weight: 700; }
+    .recibo-bloco-tipo--externa {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 14px 18px 16px;
+      margin-bottom: 18px;
+    }
+    .recibo-grid-externo p { margin: 6px 0; font-size: 10.5pt; color: #334155; }
     .bloco h2 {
       font-size: 0.78rem;
       font-weight: 700;
@@ -326,40 +621,85 @@ function cssReciboAtendimentoBase(): string {
     }
     .bloco:not(.recibo-bloco-itens) { margin-bottom: 18px; }
     .bloco:not(.recibo-bloco-itens) p { color: #334155; line-height: 1.5; }
-    section.bloco:not(.recibo-bloco-info):not(.recibo-bloco-itens) {
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 14px 18px 16px;
-      margin-bottom: 18px;
-    }
-    section.bloco:not(.recibo-bloco-info):not(.recibo-bloco-itens) h2 { margin-top: 0; }
-    section.bloco:not(.recibo-bloco-info):not(.recibo-bloco-itens) p { margin: 8px 0 0; font-size: 10.5pt; color: #475569; }
-    .recibo-bloco-itens table {
-      width: 100%;
-      border-collapse: collapse;
+    .recibo-tabela-wrap {
+      margin-top: 10px;
       border: 1px solid #e2e8f0;
       border-radius: 10px;
       overflow: hidden;
+      background: #fff;
+    }
+    .recibo-tabela-itens {
+      width: 100%;
+      border-collapse: collapse;
+      border: none !important;
       font-size: 10pt;
-      margin-top: 10px;
+      margin-top: 0 !important;
     }
-    .recibo-bloco-itens th {
-      background: #f1f5f9 !important;
-      color: #334155;
-      font-weight: 600;
-      border-color: #e2e8f0 !important;
-      padding: 10px 10px !important;
+    .recibo-tabela-itens th,
+    .recibo-tabela-itens td {
+      border: none !important;
+      padding: 10px 12px;
       text-align: left;
-    }
-    .recibo-bloco-itens td {
-      border-color: #e2e8f0 !important;
-      padding: 9px 10px !important;
       vertical-align: top;
-      border-bottom: 1px solid #e2e8f0;
     }
-    .recibo-bloco-itens td.num { text-align: right; white-space: nowrap; }
-    .recibo-bloco-itens tbody tr:nth-child(even) { background: #fafbfc; }
+    .recibo-tabela-itens thead th {
+      background: linear-gradient(180deg, #f0fdfa 0%, #ecfdf5 100%) !important;
+      border-bottom: 2px solid #0d9488 !important;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #0f766e !important;
+      padding: 9px 12px;
+    }
+    .recibo-tabela-itens tbody td {
+      border-bottom: 1px solid #eef2f6 !important;
+      color: #334155;
+    }
+    .recibo-tabela-itens tbody tr:last-child td { border-bottom: none !important; }
+    .recibo-tabela-itens tbody tr:nth-child(even) { background: #f8fafc; }
+    .recibo-tabela-itens tbody tr:hover { background: #f0fdfa; }
+    .recibo-tabela-itens .col-num {
+      width: 32px;
+      text-align: center;
+      color: #94a3b8;
+      font-size: 9pt;
+      font-variant-numeric: tabular-nums;
+    }
+    .recibo-tabela-itens .col-codigo {
+      width: 18%;
+      font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+      font-size: 8.5pt;
+      color: #475569;
+      word-break: break-all;
+    }
+    .recibo-tabela-itens .col-doc {
+      width: 14%;
+      font-size: 9pt;
+      word-break: break-word;
+    }
+    .recibo-tabela-itens .col-desc {
+      color: #0f172a;
+      line-height: 1.38;
+    }
+    .recibo-tabela-itens .col-un {
+      width: 44px;
+      text-align: center;
+      color: #64748b;
+      font-size: 9pt;
+      white-space: nowrap;
+    }
+    .recibo-tabela-itens .col-qtd {
+      width: 52px;
+      text-align: right;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #0d9488;
+      white-space: nowrap;
+    }
+    .recibo-tabela-itens thead .col-qtd { text-align: right; }
+    .recibo-tabela-itens thead .col-num,
+    .recibo-tabela-itens thead .col-un { text-align: center; }
     .recibo-total-linha {
       margin-top: 14px;
       padding: 10px 14px;
@@ -404,30 +744,79 @@ function cssReciboAtendimentoBase(): string {
       margin: 0 0 10px;
       line-height: 1.45;
     }
-    .assinaturas { margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; page-break-inside: avoid; }
-    .assinatura-box { text-align: center; }
-    .linha-ass { border-top: 1px solid #0f172a; margin: 40px 8px 0; padding-top: 8px; }
-    .rotulo-ass { font-weight: 700; font-size: 9pt; color: #475569; margin: 10px 0 0; letter-spacing: 0.02em; }
-    .bloco-ass-pessoa { margin: 8px auto 0; max-width: 340px; text-align: left; }
-    .ass-nome-principal { font-size: 11pt; font-weight: 650; color: #0f172a; margin: 6px 0 3px; line-height: 1.28; }
-    .ass-meta-linha { font-size: 9.25pt; color: #64748b; margin: 0; line-height: 1.45; }
+    .assinaturas {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+    }
+    .assinatura-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .rotulo-ass {
+      font-weight: 700;
+      font-size: 9pt;
+      color: #475569;
+      margin: 0 0 4px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      width: 100%;
+      text-align: center;
+    }
+    .espaco-assinatura {
+      width: 88%;
+      max-width: 280px;
+      min-height: 48px;
+      flex-shrink: 0;
+    }
+    .bloco-ass-pessoa {
+      margin: 0;
+      width: 88%;
+      max-width: 280px;
+      text-align: center;
+    }
+    .ass-nome-principal {
+      font-size: 11pt;
+      font-weight: 650;
+      color: #0f172a;
+      margin: 0 0 3px;
+      line-height: 1.28;
+      text-align: center;
+      width: 100%;
+    }
+    .ass-meta-linha {
+      font-size: 9.25pt;
+      color: #64748b;
+      margin: 0;
+      line-height: 1.45;
+      text-align: center;
+      width: 100%;
+    }
+    .linha-ass {
+      border-top: 1px solid #0f172a;
+      margin: 0 0 8px;
+      width: 88%;
+      max-width: 280px;
+      min-height: 1px;
+    }
+    .recibo-fechamento {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    body.recibo-body--denso .recibo-tabela-itens .col-desc { line-height: 1.28; font-size: 8.5pt; }
+    body.recibo-body--denso .recibo-tabela-itens th,
+    body.recibo-body--denso .recibo-tabela-itens td { padding: 6px 10px; }
     .recibo-doc-foot {
-      margin-top: 18px;
+      margin-top: 16px;
       padding-top: 10px;
       border-top: 1px solid #cbd5e1;
       font-size: 8pt;
       color: #64748b;
       line-height: 1.45;
       text-align: center;
-      page-break-inside: avoid;
-    }
-    @media print {
-      .assinaturas { margin-top: 28px; }
-      .recibo-bloco-itens tbody tr:nth-child(even) { background: transparent; }
-      .recibo-total-linha, .recibo-total-geral { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      .recibo-secao-doc h2, .recibo-secao-meta, .recibo-secao-doc .recibo-total-linha { page-break-after: avoid; }
-      .recibo-bloco-itens thead { display: table-header-group; }
-      .recibo-bloco-itens tr { page-break-inside: avoid; }
     }
   `;
 }
@@ -445,20 +834,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
     }
   })();
 
-  const blocoExterno = dados.detalhesRetiradaExterna
-    ? `
-    <section class="bloco">
-      <h2>Dados do retirante (externo)</h2>
-      <p><strong>Documento (ID):</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.documentoIdentificacao)}</p>
-      <p><strong>Telefone:</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.telefone)}</p>
-      <p><strong>Autorizador interno:</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.autorizadorInterno)}</p>
-      <p><strong>Motivo da retirada:</strong> ${escapeHtmlRelatorio(dados.detalhesRetiradaExterna.motivoRetirada)}</p>
-    </section>`
-    : `
-    <section class="bloco">
-      <h2>Retirada interna</h2>
-      <p>Material retirado por colaborador cadastrado (identificacao vinculada ao registro do atendimento).</p>
-    </section>`;
+  const blocoExterno = htmlBlocoTipoRetirada(dados);
 
   let totalGeral = 0;
   const secoesHtml = dados.secoes
@@ -467,15 +843,8 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
       const subtotal = totalQuantidadeSecao(at);
       totalGeral += subtotal;
       const linhasHtml = at.itens
-        .map(
-          (it, idx) =>
-            `<tr>
-              <td>${idx + 1}</td>
-              <td>${escapeHtmlRelatorio(it.codigoMaterial)}</td>
-              <td>${escapeHtmlRelatorio(it.descricaoMaterial)}</td>
-              <td>${escapeHtmlRelatorio(it.unidade)}</td>
-              <td class="num">${escapeHtmlRelatorio(String(it.quantidadeAtendida))}</td>
-            </tr>`,
+        .map((it, idx) =>
+          htmlLinhaItemRecibo(idx, it.codigoMaterial, it.descricaoMaterial, it.unidade, it.quantidadeAtendida),
         )
         .join('');
       const docTitulo = `${escapeHtmlRelatorio(at.documentoNumero)} Rev. ${escapeHtmlRelatorio(secao.documentoRevisao)}`;
@@ -484,18 +853,20 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
         <h2>Documento ${docTitulo}</h2>
         <p class="recibo-secao-meta"><strong>Lote:</strong> ${escapeHtmlRelatorio(at.numero)} · <strong>Responsavel:</strong> ${escapeHtmlRelatorio(secao.documentoResponsavel || '—')}</p>
         <p class="recibo-doc-desc"><strong>Descricao do documento</strong><br/>${escapeHtmlRelatorio(secao.documentoDescricao || '—')}</p>
-        <table>
+        <div class="recibo-tabela-wrap">
+        <table class="recibo-tabela-itens">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Codigo</th>
-              <th>Descricao do material</th>
-              <th>UN</th>
-              <th>Quantidade</th>
+              <th class="col-num">#</th>
+              <th class="col-codigo">Codigo</th>
+              <th class="col-desc">Descricao do material</th>
+              <th class="col-un">UN</th>
+              <th class="col-qtd">Qtd</th>
             </tr>
           </thead>
           <tbody>${linhasHtml}</tbody>
         </table>
+        </div>
         <div class="recibo-total-linha"><strong>Subtotal deste documento:</strong> ${escapeHtmlRelatorio(String(subtotal))} un.</div>
       </section>`;
     })
@@ -503,6 +874,8 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
 
   const lotesRodape = dados.numerosLotes.map((n) => escapeHtmlRelatorio(n)).join(' · ');
   const atRef = dados.secoes[0]?.atendimento;
+  const totalItens = dados.secoes.reduce((acc, s) => acc + s.atendimento.itens.length, 0);
+  const classeDensidade = totalItens > 6 ? ' recibo-body--denso' : '';
 
   const extraRecibo = cssReciboAtendimentoBase();
 
@@ -517,7 +890,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
     ${extraRecibo}
   </style>
 </head>
-<body class="recibo-body">
+<body class="recibo-body${classeDensidade}">
   ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
   <div class="inst-topbar recibo-topbar">
@@ -525,11 +898,11 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
     <span>Recibo consolidado ${escapeHtmlRelatorio(dados.referencia)}</span>
   </div>
 
-  <header class="recibo-header-main">
+  <header class="recibo-header-main recibo-header-main--titulo-centro">
     <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
-    <div class="inst-title-col">
+    <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de retirada de material</h1>
-      <p style="margin:8px 0 0;font-size:11pt;color:#475569;">Retirada em ${dados.secoes.length} documento(s) · ${escapeHtmlRelatorio(String(dados.secoes.length))} lote(s) no sistema</p>
+      <p class="recibo-subtitulo-consolidado">Retirada em ${dados.secoes.length} documento(s) · ${escapeHtmlRelatorio(String(dados.secoes.length))} lote(s) no sistema</p>
     </div>
   </header>
 
@@ -546,31 +919,19 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
 
   ${secoesHtml}
 
+  <div class="recibo-fechamento">
   <div class="recibo-total-geral"><strong>Total geral de unidades (todos os documentos):</strong> ${escapeHtmlRelatorio(String(totalGeral))}</div>
 
-  <section class="assinaturas">
-    <div class="assinatura-box">
-      <div class="linha-ass"></div>
-      <p class="rotulo-ass">Atendente (operador)</p>
-      <div class="bloco-ass-pessoa">
-        <p class="ass-nome-principal">${escapeHtmlRelatorio(atRef ? nomeExibicaoAtendenteAssinatura(atRef) : dados.atendente)}</p>
-        <p class="ass-meta-linha">${escapeHtmlRelatorio(
-          linhaMatriculaFuncaoAssinatura(dados.atendenteMatricula, dados.atendenteFuncao),
-        )}</p>
-      </div>
-    </div>
-    <div class="assinatura-box">
-      <div class="linha-ass"></div>
-      <p class="rotulo-ass">Atendido (quem retirou)</p>
-      <div class="bloco-ass-pessoa">
-        <p class="ass-nome-principal">${escapeHtmlRelatorio(dados.recebedor.trim() || dados.nomeAtendido.trim() || '—')}</p>
-        <p class="ass-meta-linha">${escapeHtmlRelatorio(
-          linhaMatriculaFuncaoAssinatura(dados.recebedorMatricula, dados.recebedorFuncao),
-        )}</p>
-      </div>
-    </div>
-  </section>
-  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Lotes: ${lotesRodape}.</p>
+  <div class="recibo-rodape-fin">
+  ${htmlAssinaturasRecibo(
+    atRef ? nomeExibicaoAtendenteAssinatura(atRef) : dados.atendente,
+    linhaMatriculaFuncaoAssinatura(dados.atendenteMatricula, dados.atendenteFuncao),
+    dados.recebedor.trim() || dados.nomeAtendido.trim() || '—',
+    linhaMatriculaFuncaoAssinatura(dados.recebedorMatricula, dados.recebedorFuncao),
+  )}
+  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO${segRodapeInst}. Conteudo para arquivo e auditoria. Lotes: ${lotesRodape}.</p>
+  </div>
+  </div>
   </div>
   ${scriptBarraPreVisualizacaoImpressao()}
 </body>

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { isErroIntegridadePlanejamentoRefsAtendimento } from '../../../lib/snapshotDocumentosPlanejamentoIntegrity';
@@ -40,7 +41,7 @@ const initialFilters: DocumentoFiltro = {
   busca: '',
   status: 'todos',
   page: 1,
-  pageSize: 6,
+  pageSize: 20,
 };
 
 const emptyForm: DocumentoFormData = {
@@ -59,6 +60,7 @@ function documentosListaQueryKey(filters: DocumentoFiltro, userLogin: string | u
 
 export function useDocumentos() {
   const queryClient = useQueryClient();
+  const { confirm } = useConfirmDialog();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
   const [filters, setFilters] = useState<DocumentoFiltro>(initialFilters);
@@ -148,6 +150,7 @@ export function useDocumentos() {
         !result.meta?.fallbackReason &&
         diag.noSnapshot >= 0 &&
         diag.noNavegador > diag.noSnapshot;
+      const planejamentoNuvemSemLinhas = hasCloudConfig && diag.nuvemSemLinhasMaterial;
 
       return {
         items: result.data.items,
@@ -156,6 +159,7 @@ export function useDocumentos() {
         documentosSource,
         planejamentoDiag: diag,
         planejamentoMaisNoLocal,
+        planejamentoNuvemSemLinhas,
       };
     },
   });
@@ -167,6 +171,7 @@ export function useDocumentos() {
   const documentosSource = listQuery.data?.documentosSource ?? null;
   const planejamentoDiag = listQuery.data?.planejamentoDiag ?? null;
   const planejamentoMaisNoLocal = listQuery.data?.planejamentoMaisNoLocal ?? false;
+  const planejamentoNuvemSemLinhas = listQuery.data?.planejamentoNuvemSemLinhas ?? false;
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -186,9 +191,11 @@ export function useDocumentos() {
       setError('Seu perfil nao possui permissao para sincronizar.');
       return;
     }
-    const ok = window.confirm(
-      'Isto substitui o planejamento na nuvem (iso_pro_snapshot) pela copia deste navegador. O app mobile passa a ver esses desenhos. Continuar?',
-    );
+    const ok = await confirm({
+      title: 'Enviar planejamento para a nuvem',
+      message:
+        'Isto substitui o planejamento na nuvem (iso_pro_snapshot) pela copia deste navegador. O app mobile passa a ver esses desenhos. Continuar?',
+    });
     if (!ok) return;
     setError('');
     setSuccess('');
@@ -203,7 +210,7 @@ export function useDocumentos() {
     setSuccess(
       `Planejamento enviado e verificado na nuvem: ${result.data.confirmadoNaNuvem} documento(s) confirmados no snapshot (igual ao enviado). Recarregue o mobile e toque em Carregar dados da nuvem.`,
     );
-  }, [canAccessAction, invalidateDocumentosLista]);
+  }, [canAccessAction, confirm, invalidateDocumentosLista]);
 
   useEffect(() => {
     if (!idsParaExcluirDocumentos.length) {
@@ -290,9 +297,9 @@ export function useDocumentos() {
     setError('');
     if (item.status === 'pendente') {
       if (
-        !window.confirm(
-          `Confirma cancelar o documento ${item.numero} rev. ${item.revisao}? O planejamento deixa de ser usado neste fluxo; recebimentos e atendimentos ja lancados nao sao alterados.`,
-        )
+        !(await confirm({
+          message: `Confirma cancelar o documento ${item.numero} rev. ${item.revisao}? O planejamento deixa de ser usado neste fluxo; recebimentos e atendimentos ja lancados nao sao alterados.`,
+        }))
       ) {
         return;
       }
@@ -675,6 +682,7 @@ export function useDocumentos() {
     enviarPlanejamentoLocalParaNuvem,
     planejamentoDiag,
     planejamentoMaisNoLocal,
+    planejamentoNuvemSemLinhas,
     hasCloudConfig,
     filters,
     formInitialValue,

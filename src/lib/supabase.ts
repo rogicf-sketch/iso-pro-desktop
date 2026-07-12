@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { isIsoProJwtSessionActive } from './isoProJwtSession';
 import { readIsoProCloudConnectionComMigracao } from './isoProCloudConnection';
 import { canUseDesktopSupabaseFetch, createDesktopSupabaseFetch } from './supabaseDesktopFetch';
 
@@ -95,13 +96,14 @@ export function getSupabase(): SupabaseClient | null {
 
   if (!url || !key) return null;
 
-  const nextSignature = `${url}::${key}`;
+  const nextSignature = `${url}::${key}::jwt=${isIsoProJwtSessionActive()}`;
   if (!client || clientSignature !== nextSignature) {
     const globalFetch = canUseDesktopSupabaseFetch() ? createDesktopSupabaseFetch() : undefined;
+    const jwtActive = isIsoProJwtSessionActive();
     client = createClient(url, key, {
       auth: {
-        persistSession: false,
-        autoRefreshToken: false,
+        persistSession: jwtActive,
+        autoRefreshToken: jwtActive,
       },
       global: globalFetch ? { fetch: globalFetch } : undefined,
     });

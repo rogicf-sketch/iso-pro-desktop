@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { exportAuthAuditEventsCsv, listAuthAuditEvents, type AuthAuditEvent } from '../../auth/services/authAudit.service';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -31,6 +32,7 @@ function usuariosListaQueryKey(filters: UsuarioFiltro, userLogin: string | undef
 }
 
 export function useUsuarios() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const [filters, setFilters] = useState<UsuarioFiltro>(initialFilters);
@@ -171,7 +173,7 @@ export function useUsuarios() {
       setError('Seu perfil nao possui permissao para administrar usuarios.');
       return;
     }
-    if (!window.confirm(`Confirma ${item.ativo ? 'desativar' : 'ativar'} o usuario ${item.login}?`)) {
+    if (!(await confirm({ message: `Confirma ${item.ativo ? 'desativar' : 'ativar'} o usuario ${item.login}?` }))) {
       return;
     }
     const result = await toggleUsuarioStatus(item.id, !item.ativo);

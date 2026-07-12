@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Button } from '../../../components/ui/Button';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { Input } from '../../../components/ui/Input';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -56,6 +57,7 @@ function mergeObraFromConfig(p: RelatorioFotograficoPayload): RelatorioFotografi
 export function RelatorioFotograficoPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const navigate = useNavigate();
+  const { confirm } = useConfirmDialog();
   const [searchParams] = useSearchParams();
   const { canAccessAction } = useAuth();
   const canEdit = canAccessAction('relatorios', 'editar');
@@ -182,11 +184,11 @@ export function RelatorioFotograficoPage() {
     );
   }
 
-  function voltarParaLista() {
+  async function voltarParaLista() {
     if (allowEdit && haConteudoDigitado()) {
-      const ok = window.confirm(
-        'Voltar à lista de relatórios? Se ainda não salvou, o que digitou neste ecrã pode ser perdido.',
-      );
+      const ok = await confirm({
+        message: 'Voltar à lista de relatórios? Se ainda não salvou, o que digitou neste ecrã pode ser perdido.',
+      });
       if (!ok) return;
     }
     navigate('/relatorio-fotografico');
@@ -443,14 +445,14 @@ export function RelatorioFotograficoPage() {
           <div className="panel-toolbar__group" role="group" aria-label="Navegacao">
             <span className="panel-toolbar__label">Navegação</span>
             <div className="panel-toolbar__buttons">
-              <button className="ghost-button" onClick={() => voltarParaLista()} type="button">
+              <button className="ghost-button" onClick={() => void voltarParaLista()} type="button">
                 Voltar à lista
               </button>
-              <Link className="ghost-button" to="/relatorio-fotografico" onClick={(e) => {
+              <Link className="ghost-button" to="/relatorio-fotografico" onClick={async (e) => {
                 if (allowEdit && haConteudoDigitado()) {
-                  const ok = window.confirm(
-                    'Ir para a lista? Se ainda não salvou, o que digitou neste ecrã pode ser perdido.',
-                  );
+                  const ok = await confirm({
+                    message: 'Ir para a lista? Se ainda não salvou, o que digitou neste ecrã pode ser perdido.',
+                  });
                   if (!ok) e.preventDefault();
                 }
               }}

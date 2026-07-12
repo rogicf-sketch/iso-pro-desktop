@@ -175,4 +175,12 @@ describe('montarHtmlRelatorioFinalObra', () => {
     expect(html).toContain('rfo-capa-head');
     expect(html).toContain('page-break-after: always');
   });
+
+  it('nao usa Paged.js — evita folhas vazias em alto volume', () => {
+    const html = montarHtmlRelatorioFinalObra(dadosBase(), { incluirBarraPreVisualizacao: false });
+    expect(html).not.toContain('__relatorioUsaPagedJs = true');
+    expect(html).not.toContain('iso-paged-source');
+    expect(html).toContain('iso-report-native-body');
+    expect(html).toContain('Folha " counter(page)');
+  });
 });

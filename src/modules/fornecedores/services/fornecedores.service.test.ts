@@ -6,10 +6,15 @@ import { salvarFornecedor, toggleFornecedorStatus } from './fornecedores.service
 
 const STORAGE_KEY = 'iso-pro-desktop-fornecedores';
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
+}));
+
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -22,9 +27,33 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     ...actual,
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare: () => Promise<unknown>) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare: () => Promise<{ patch: Record<string, unknown>; baselineUpdatedAt: string | null }>) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+}
 
 function fornecedorForm(overrides: Partial<FornecedorFormData> = {}): FornecedorFormData {
   return {
@@ -43,6 +72,7 @@ describe('fornecedores.service / salvarFornecedor criacao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -101,6 +131,7 @@ describe('fornecedores.service / salvarFornecedor edicao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -180,6 +211,7 @@ describe('fornecedores.service / toggleFornecedorStatus (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',

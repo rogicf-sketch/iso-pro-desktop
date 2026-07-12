@@ -6,6 +6,7 @@ import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { DocumentoListItem } from '../types/documento.types';
+import { formatarDataDocumentoPtBr } from '../utils/formatarDataDocumento';
 
 type Props = {
   items: DocumentoListItem[];
@@ -104,7 +105,7 @@ export function DocumentosTable({
         { key: 'numero', header: 'Documento', render: (item) => `${item.numero} Rev. ${item.revisao}` },
         { key: 'descricao', header: 'Descricao', render: (item) => item.descricao },
         { key: 'responsavel', header: 'Responsavel', render: (item) => item.responsavel || '-' },
-        { key: 'data', header: 'Data', render: (item) => item.dataDocumento },
+        { key: 'data', header: 'Data', render: (item) => formatarDataDocumentoPtBr(item.dataDocumento) },
         { key: 'itens', header: 'Itens', render: (item) => item.totalItens },
         {
           key: 'qPrev',

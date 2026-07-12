@@ -11,6 +11,7 @@ import { registerRirPdfGenerateHandlers } from './rirPdfGenerateIpc';
 import { registerSecurityHandlers } from './security';
 import { registerSupabaseFetchHandlers } from './supabaseFetchIpc';
 import { destruirGeradorPdf, preaquecerGeradorPdf } from './gerarPdfBytesFromHtml';
+import { destruirJanelaImpressaoPdf } from './pdfPrintBuffer';
 import { createMainWindow } from './window';
 
 /** Deve coincidir com `appId` em `electron-builder.yml` — ícone na barra de tarefas / notificações no Windows. */
@@ -37,6 +38,7 @@ function bootstrap() {
     const mainWindow = createMainWindow();
     mainWindow.on('closed', () => {
       destruirGeradorPdf();
+      destruirJanelaImpressaoPdf();
       if (process.platform !== 'darwin') {
         app.quit();
       }
@@ -61,10 +63,12 @@ app.whenReady().then(bootstrap);
 
 app.on('before-quit', () => {
   destruirGeradorPdf();
+  destruirJanelaImpressaoPdf();
 });
 
 app.on('window-all-closed', () => {
   destruirGeradorPdf();
+  destruirJanelaImpressaoPdf();
   if (process.platform !== 'darwin') {
     app.quit();
   }

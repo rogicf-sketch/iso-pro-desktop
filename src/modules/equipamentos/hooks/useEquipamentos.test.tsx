@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   obterIndicadoresEquipamentos: vi.fn(),
 }));
 
+vi.mock('../../../components/ui/ConfirmDialogProvider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+}));
+
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => false),
 }));

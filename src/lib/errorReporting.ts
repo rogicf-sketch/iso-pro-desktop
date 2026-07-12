@@ -1,11 +1,17 @@
 import * as Sentry from '@sentry/react';
+import { recordOperationalSlo, type OperationalSloEvent } from './operationalSlo';
 
 /**
- * Erros para o Sentry via SDK (`@sentry/react`) quando `VITE_SENTRY_DSN` está definido e o SDK foi inicializado.
+ * Erros e eventos operacionais para o Sentry (`VITE_SENTRY_DSN`).
+ * Sem DSN: só console (dev/warn). Contadores locais de SLO sempre.
  */
+
+function sentryEnabled(): boolean {
+  return Boolean(import.meta.env.VITE_SENTRY_DSN?.trim()) && import.meta.env.MODE !== 'test';
+}
+
 export function captureException(error: unknown, context?: Record<string, unknown>): void {
-  const dsn = import.meta.env.VITE_SENTRY_DSN?.trim();
-  if (dsn && import.meta.env.MODE !== 'test') {
+  if (sentryEnabled()) {
     const err =
       error instanceof Error ? error : new Error(typeof error === 'string' ? error : JSON.stringify(error));
     Sentry.captureException(err, { extra: context });
@@ -17,4 +23,33 @@ export function captureException(error: unknown, context?: Record<string, unknow
   }
 
   console.error('[iso-pro-desktop]', context ?? {}, error);
+}
+
+export function captureMessage(
+  message: string,
+  context?: Record<string, unknown>,
+  _level: 'info' | 'warning' | 'error' = 'warning',
+): void {
+  void _level;
+  captureException(new Error(message), { ...context, operationalMessage: true });
+}
+
+const SLO_EVENTS = new Set<string>([
+  'snapshot_conflict',
+  'dual_write_failure',
+  'offline_flush',
+  'outbox_flush_fail',
+  'mfa_challenge',
+]);
+
+/** Evento operacional nomeado (conflito snapshot, dual-write, fila offline). */
+export function captureOperationalEvent(
+  event: string,
+  context?: Record<string, unknown>,
+  level: 'info' | 'warning' | 'error' = 'warning',
+): void {
+  if (SLO_EVENTS.has(event)) {
+    recordOperationalSlo(event as OperationalSloEvent);
+  }
+  captureMessage(`iso.${event}`, { ...context, event }, level);
 }

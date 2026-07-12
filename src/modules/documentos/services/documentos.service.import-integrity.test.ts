@@ -5,10 +5,16 @@ import { importarDocumentosDoArquivoJson } from './documentos.service';
 const STORAGE_KEY = 'iso-pro-desktop-documentos';
 const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
 
-const { mockReadForWrite, mockCommitWrite, mockListarMateriais } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, mockListarMateriais } = vi.hoisted(() => ({
+  mockReadPayload: vi.fn(async () => ({ documentos: [] })),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
   mockListarMateriais: vi.fn(),
+}));
+
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (_keys: readonly unknown[]) => mockReadPayload(),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -33,11 +39,33 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../lib/isoProSnapshot')>();
   return {
     ...actual,
-    readIsoProSnapshotPayload: vi.fn(async () => ({ documentos: [] })),
+    readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare: () => Promise<unknown>) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare: () => Promise<{ patch: Record<string, unknown>; baselineUpdatedAt: string | null }>) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = await mockReadForWrite();
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+}
 
 function mkMaterial(codigo: string) {
   return {
@@ -57,6 +85,7 @@ function mkMaterial(codigo: string) {
 describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     mockListarMateriais.mockResolvedValue({
       success: true,
       data: { items: [mkMaterial('MAT-1')], total: 1, page: 1, pageSize: 999999 },

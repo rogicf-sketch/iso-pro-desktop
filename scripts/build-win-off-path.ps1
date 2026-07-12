@@ -15,7 +15,7 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy falhou com codigo $LASTEXITCODE" }
 
 Push-Location $BuildRoot
 try {
-  npm ci
+  npm install
   npm run dist:win
   $releaseSrc = Join-Path $BuildRoot 'release'
   $releaseDest = Join-Path $Src 'release'

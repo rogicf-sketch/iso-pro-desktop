@@ -13,6 +13,10 @@ vi.mock('../../../lib/collectAllPages', () => ({
   collectAllPages: vi.fn(async () => []),
 }));
 
+vi.mock('../../../components/ui/ConfirmDialogProvider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+}));
+
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => false),
 }));

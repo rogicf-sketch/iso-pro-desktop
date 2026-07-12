@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
@@ -18,6 +19,7 @@ function encodeBase64Url(value: string) {
 }
 
 export function useDesktopLicenses() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const listQueryKey = ['desktop-licenses', 'registry', user?.login] as const;
@@ -82,7 +84,7 @@ export function useDesktopLicenses() {
       status === 'revoked'
         ? 'Confirma revogar centralmente a licenca desktop selecionada?'
         : 'Confirma reativar centralmente a licenca desktop selecionada?';
-    if (!window.confirm(confirmation)) {
+    if (!(await confirm({ message: confirmation, danger: status === 'revoked' }))) {
       return;
     }
 

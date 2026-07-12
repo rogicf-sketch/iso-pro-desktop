@@ -21,6 +21,7 @@ export function InventarioPage() {
     error,
     success,
     fallbackReason,
+    listSource,
     hasCloudConfig,
     filters,
     formInitialValue,
@@ -59,17 +60,20 @@ export function InventarioPage() {
 
       <ModuleHelp>
         <p className="panel-copy">
-          Base operacional para inventarios rotativos e gerais, com contagem, saldo do sistema e fechamento do ciclo. Marque «Permitir contagem pelo app
-          mobile» para que inventarios abertos aparecam no I.S.O PRO Mobile.
+          Base operacional para inventarios rotativos e gerais, com contagem, saldo do sistema e fechamento do ciclo. Pode criar e salvar
+          apenas o cabecalho (codigo, responsavel, descricao) e incluir itens depois. Marque «Permitir contagem pelo app mobile» para que
+          inventarios abertos aparecam no I.S.O PRO Mobile.
         </p>
       </ModuleHelp>
 
       <OperationalNotice>
-        {cloudStatus === 'ready' && hasCloudConfig
+        {listSource === 'supabase' && hasCloudConfig
           ? 'Fonte atual: Supabase. Inventarios sincronizados com a base em nuvem.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
+          : hasCloudConfig
+            ? 'Fonte atual: copia local (nuvem vazia ou indisponivel). Ao salvar, os inventarios passam para o Supabase e aparecem no mobile.'
+            : cloudStatus === 'partial'
+              ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
       </OperationalNotice>
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
 

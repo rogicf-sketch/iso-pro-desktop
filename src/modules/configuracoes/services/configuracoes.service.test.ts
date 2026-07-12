@@ -1,7 +1,23 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as authService from '../../auth/services/auth.service';
+
+vi.mock('../../../lib/supabase', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../../lib/supabase')>();
+  return {
+    ...mod,
+    hasSupabaseConfig: vi.fn(() => false),
+  };
+});
+
+vi.mock('./syncAlertaEstoqueConfigNuvem.service', () => ({
+  sincronizarConfigAlertaEstoqueParaNuvem: vi.fn(() =>
+    Promise.resolve({ success: true, data: { sincronizado: false } }),
+  ),
+}));
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   limparUsuarioTemaPreferido,
   readConfiguracoes,
@@ -10,6 +26,7 @@ import {
   salvarConfiguracoes,
   salvarUsuarioTemaPreferido,
 } from './configuracoes.service';
+import { sincronizarConfigAlertaEstoqueParaNuvem } from './syncAlertaEstoqueConfigNuvem.service';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 
 const CONFIG_KEY = 'iso-pro-desktop-configuracoes-sistema';
@@ -76,6 +93,30 @@ describe('configuracoes.service — isoProLinkAuthSecret', () => {
     expect(readConfiguracoes().isoProLinkAuthSecret).toBe('segredo-compartilhado');
   });
 
+  it('retorna info quando sync na nuvem conclui com sucesso', async () => {
+    vi.mocked(hasSupabaseConfig).mockReturnValueOnce(true);
+    vi.mocked(sincronizarConfigAlertaEstoqueParaNuvem).mockResolvedValueOnce({
+      success: true,
+      data: { sincronizado: true },
+    });
+    const saved = await salvarConfiguracoes(basePayload({ cliente: 'Cliente sync ok' }));
+    expect(saved.success).toBe(true);
+    expect(saved.info).toContain('nuvem');
+    expect(saved.warning).toBeUndefined();
+  });
+
+  it('retorna warning quando sync na nuvem falha mas gravacao local ok', async () => {
+    vi.mocked(hasSupabaseConfig).mockReturnValueOnce(true);
+    vi.mocked(sincronizarConfigAlertaEstoqueParaNuvem).mockResolvedValueOnce({
+      success: false,
+      error: 'Rede indisponivel',
+    });
+    const saved = await salvarConfiguracoes(basePayload({ cliente: 'Cliente sync' }));
+    expect(saved.success).toBe(true);
+    expect(saved.warning).toContain('Rede indisponivel');
+    expect(readConfiguracoes().cliente).toBe('Cliente sync');
+  });
+
   it('readConfiguracoes usa string vazia quando chave ausente no JSON antigo', () => {
     localStorage.setItem(
       CONFIG_KEY,
@@ -135,11 +176,18 @@ describe('configuracoes.service — tema preferido do utilizador', () => {
   });
 
   it('preferencia pessoal sobrepoe tema da instalacao e limpar volta ao padrao', () => {
-    salvarUsuarioTemaPreferido('claro');
-    expect(readUsuarioTemaPreferido()).toBe('claro');
-    expect(readTemaEfetivoParaSessao()).toBe('claro');
+    salvarUsuarioTemaPreferido('hibrido');
+    expect(readUsuarioTemaPreferido()).toBe('hibrido');
+    expect(readTemaEfetivoParaSessao()).toBe('hibrido');
     limparUsuarioTemaPreferido();
     expect(readUsuarioTemaPreferido()).toBeNull();
     expect(readTemaEfetivoParaSessao()).toBe(readConfiguracoes().tema);
+  });
+
+  it('migra tema legado claro para hibrido na preferencia pessoal', () => {
+    const key = getScopedIsoProStorageKey('iso-pro-desktop-usuario-tema-ana');
+    localStorage.setItem(key, 'claro');
+    expect(readUsuarioTemaPreferido()).toBe('hibrido');
+    expect(readTemaEfetivoParaSessao()).toBe('hibrido');
   });
 });

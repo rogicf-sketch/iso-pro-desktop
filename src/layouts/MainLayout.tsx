@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { tentarRepararCacheMateriaisLocalNaEntrada } from '../modules/materiais/services/materiais.service';
+import { tentarAutoSyncEscalaNuvemNaEntrada } from '../lib/escalaNuvemAutoSync';
 import { LocalStorageCorruptoBanner } from '@/components/LocalStorageCorruptoBanner';
 import { SnapshotSessionBanner } from '@/components/SnapshotSessionBanner';
 import { SessionCloudStaleBanner } from '@/components/SessionCloudStaleBanner';
@@ -12,6 +13,7 @@ import { useAuth } from '../modules/auth/hooks/useAuth';
 import { useMenuBadgeCounts } from '../modules/dashboard/hooks/useMenuBadgeCounts';
 import { MENU_BADGE_BY_ROUTE } from '../modules/dashboard/utils/pendenciasOperacionais.utils';
 import { getModuleTitleForPath, moduleNavigation } from '../routes/navigation';
+import { SidebarNavIcon } from '../components/SidebarNavIcon';
 
 function MainLayoutInner() {
   const { user, logout, canAccessModule } = useAuth();
@@ -27,6 +29,8 @@ function MainLayoutInner() {
 
   useEffect(() => {
     void tentarRepararCacheMateriaisLocalNaEntrada();
+    // Fundo: preenche tabelas de escala só se estiverem vazias (não trava o PC).
+    void tentarAutoSyncEscalaNuvemNaEntrada();
   }, []);
 
   function handleSidebarNav(event: React.MouseEvent, to: string) {
@@ -69,7 +73,10 @@ function MainLayoutInner() {
               onClick={(event) => handleSidebarNav(event, item.to)}
               to={item.to}
             >
-              <span className="sidebar-link__label">{item.label}</span>
+              <span className="sidebar-link__main">
+                <SidebarNavIcon className="sidebar-link__icon" to={item.to} />
+                <span className="sidebar-link__label">{item.label}</span>
+              </span>
               {badgeCount > 0 ? (
                 <span aria-label={`${badgeCount} pendencia(s)`} className="sidebar-link__badge" title={`${badgeCount} pendencia(s)`}>
                   {badgeCount > 99 ? '99+' : badgeCount}

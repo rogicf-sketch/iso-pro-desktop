@@ -1,14 +1,24 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { collectAllPages } from '../../../lib/collectAllPages';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
 import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  listRirPageFromCloud,
+  listRncPageFromCloud,
+  syncRirFromSnapshot,
+  syncRncFromSnapshot,
+  upsertRirEmLotes,
+  upsertRncEmLotes,
+} from '../../../lib/qualidadeTabelas';
+import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
+import {
+  commitIsoProSnapshotPatch,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
@@ -471,35 +481,41 @@ async function loadRnc(): Promise<RncRegistro[]> {
   return Promise.all(base.map((x) => hydrateRncRegistro(x)));
 }
 
-async function readSnapshotPayload(): Promise<SnapshotPayload> {
-  return await readIsoProSnapshotPayload<SnapshotPayload>();
-}
-
 async function writeSnapshotQuality(nextData: { rirRegistros?: RirRegistro[]; rncRegistros?: RncRegistro[] }) {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
-    return {
-      baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
-        ...(nextData.rirRegistros
-          ? {
-              rirRegistros: nextData.rirRegistros.map((item) => ({ ...item })),
-            }
-          : {}),
-        ...(nextData.rncRegistros
-          ? {
-              rncRegistros: nextData.rncRegistros.map((item) => ({ ...normalizeRncRegistro(item) })),
-            }
-          : {}),
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
+  const keys: Array<'rirRegistros' | 'rncRegistros'> = [];
+  if (nextData.rirRegistros) keys.push('rirRegistros');
+  if (nextData.rncRegistros) keys.push('rncRegistros');
+
+  await commitIsoProSnapshotPatch(async () => {
+    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(keys.length ? keys : ['rirRegistros']);
+    const patch: Record<string, unknown> = { dataAtualizacao: new Date().toISOString() };
+    if (nextData.rirRegistros) {
+      patch.rirRegistros = nextData.rirRegistros.map((item) => ({ ...item }));
+    }
+    if (nextData.rncRegistros) {
+      patch.rncRegistros = nextData.rncRegistros.map((item) => ({ ...normalizeRncRegistro(item) }));
+    }
+    return { baselineUpdatedAt, patch };
   });
+
+  if (nextData.rirRegistros) {
+    await runDualWriteBestEffort('rir', async () => {
+      const sync = await syncRirFromSnapshot();
+      if (sync.ok) return sync;
+      return upsertRirEmLotes(nextData.rirRegistros!);
+    });
+  }
+  if (nextData.rncRegistros) {
+    await runDualWriteBestEffort('rnc', async () => {
+      const sync = await syncRncFromSnapshot();
+      if (sync.ok) return sync;
+      return upsertRncEmLotes(nextData.rncRegistros!);
+    });
+  }
 }
 
 async function readSnapshotRir(): Promise<RirRegistro[]> {
-  const payload = await readSnapshotPayload();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['rirRegistros']);
   return (payload.rirRegistros ?? []).map((item, index) =>
     normalizeRirRegistro({
       ...(item as RirRegistro),
@@ -509,7 +525,7 @@ async function readSnapshotRir(): Promise<RirRegistro[]> {
 }
 
 async function readSnapshotRnc(): Promise<RncRegistro[]> {
-  const payload = await readSnapshotPayload();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['rncRegistros']);
   return (payload.rncRegistros ?? []).map((item, index) =>
     normalizeRncRegistro({
       ...(item as RncRegistro),
@@ -855,14 +871,69 @@ export function validateRnc(data: RncFormData) {
   return null;
 }
 
-export async function listarRir(filtro: RirFiltro): Promise<ServiceResult<PaginatedResult<RirRegistro>>> {
+async function carregarRirRegistros(): Promise<{
+  items: RirRegistro[];
+  meta?: ServiceResult<RirRegistro[]>['meta'];
+}> {
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => readSnapshotRir(),
     loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
     fallbackMessage: 'Falha ao consultar RIR no Supabase.',
   });
-  const items = filterRir(fallbackResult.data, filtro);
+  return { items: fallbackResult.data, meta: fallbackResult.meta };
+}
+
+/** Carrega todos os RIR paginando a API (evita pageSize artificial gigante). */
+export async function listarTodosRirRegistros(
+  filtro: Pick<RirFiltro, 'busca' | 'status'> = { busca: '', status: 'todos' },
+): Promise<ServiceResult<RirRegistro[]>> {
+  try {
+    const items = await collectAllPages(async (page, pageSize) => {
+      const r = await listarRir({ ...filtro, page, pageSize });
+      if (!r.success || !r.data) return { data: undefined };
+      return { data: r.data };
+    });
+    return { success: true, data: items };
+  } catch {
+    return { success: false, error: 'Nao foi possivel carregar registos RIR.' };
+  }
+}
+
+export async function listarRir(filtro: RirFiltro): Promise<ServiceResult<PaginatedResult<RirRegistro>>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const page = await listRirPageFromCloud({
+        busca: filtro.busca,
+        offset: (filtro.page - 1) * filtro.pageSize,
+        limit: filtro.pageSize,
+        status: filtro.status,
+      });
+      if (page.source === 'tables' && !page.error) {
+        const items = page.registros.map((raw, index) =>
+          normalizeRirRegistro({
+            ...(raw as RirRegistro),
+            id: String((raw as RirRegistro).id ?? `rir-${index + 1}`),
+          }),
+        );
+        return {
+          success: true,
+          data: {
+            items,
+            total: page.total,
+            page: filtro.page,
+            pageSize: filtro.pageSize,
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
+  const { items: bruto, meta } = await carregarRirRegistros();
+  const items = filterRir(bruto, filtro);
   const start = (filtro.page - 1) * filtro.pageSize;
   const end = start + filtro.pageSize;
   return {
@@ -873,19 +944,16 @@ export async function listarRir(filtro: RirFiltro): Promise<ServiceResult<Pagina
       page: filtro.page,
       pageSize: filtro.pageSize,
     },
-    meta: fallbackResult.meta,
+    meta,
   };
 }
 
 export async function obterRirPorId(rirId: string): Promise<ServiceResult<RirRegistro | null>> {
   const id = rirId.trim();
   if (!id) return { success: true, data: null };
-  const res = await listarRir({ busca: '', status: 'todos', page: 1, pageSize: 500_000 });
-  if (!res.success || !res.data) {
-    return { success: false, error: res.error ?? 'Nao foi possivel consultar RIR.' };
-  }
-  const found = res.data.items.find((r) => r.id === id);
-  return { success: true, data: found ? normalizeRirRegistro(found) : null, meta: res.meta };
+  const { items, meta } = await carregarRirRegistros();
+  const found = items.find((r) => r.id === id);
+  return { success: true, data: found ? normalizeRirRegistro(found) : null, meta };
 }
 
 /** Ordem de preferência para sugerir RIR no relatório fotográfico (menor = melhor). */
@@ -905,19 +973,10 @@ export async function sugerirCodigoRirParaRecebimento(recebimentoId: string): Pr
   const rid = recebimentoId.trim();
   if (!rid) return { success: true, data: '' };
 
-  const res = await listarRir({
-    busca: '',
-    status: 'todos',
-    page: 1,
-    pageSize: 10000,
-  });
-  if (!res.success || !res.data) {
-    return { success: false, error: res.error ?? 'Falha ao consultar RIR.' };
-  }
-
-  const candidatos = res.data.items.filter((r) => r.recebimentoId.trim() === rid && r.status !== 'cancelado');
+  const { items, meta } = await carregarRirRegistros();
+  const candidatos = items.filter((r) => r.recebimentoId.trim() === rid && r.status !== 'cancelado');
   if (candidatos.length === 0) {
-    return { success: true, data: '', meta: res.meta };
+    return { success: true, data: '', meta };
   }
 
   candidatos.sort((a, b) => {
@@ -927,7 +986,7 @@ export async function sugerirCodigoRirParaRecebimento(recebimentoId: string): Pr
     return b.dataRegistro.localeCompare(a.dataRegistro);
   });
 
-  return { success: true, data: candidatos[0].codigo.trim(), meta: res.meta };
+  return { success: true, data: candidatos[0].codigo.trim(), meta };
 }
 
 /** Separador `;` para abrir corretamente no Excel em portugues. */
@@ -1125,6 +1184,37 @@ function readAllRncNormalized(): RncRegistro[] {
 }
 
 export async function listarRnc(filtro: RncFiltro): Promise<ServiceResult<PaginatedResult<RncRegistro>>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const page = await listRncPageFromCloud({
+        busca: filtro.busca,
+        offset: (filtro.page - 1) * filtro.pageSize,
+        limit: filtro.pageSize,
+        status: filtro.status,
+      });
+      if (page.source === 'tables' && !page.error) {
+        const items = page.registros.map((raw, index) =>
+          normalizeRncRegistro({
+            ...(raw as RncRegistro),
+            id: String((raw as RncRegistro).id ?? `rnc-${index + 1}`),
+          }),
+        );
+        return {
+          success: true,
+          data: {
+            items,
+            total: page.total,
+            page: filtro.page,
+            pageSize: filtro.pageSize,
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: () => loadRnc(),

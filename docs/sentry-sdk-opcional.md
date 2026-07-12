@@ -29,6 +29,36 @@ Se o `npm ci` no GitHub falhar com "lockfile out of sync", falta o passo acima.
 
 Preferir `npx expo install @sentry/react-native` para alinhar versões com o SDK Expo, depois `npm install` na raiz.
 
+## Alertas operacionais (recomendado)
+
+No Sentry, criar alertas (Issues / Alerts) para mensagens que começam por:
+
+| Mensagem | Significado |
+|----------|-------------|
+| `iso.snapshot_conflict` | Conflito OCC no snapshot (duas gravações ao mesmo tempo) |
+| `iso.dual_write_failure` | Falha a projectar escala / flush outbox |
+| `iso.offline_flush` | Fila offline mobile (sucesso ou falha no flush) |
+
+Filtro sugerido: `message:"iso."` + environment `production`.
+
+## Activar DSN (checklist rápido)
+
+1. Criar projecto em [sentry.io](https://sentry.io) (plataforma **React** para PC/web; **React Native** para mobile — ou um projecto partilhado no início).
+2. Copiar o **DSN** (Client Keys).
+3. Desktop/web — `.env` / secrets de build:
+   ```env
+   VITE_SENTRY_DSN=https://...@....ingest.sentry.io/...
+   ```
+4. Mobile — `.env` / EAS Secrets:
+   ```env
+   EXPO_PUBLIC_SENTRY_DSN=https://...@....ingest.sentry.io/...
+   ```
+5. Rebuild e publicar.
+6. Validar formato local: `node scripts/validate-sentry-dsn.mjs`
+7. Em staging (ou tenant piloto), forçar um erro de teste e confirmar evento no Sentry.
+
+Sem DSN a app **não quebra** — só regista no console.
+
 ## Documentação Sentry
 
 - [React](https://docs.sentry.io/platforms/javascript/guides/react/)

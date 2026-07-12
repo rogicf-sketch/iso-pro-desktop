@@ -8,6 +8,7 @@ const inventarioItemPersistidoSchema = z.object({
   unidade: z.string(),
   saldoSistema: z.coerce.number(),
   quantidadeContada: z.coerce.number(),
+  localizacaoContada: z.string().optional().default(''),
 });
 
 const inventarioPersistidoSchema = z.object({

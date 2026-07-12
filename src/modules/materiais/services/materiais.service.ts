@@ -5,10 +5,12 @@ import {
   notificarReparacaoLocalStorage,
 } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
-import { invalidateIsoProSnapshotCache, readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
+import { invalidateIsoProSnapshotCache, SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registerSnapshotDerivedCacheInvalidator } from '../../../lib/snapshotDerivedCache';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
+import { listMateriaisPageFromCloud } from '../../../lib/materiaisListaPaginada';
 import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { getErrorMessage } from '../../../lib/service-result';
@@ -462,7 +464,7 @@ async function aplicarSaldoCalculadoNosMateriais(materiais: Material[]): Promise
     return materiais;
   }
   try {
-    const payload = await readIsoProSnapshotPayload<SaldoSnapshotPayload>();
+    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
     const saldoMap = buildSaldoMap(payload);
     return materiais.map((m) => ({
       ...m,
@@ -623,6 +625,47 @@ export function aplicarFiltrosMateriais(items: Material[], filtro: MaterialFiltr
 }
 
 export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceResult<PaginatedResult<MaterialListItem>>> {
+  if (shouldUseCloudMaterials()) {
+    try {
+      const page = await listMateriaisPageFromCloud({
+        busca: filtro.busca,
+        offset: (filtro.page - 1) * filtro.pageSize,
+        limit: filtro.pageSize,
+        disciplina: filtro.disciplina,
+        ativo: filtro.ativo,
+      });
+      if (page.source === 'tables' && !page.error) {
+        const mapped: Material[] = page.materiais.map((row) => ({
+          id: String(row.id ?? ''),
+          codigo: String(row.codigo ?? ''),
+          codigoBarras: String(row.codigoBarras ?? ''),
+          descricao: String(row.descricao ?? ''),
+          diametro: String(row.diametro ?? ''),
+          disciplina: String(row.disciplina ?? ''),
+          unidade: String(row.unidade ?? 'UN'),
+          peso: Number(row.peso) || 0,
+          estoqueMinimo: Number(row.estoqueMinimo) || 0,
+          saldoAtual: 0,
+          ativo: row.ativo !== false,
+          observacao: String(row.observacao ?? ''),
+        }));
+        const withSaldo = await aplicarSaldoCalculadoNosMateriais(mapped);
+        return {
+          success: true,
+          data: {
+            items: withSaldo.map(toListItem),
+            total: page.total,
+            page: filtro.page,
+            pageSize: filtro.pageSize,
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* fallback legado */
+    }
+  }
+
   const base = await aplicarSaldoCalculadoNosMateriais(await loadMateriaisBase());
   const items = aplicarFiltrosMateriais(base, filtro);
 

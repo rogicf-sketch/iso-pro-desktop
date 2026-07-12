@@ -4,11 +4,12 @@ import { hasSupabaseConfig } from '../../../lib/supabase';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { ConfiguracaoSistema } from '../../configuracoes/types/configuracao.types';
-import type { RncFormData, RirFormData } from '../types/qualidade.types';
+import type { RirFormData, RirRegistro, RncFormData } from '../types/qualidade.types';
 import { defaultRncEvidencias, defaultRncPlanoLinhas, defaultRncTiposOcorrencia } from '../types/qualidade.types';
 import {
   excluirRir,
   normalizeRirRegistro,
+  obterRirPorId,
   rirNaoCanceladosPorRecebimentoId,
   salvarRnc,
   salvarRir,
@@ -78,10 +79,15 @@ const configBase: ConfiguracaoSistema = {
   pdfNuvemTimeoutSegundos: 90,
 };
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
+}));
+
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -94,9 +100,33 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     ...actual,
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare: () => Promise<unknown>) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare: () => Promise<{ patch: Record<string, unknown>; baselineUpdatedAt: string | null }>) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+}
 
 vi.mock('../../configuracoes/services/configuracoes.service', () => ({
   readConfiguracoes: vi.fn(() => configBase),
@@ -207,6 +237,7 @@ describe('qualidade.service / salvarRir (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -310,6 +341,7 @@ describe('qualidade.service / salvarRnc (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -386,6 +418,7 @@ describe('qualidade.service / salvarRir criacao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -439,11 +472,66 @@ describe('qualidade.service / salvarRir criacao (Supabase)', () => {
   });
 });
 
+describe('qualidade.service / obterRirPorId', () => {
+  let store: Record<string, string>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wireSnapshotPatchMock();
+    store = {};
+    vi.stubGlobal(
+      'localStorage',
+      {
+        getItem: (key: string) => (key in store ? store[key] : null),
+        setItem: (key: string, value: string) => {
+          store[key] = value;
+        },
+        removeItem: (key: string) => {
+          delete store[key];
+        },
+        clear: () => {
+          store = {};
+        },
+        key: () => null,
+        length: 0,
+      } as Storage,
+    );
+    vi.mocked(hasSupabaseConfig).mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.mocked(hasSupabaseConfig).mockReturnValue(true);
+  });
+
+  it('encontra RIR pelo id sem depender de pageSize gigante', async () => {
+    const alvo = normalizeRirRegistro({
+      id: 'rir-alvo',
+      ...rirForm({ codigo: 'RIR-ALVO' }),
+    } as RirRegistro);
+    const outro = normalizeRirRegistro({
+      id: 'rir-outro',
+      ...rirForm({ codigo: 'RIR-OUTRO' }),
+    } as RirRegistro);
+    store[RIR_STORAGE_KEY] = JSON.stringify([outro, alvo]);
+    const r = await obterRirPorId('rir-alvo');
+    expect(r.success).toBe(true);
+    expect(r.data?.codigo).toBe('RIR-ALVO');
+  });
+
+  it('devolve null para id inexistente', async () => {
+    store[RIR_STORAGE_KEY] = JSON.stringify([]);
+    const r = await obterRirPorId('nao-existe');
+    expect(r.success).toBe(true);
+    expect(r.data).toBeNull();
+  });
+});
+
 describe('qualidade.service / sugerirCodigoRirParaRecebimento', () => {
   let store: Record<string, string>;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -530,6 +618,7 @@ describe('qualidade.service / excluirRir (local)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -596,6 +685,7 @@ describe('qualidade.service / salvarRnc criacao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',

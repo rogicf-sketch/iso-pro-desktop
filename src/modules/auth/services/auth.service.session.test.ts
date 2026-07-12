@@ -87,3 +87,37 @@ describe('sessao login — permanecer logado', () => {
     expect(getCurrentUser()?.login).toBe('teste');
   });
 });
+
+describe('permissoes — heranca de modulos novos', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    clearAuthSessionStorage();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it('herda equipamentos para perfil Administrador com id UUID quando permissoes antigas omitem o modulo', () => {
+    const legacyAdmin: AuthUser = {
+      id: 'cloud-admin',
+      login: 'admin',
+      nome: 'Administrador',
+      perfil: { id: '9f3c2a1b-0000-4000-8000-000000000001', nome: 'Administrador' },
+      permissoes: [
+        { modulo: 'dashboard', acao: 'visualizar', permitido: true },
+        { modulo: 'usuarios', acao: 'visualizar', permitido: true },
+        { modulo: 'configuracoes', acao: 'visualizar', permitido: true },
+      ],
+    };
+    persistAuthSession(legacyAdmin, false);
+    const current = getCurrentUser();
+    expect(
+      current?.permissoes.some(
+        (permissao) => permissao.modulo === 'equipamentos' && permissao.acao === 'visualizar' && permissao.permitido,
+      ),
+    ).toBe(true);
+  });
+});

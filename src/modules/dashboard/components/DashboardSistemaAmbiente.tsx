@@ -1,7 +1,10 @@
 import { Button } from '../../../components/ui/Button';
-import { formatBytesPtBr, type StorageHealthSnapshot } from '../../../lib/storageHealth';
-import { DashboardRingGauge } from './DashboardRingGauge';
-import { IconDatabaseStack, IconLocalStorage, IconMemoryChip } from './dashboardEnvIcons';
+import {
+  formatBytesParts,
+  formatBytesPtBr,
+  formatUsoCotaLabel,
+  type StorageHealthSnapshot,
+} from '../../../lib/storageHealth';
 
 type Props = {
   snapshot: StorageHealthSnapshot | null;
@@ -9,136 +12,109 @@ type Props = {
   onRefresh: () => void;
 };
 
-function footerToneClass(tone: StorageHealthSnapshot['saudeTone']): string {
-  if (tone === 'ok') return 'dashboard-env-footer--green';
-  if (tone === 'warning') return 'dashboard-env-footer--amber';
-  if (tone === 'danger') return 'dashboard-env-footer--red';
-  return 'dashboard-env-footer--slate';
+function toneClass(tone: StorageHealthSnapshot['saudeTone']): string {
+  if (tone === 'ok') return 'ok';
+  if (tone === 'warning') return 'warn';
+  if (tone === 'danger') return 'danger';
+  return 'neutral';
 }
 
 export function DashboardSistemaAmbiente({ snapshot, loading, onRefresh }: Props) {
-  const pct = snapshot?.usoPercent;
-  const showBar = typeof pct === 'number';
+  const ls = snapshot ? formatBytesParts(snapshot.localStorageEstimateBytes) : null;
+  const usageForCota =
+    snapshot && snapshot.originQuotaBytes && snapshot.originQuotaBytes > 0
+      ? snapshot.originUsageBytes && snapshot.originUsageBytes > 0
+        ? snapshot.originUsageBytes
+        : snapshot.localStorageEstimateBytes
+      : null;
+  const usoLabel =
+    usageForCota !== null && snapshot?.originQuotaBytes
+      ? formatUsoCotaLabel(usageForCota, snapshot.originQuotaBytes)
+      : null;
+  const usoPctRaw =
+    usageForCota !== null && snapshot?.originQuotaBytes
+      ? Math.min(100, (usageForCota / snapshot.originQuotaBytes) * 100)
+      : null;
+  const barWidth = usoPctRaw === null ? 0 : usoPctRaw <= 0 ? 0 : Math.max(usoPctRaw, 1.5);
+  const tone = snapshot ? toneClass(snapshot.saudeTone) : 'neutral';
 
   return (
-    <div className="section-block dashboard-sistema-ambiente">
-      <div className="dashboard-sistema-head">
-        <div>
-          <p className="panel-kicker">Dados locais</p>
-          <h3>Armazenamento do sistema e ambiente local</h3>
+    <section className="dashboard-local dashboard-local--dense">
+      <div className="dashboard-nuvem__head dashboard-nuvem__head--dense">
+        <div className="dashboard-nuvem__head-left">
+          <h3>Posto local</h3>
+          {snapshot ? (
+            <span className={`dashboard-live-pill dashboard-live-pill--${tone === 'warn' ? 'warn' : tone === 'danger' ? 'danger' : 'ok'}`}>
+              <span className="dashboard-live-pill__dot" aria-hidden />
+              {snapshot.saudeLabel}
+            </span>
+          ) : null}
         </div>
         <Button disabled={loading} onClick={onRefresh} type="button" variant="ghost">
-          {loading ? 'Atualizando...' : 'Atualizar'}
+          {loading ? '…' : 'Atualizar'}
         </Button>
       </div>
 
-      <p className="panel-copy dashboard-sistema-lead">
-        Estes numeros referem-se ao espaco reservado ao I.S.O PRO neste computador (perfil do navegador/Electron), incluindo dados locais e cache —{' '}
-        <strong>nao</strong> e o uso total do disco rigido.
-      </p>
-
       {loading && !snapshot ? (
-        <div className="dashboard-env-loading">
-          <span className="dashboard-env-spinner" aria-hidden />
-          <p className="panel-copy">Carregando dados do ambiente...</p>
+        <div className="dashboard-widget-row">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <article className="dashboard-widget dashboard-widget--skeleton" key={i}>
+              <span className="dashboard-widget-skel" />
+              <span className="dashboard-widget-skel dashboard-widget-skel--tall" />
+            </article>
+          ))}
         </div>
       ) : null}
 
       {!snapshot && !loading ? (
-        <p className="panel-copy">Nao foi possivel ler o armazenamento do ambiente.</p>
+        <p className="panel-copy">Armazenamento local indisponível.</p>
       ) : null}
 
       {snapshot ? (
-        <div className="dashboard-env-grid">
-          <article className="dashboard-env-card dashboard-env-card--gauge">
-            <span className="dashboard-env-card-title">Saude do armazenamento</span>
-            <div className="dashboard-env-gauge-wrap">
-              {showBar ? (
-                <DashboardRingGauge
-                  label={`${pct}%`}
-                  percent={pct ?? 0}
-                  sublabel="cota app"
-                  tone={snapshot.saudeTone}
-                  size={96}
-                />
+        <div className="dashboard-widget-row">
+          <article className={`dashboard-widget dashboard-widget--${tone}`}>
+            <span className="dashboard-widget__label">Uso local</span>
+            <strong className="dashboard-widget__value">
+              {ls?.value}
+              {ls?.unit ? <span className="dashboard-widget__unit"> {ls.unit}</span> : null}
+            </strong>
+            <span className="dashboard-widget__meta">
+              {usoLabel ?? '—'} · cota{' '}
+              {snapshot.originQuotaBytes !== null ? formatBytesPtBr(snapshot.originQuotaBytes) : '—'}
+            </span>
+            <div
+              className={`dashboard-widget__bar dashboard-widget__bar--${tone === 'warn' ? 'warning' : tone === 'danger' ? 'danger' : 'ok'}`}
+              role="progressbar"
+              aria-valuenow={usoPctRaw ?? 0}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span style={{ width: `${barWidth}%` }} />
+            </div>
+          </article>
+
+          <article className="dashboard-widget">
+            <span className="dashboard-widget__label">Persistência</span>
+            <strong className="dashboard-widget__value">Activa</strong>
+            <span className="dashboard-widget__meta">Cache · perfil deste posto</span>
+          </article>
+
+          <article className="dashboard-widget">
+            <span className="dashboard-widget__label">RAM</span>
+            <strong className="dashboard-widget__value">
+              {snapshot.deviceMemoryGiB !== null ? (
+                <>
+                  {snapshot.deviceMemoryGiB}
+                  <span className="dashboard-widget__unit"> GiB</span>
+                </>
               ) : (
-                <div className="dashboard-env-icon-ring">
-                  <span className="dashboard-env-card-value dashboard-env-card-value--compact">—</span>
-                </div>
+                '—'
               )}
-            </div>
-            <div className="dashboard-env-card-body">
-              <strong className="dashboard-env-card-value">{snapshot.saudeLabel}</strong>
-              <p className="dashboard-env-card-hint">
-                {showBar
-                  ? `Cerca de ${pct}% da cota do aplicativo em uso.`
-                  : 'Cota detalhada indisponivel neste ambiente.'}
-              </p>
-              {showBar ? (
-                <div className="dashboard-env-mini-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-                  <div
-                    className={`dashboard-env-mini-fill dashboard-env-mini-fill--animated dashboard-env-mini-fill--${snapshot.saudeTone}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-              ) : null}
-            </div>
-            <div className={`dashboard-env-footer ${footerToneClass(snapshot.saudeTone)}`}>
-              {showBar ? <span>{pct}% uso da cota</span> : <span>Monitoramento basico</span>}
-            </div>
-          </article>
-
-          <article className="dashboard-env-card">
-            <span className="dashboard-env-card-title">Espaco do app (origem)</span>
-            <div className="dashboard-env-icon-ring">
-              <IconDatabaseStack className="dashboard-env-svg" />
-            </div>
-            <div className="dashboard-env-card-body">
-              <strong className="dashboard-env-card-value">
-                {snapshot.originUsageBytes !== null ? formatBytesPtBr(snapshot.originUsageBytes) : '—'}
-              </strong>
-              <p className="dashboard-env-card-hint">
-                {snapshot.originQuotaBytes !== null
-                  ? `Cota: ${formatBytesPtBr(snapshot.originQuotaBytes)}`
-                  : 'Cota nao informada pelo navegador.'}
-              </p>
-            </div>
-            <div className="dashboard-env-footer dashboard-env-footer--blue">
-              <span>Dados e cache do perfil</span>
-            </div>
-          </article>
-
-          <article className="dashboard-env-card">
-            <span className="dashboard-env-card-title">localStorage (estimado)</span>
-            <div className="dashboard-env-icon-ring">
-              <IconLocalStorage className="dashboard-env-svg" />
-            </div>
-            <div className="dashboard-env-card-body">
-              <strong className="dashboard-env-card-value">{formatBytesPtBr(snapshot.localStorageEstimateBytes)}</strong>
-              <p className="dashboard-env-card-hint">Configuracoes e registros em texto no navegador.</p>
-            </div>
-            <div className="dashboard-env-footer dashboard-env-footer--blue">
-              <span>Persistencia local</span>
-            </div>
-          </article>
-
-          <article className="dashboard-env-card">
-            <span className="dashboard-env-card-title">Memoria do dispositivo</span>
-            <div className="dashboard-env-icon-ring">
-              <IconMemoryChip className="dashboard-env-svg" />
-            </div>
-            <div className="dashboard-env-card-body">
-              <strong className="dashboard-env-card-value">
-                {snapshot.deviceMemoryGiB !== null ? `${snapshot.deviceMemoryGiB} GiB RAM` : 'N/D'}
-              </strong>
-              <p className="dashboard-env-card-hint">Faixa aproximada informada pelo navegador (nao e uso em tempo real).</p>
-            </div>
-            <div className="dashboard-env-footer dashboard-env-footer--blue">
-              <span>Referencia de hardware</span>
-            </div>
+            </strong>
+            <span className="dashboard-widget__meta">Capacidade do equipamento</span>
           </article>
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }

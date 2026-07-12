@@ -2,6 +2,10 @@ export type ServiceResult<T> = {
   success: boolean;
   data?: T;
   error?: string;
+  /** Gravacao local ok, mas algo secundario falhou (ex.: sync na nuvem). */
+  warning?: string;
+  /** Mensagem informativa complementar (ex.: sync na nuvem concluida). */
+  info?: string;
   meta?: {
     source?: 'supabase' | 'local';
     fallbackReason?: string;

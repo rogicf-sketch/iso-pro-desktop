@@ -27,6 +27,13 @@ export function estimateLocalStorageBytes(): number {
 
 export function formatBytesPtBr(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  const parts = formatBytesParts(bytes);
+  return `${parts.value} ${parts.unit}`;
+}
+
+/** Valor + unidade separados (cartões do painel). */
+export function formatBytesParts(bytes: number): { value: string; unit: string } {
+  if (!Number.isFinite(bytes) || bytes < 0) return { value: '—', unit: '' };
   const units = ['B', 'KB', 'MB', 'GB'];
   let n = bytes;
   let u = 0;
@@ -34,7 +41,19 @@ export function formatBytesPtBr(bytes: number): string {
     n /= 1024;
     u += 1;
   }
-  return `${n.toLocaleString('pt-BR', { maximumFractionDigits: u === 0 ? 0 : 2 })} ${units[u]}`;
+  return {
+    value: n.toLocaleString('pt-BR', { maximumFractionDigits: u === 0 ? 0 : 2 }),
+    unit: units[u],
+  };
+}
+
+/** Percentagem legível mesmo com uso muito baixo face à cota. */
+export function formatUsoCotaLabel(usageBytes: number, quotaBytes: number): string {
+  if (!(quotaBytes > 0) || !(usageBytes >= 0)) return '—';
+  const pct = (usageBytes / quotaBytes) * 100;
+  if (pct > 0 && pct < 0.01) return '< 0,01%';
+  if (pct < 1) return `${pct.toLocaleString('pt-BR', { maximumFractionDigits: 3 })}%`;
+  return `${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
 }
 
 export async function getStorageHealthSnapshot(): Promise<StorageHealthSnapshot> {

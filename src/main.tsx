@@ -7,6 +7,7 @@ import { carregarConfiguracoes } from '@/modules/configuracoes/services/configur
 import { createAppQueryClient } from '@/lib/queryClient';
 import { captureException } from '@/lib/errorReporting';
 import { initSentryDesktop } from '@/lib/sentryInit';
+import { ConfirmDialogProvider } from '@/components/ui/ConfirmDialogProvider';
 import { AuthProvider } from '@/store/authStore';
 
 const queryClient = createAppQueryClient();
@@ -24,7 +25,9 @@ void (async () => {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <App />
+          <ConfirmDialogProvider>
+            <App />
+          </ConfirmDialogProvider>
         </AuthProvider>
       </QueryClientProvider>
     </StrictMode>,

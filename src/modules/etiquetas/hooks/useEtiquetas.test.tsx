@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   listarEtiquetas: vi.fn(),
 }));
 
+vi.mock('../../../components/ui/ConfirmDialogProvider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+}));
+
 vi.mock('../../auth/hooks/useAuth', () => ({
   useAuth: () => ({
     canAccessAction: () => true,

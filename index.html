@@ -1,7 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR" translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=iso-pro-brand-1" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>I.S.O PRO — Gestão de materiais</title>
@@ -9,17 +10,23 @@
   <body>
     <script>
       (function () {
-        var tema = 'neon';
+        var tema = 'campo';
+        var valid = /^(padrao|escuro|hibrido|campo|verde|neon|claro)$/;
+        function normalize(raw) {
+          if (raw === 'claro') return 'hibrido';
+          return valid.test(raw) ? raw : null;
+        }
         try {
           var raw = localStorage.getItem('iso-pro-desktop-configuracoes-sistema');
           if (raw) {
             var p = JSON.parse(raw);
-            if (p && typeof p.tema === 'string' && /^(padrao|escuro|claro|verde|neon)$/.test(p.tema)) {
-              tema = p.tema;
+            if (p && typeof p.tema === 'string') {
+              var n = normalize(p.tema);
+              if (n) tema = n;
             }
           }
         } catch (e) {
-          /* fallback: neon (mesmo default que configuracoes.service) */
+          /* fallback: campo (default da instalacao) */
         }
         document.body.className = 'theme-' + tema;
       })();

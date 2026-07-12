@@ -4,10 +4,10 @@ import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPol
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  commitIsoProSnapshotPatch,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
@@ -144,7 +144,7 @@ type SnapshotPayload = {
 };
 
 async function readSnapshotColaboradores(): Promise<Colaborador[]> {
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['colaboradores']);
   return (payload.colaboradores ?? []).map((item, index) =>
     normalizeColaborador({
       id: String(item.id ?? `col-${index + 1}`),
@@ -162,12 +162,11 @@ async function readSnapshotColaboradores(): Promise<Colaborador[]> {
 }
 
 async function writeSnapshotColaboradores(items: Colaborador[]): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['colaboradores']);
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
+      patch: {
         colaboradores: items.map((item) => ({
           id: item.id,
           nome: item.nome,

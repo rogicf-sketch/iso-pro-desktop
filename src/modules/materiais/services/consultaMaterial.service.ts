@@ -1,5 +1,6 @@
 import { buildSaldoMap, codigoMaterialKey, type SaldoSnapshotPayload } from '../../estoque/saldoFromSnapshot';
-import { readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
+import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
 import { listarHistoricoAtendimentos } from '../../atendimento/services/atendimento.service';
@@ -42,7 +43,7 @@ export function labelStatusPlanejamento(status: StatusPlanejamentoMaterial): str
 async function aplicarSaldoNoMaterial(material: Material): Promise<Material> {
   if (!hasSupabaseConfig()) return material;
   try {
-    const payload = await readIsoProSnapshotPayload<SaldoSnapshotPayload>();
+    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
     const saldoMap = buildSaldoMap(payload);
     return {
       ...material,
@@ -86,7 +87,7 @@ async function resolverMaterialParaConsulta(query: string): Promise<Material | n
 async function lerSaldoPorCodigo(codigoKey: string): Promise<number | null> {
   if (!hasSupabaseConfig()) return null;
   try {
-    const payload = await readIsoProSnapshotPayload<SaldoSnapshotPayload>();
+    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
     const saldoMap = buildSaldoMap(payload);
     if (!saldoMap.has(codigoKey)) return null;
     return saldoMap.get(codigoKey) ?? 0;

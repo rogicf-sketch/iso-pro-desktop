@@ -1,11 +1,16 @@
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { fetchOperacaoContagens } from '../../../lib/operacaoEscalaContagens';
 import { getDesktopLicenseRegistrySummary } from '../../configuracoes/services/desktopLicenseRegistry.service';
 import { listarDocumentos } from '../../documentos/services/documentos.service';
 import { listarInventarios } from '../../inventario/services/inventario.service';
 import { getMobileDeviceIndicators } from '../../mobile/services/mobileDevices.service';
 import { listarRecebimentos } from '../../recebimentos/services/recebimentos.service';
 import { listarRir, listarRnc } from '../../qualidade/services/qualidade.service';
-import { getRuntimeSupabaseConfig, getSupabaseOperationalStatus } from '../../../lib/supabase';
+import {
+  getRuntimeSupabaseConfig,
+  getSupabaseOperationalStatus,
+  hasSupabaseConfig,
+} from '../../../lib/supabase';
 import { listarMateriaisCriticosEstoque } from '../../materiais/services/materiaisEstoqueCritico.service';
 import {
   contarRecebimentosDivergentes,
@@ -70,22 +75,40 @@ export function getDashboardCloudPanel(): DashboardCloudPanel {
 }
 
 export async function getDashboardIndicators(): Promise<DashboardIndicator[]> {
-  const [documentos, recebimentos, inventarios, mobile, desktopLicenses] = await Promise.all([
-    collectAllPages((page, pageSize) => listarDocumentos({ busca: '', status: 'todos', page, pageSize })),
-    collectAllPages((page, pageSize) => listarRecebimentos({ busca: '', status: 'todos', modo: 'todos', page, pageSize })),
-    collectAllPages((page, pageSize) => listarInventarios({ busca: '', status: 'todos', page, pageSize })),
+  const [mobile, desktopLicenses, contagensCloud] = await Promise.all([
     getMobileDeviceIndicators(),
     getDesktopLicenseRegistrySummary(),
+    hasSupabaseConfig() ? fetchOperacaoContagens() : Promise.resolve(null),
   ]);
 
-  const docsPendentes = documentos.filter((item) => item.status === 'pendente' || item.status === 'parcial').length;
-  const recebimentosPendentes = recebimentos.filter((item) => item.status === 'aguardando_conferencia').length;
-  const inventariosAbertosLista = inventarios.filter((item) => item.status === 'aberto');
-  const inventariosAbertos = inventariosAbertosLista.length;
-  const diasInventarioMaisAntigo =
-    inventariosAbertosLista.length > 0
-      ? Math.max(...inventariosAbertosLista.map((item) => diasCorridosDesde(item.dataInventario)))
-      : 0;
+  let docsPendentes = 0;
+  let recebimentosPendentes = 0;
+  let inventariosAbertos = 0;
+  let diasInventarioMaisAntigo = 0;
+
+  if (contagensCloud) {
+    docsPendentes = contagensCloud.docsPendentes;
+    recebimentosPendentes = contagensCloud.recebimentosAguardando;
+    inventariosAbertos = contagensCloud.inventariosAbertos;
+    diasInventarioMaisAntigo = contagensCloud.inventarioDiasMaisAntigo;
+  } else {
+    const [documentos, recebimentos, inventarios] = await Promise.all([
+      collectAllPages((page, pageSize) => listarDocumentos({ busca: '', status: 'todos', page, pageSize })),
+      collectAllPages((page, pageSize) =>
+        listarRecebimentos({ busca: '', status: 'todos', modo: 'todos', page, pageSize }),
+      ),
+      collectAllPages((page, pageSize) => listarInventarios({ busca: '', status: 'todos', page, pageSize })),
+    ]);
+    docsPendentes = documentos.filter((item) => item.status === 'pendente' || item.status === 'parcial').length;
+    recebimentosPendentes = recebimentos.filter((item) => item.status === 'aguardando_conferencia').length;
+    const inventariosAbertosLista = inventarios.filter((item) => item.status === 'aberto');
+    inventariosAbertos = inventariosAbertosLista.length;
+    diasInventarioMaisAntigo =
+      inventariosAbertosLista.length > 0
+        ? Math.max(...inventariosAbertosLista.map((item) => diasCorridosDesde(item.dataInventario)))
+        : 0;
+  }
+
   const licencasAtivas = desktopLicenses.data?.active ?? 0;
   const licencasExpiradas = desktopLicenses.data?.expired ?? 0;
   const licencasExpirando = desktopLicenses.data?.expiringSoon ?? 0;
@@ -144,25 +167,49 @@ export async function getDashboardIndicators(): Promise<DashboardIndicator[]> {
 }
 
 export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
-  const [documentos, recebimentos, inventarios, mobile, rir, rnc, desktopLicenses, estoqueCriticos] =
-    await Promise.all([
-    collectAllPages((page, pageSize) => listarDocumentos({ busca: '', status: 'todos', page, pageSize })),
-    collectAllPages((page, pageSize) => listarRecebimentos({ busca: '', status: 'todos', modo: 'todos', page, pageSize })),
-    collectAllPages((page, pageSize) => listarInventarios({ busca: '', status: 'todos', page, pageSize })),
+  const [mobile, desktopLicenses, estoqueCriticos, contagensCloud] = await Promise.all([
     getMobileDeviceIndicators(),
-    collectAllPages((page, pageSize) => listarRir({ busca: '', status: 'todos', page, pageSize })),
-    collectAllPages((page, pageSize) => listarRnc({ busca: '', status: 'todos', page, pageSize })),
     getDesktopLicenseRegistrySummary(),
     listarMateriaisCriticosEstoque().catch(() => [] as Awaited<ReturnType<typeof listarMateriaisCriticosEstoque>>),
+    hasSupabaseConfig() ? fetchOperacaoContagens() : Promise.resolve(null),
   ]);
 
-  const docsPendentes = documentos.filter((item) => item.status === 'pendente' || item.status === 'parcial').length;
-  const recebimentosPendentes = recebimentos.filter((item) => item.status === 'aguardando_conferencia').length;
-  const inventariosComDivergencia = inventarios.filter((item) => item.divergencias > 0 && item.status !== 'cancelado').length;
-  const rirAbertos = rir.filter((item) => item.status !== 'tratado' && item.status !== 'cancelado').length;
-  const rncAbertas = rnc.filter((item) => item.status !== 'concluido' && item.status !== 'cancelado').length;
-  const rirReprovadosSemRnc = listarRirReprovadosSemRnc(rir, rnc);
-  const recebimentosDivergentes = contarRecebimentosDivergentes(recebimentos);
+  let docsPendentes = 0;
+  let recebimentosPendentes = 0;
+  let inventariosComDivergencia = 0;
+  let rirAbertos = 0;
+  let rncAbertas = 0;
+  let rirReprovadoSemRnc = 0;
+  let recebimentosDivergentes = 0;
+
+  if (contagensCloud) {
+    docsPendentes = contagensCloud.docsPendentes;
+    recebimentosPendentes = contagensCloud.recebimentosAguardando;
+    inventariosComDivergencia = contagensCloud.inventariosComDivergencia;
+    rirAbertos = contagensCloud.rirAbertos;
+    rncAbertas = contagensCloud.rncAbertas;
+    rirReprovadoSemRnc = contagensCloud.rirReprovadoSemRnc;
+    recebimentosDivergentes = contagensCloud.recebimentosDivergentes;
+  } else {
+    const [documentos, recebimentos, inventarios, rir, rnc] = await Promise.all([
+      collectAllPages((page, pageSize) => listarDocumentos({ busca: '', status: 'todos', page, pageSize })),
+      collectAllPages((page, pageSize) =>
+        listarRecebimentos({ busca: '', status: 'todos', modo: 'todos', page, pageSize }),
+      ),
+      collectAllPages((page, pageSize) => listarInventarios({ busca: '', status: 'todos', page, pageSize })),
+      collectAllPages((page, pageSize) => listarRir({ busca: '', status: 'todos', page, pageSize })),
+      collectAllPages((page, pageSize) => listarRnc({ busca: '', status: 'todos', page, pageSize })),
+    ]);
+    docsPendentes = documentos.filter((item) => item.status === 'pendente' || item.status === 'parcial').length;
+    recebimentosPendentes = recebimentos.filter((item) => item.status === 'aguardando_conferencia').length;
+    inventariosComDivergencia = inventarios.filter(
+      (item) => item.divergencias > 0 && item.status !== 'cancelado',
+    ).length;
+    rirAbertos = rir.filter((item) => item.status !== 'tratado' && item.status !== 'cancelado').length;
+    rncAbertas = rnc.filter((item) => item.status !== 'concluido' && item.status !== 'cancelado').length;
+    rirReprovadoSemRnc = listarRirReprovadosSemRnc(rir, rnc).length;
+    recebimentosDivergentes = contarRecebimentosDivergentes(recebimentos);
+  }
 
   const cloud = getDashboardCloudPanel();
   const alerts: DashboardAlert[] = [];
@@ -229,11 +276,11 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
     });
   }
 
-  if (rirReprovadosSemRnc.length > 0) {
+  if (rirReprovadoSemRnc > 0) {
     alerts.push({
       severity: 'critical',
       title: 'RIR reprovado sem RNC',
-      detail: `${rirReprovadosSemRnc.length} RIR com laudo reprovado sem nao conformidade (RNC) vinculada ao recebimento.`,
+      detail: `${rirReprovadoSemRnc} RIR com laudo reprovado sem nao conformidade (RNC) vinculada ao recebimento.`,
       route: '/rnc',
     });
   }

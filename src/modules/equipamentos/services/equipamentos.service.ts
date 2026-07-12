@@ -4,10 +4,10 @@ import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv
 import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  commitIsoProSnapshotPatch,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -197,17 +197,16 @@ type SnapshotPayload = {
 };
 
 async function readSnapshotEquipamentos(): Promise<Equipamento[]> {
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['equipamentos']);
   return (payload.equipamentos ?? []).map((row, index) => mapSnapshotRow(row, index));
 }
 
 async function writeSnapshotEquipamentos(items: Equipamento[]): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['equipamentos']);
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
+      patch: {
         equipamentos: items.map((item) => ({ ...item })),
         dataAtualizacao: new Date().toISOString(),
       },

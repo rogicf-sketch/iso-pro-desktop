@@ -85,9 +85,9 @@ describe('montarHtmlRelatorioRirCompleto', () => {
     expect(html).not.toContain('>CONFORME OBSERVAÇÕES<');
   });
 
-  it('documento unico com fluxo continuo v70', () => {
+  it('documento v73 fluxo continuo com assinatura unica e cabecalho repetido', () => {
     const html = montarHtmlRelatorioRirCompleto(rirMinimo());
-    expect(html).toContain('Relatório v70');
+    expect(html).toContain('Relatório v73');
     expect(html).toMatch(/rir-sign-space[\s\S]*rir-sign-line/);
     expect(html).toContain('rir-laudo-block');
     expect(html).toContain('rir-laudo-box');
@@ -96,8 +96,10 @@ describe('montarHtmlRelatorioRirCompleto', () => {
     expect(html).toContain('rir-footer-row');
     expect(html).toContain('iso-pdf-meta');
     expect(html).toContain('"footerOnly":true');
-    expect(html).not.toContain('rir-print-sheet');
     expect(html).not.toContain('__relatorioUsaPagedJs = true');
+    expect(html).not.toContain('rir-print-sheet');
+    expect(html).not.toContain('rir-print-tail-outer');
+    expect((html.match(/class="rir-signatures"/g) ?? []).length).toBe(1);
   });
 
   it('mantem descricao integral do item na tabela', () => {
@@ -119,7 +121,7 @@ describe('montarHtmlRelatorioRirCompleto', () => {
     expect(html).not.toContain('Nota técnica geral');
   });
 
-  it('43 itens numa unica tabela continua', () => {
+  it('43 itens em tabela unica com assinatura unica', () => {
     const itens = Array.from({ length: 43 }, (_, i) => ({
       id: `item-${i}`,
       codigoMaterial: `M${i}`,
@@ -131,7 +133,27 @@ describe('montarHtmlRelatorioRirCompleto', () => {
     const html = montarHtmlRelatorioRirCompleto(rirMinimo({ itensRir: itens }));
     expect((html.match(/<tr class="rir-item-row">/g) ?? []).length).toBe(43);
     expect(html).not.toContain('rir-print-sheet');
+    expect(html).toContain('rir-footer-row');
     expect(html).toContain('rir-signatures');
+    expect((html.match(/class="rir-signatures"/g) ?? []).length).toBe(1);
+  });
+
+  it('134 itens tubulacao — rodape na tabela com cabecalho repetido e assinatura unica', () => {
+    const itens = Array.from({ length: 134 }, (_, i) => ({
+      id: `item-${i}`,
+      codigoMaterial: `5680-E.RAZN008D-TUA-10017_${String(i).padStart(3, '0')}`,
+      descricaoMaterial:
+        'COTOVELO 90° FM ASTM A197 GALVANIZADO 300# BSP ASME B16.3 2 1/2"',
+      quantidade: 1 + (i % 5),
+      unidade: 'PÇ',
+      certificado: 'CERT-2026-467',
+    }));
+    const html = montarHtmlRelatorioRirCompleto(rirMinimo({ itensRir: itens, codigo: 'RIR-TUB-134' }));
+    expect((html.match(/<tr class="rir-item-row">/g) ?? []).length).toBe(134);
+    expect(html).toContain('rir-footer-row');
+    expect(html).not.toContain('rir-print-sheet');
+    expect(html).not.toContain('rir-print-tail-outer');
+    expect((html.match(/class="rir-signatures"/g) ?? []).length).toBe(1);
   });
 
   it('20 itens tubulação — numeracao 1..20 sem saltos', () => {

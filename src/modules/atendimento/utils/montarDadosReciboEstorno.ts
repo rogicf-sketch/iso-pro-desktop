@@ -1,5 +1,6 @@
-import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
 import type { Atendimento, AtendimentoItem, DadosReciboEstorno } from '../types/atendimento.types';
+import { atendimentoTemVariosDocumentos } from './estornoDocumento.utils';
+import { montarMetadadosDocumentoAtendimento } from './montarMetadadosDocumentoAtendimento';
 
 export async function montarDadosReciboEstorno(
   at: Atendimento,
@@ -7,15 +8,17 @@ export async function montarDadosReciboEstorno(
   itensEstorno: AtendimentoItem[],
   estornoParcial: boolean,
 ): Promise<DadosReciboEstorno> {
-  const docResult = await buscarDocumentoPorIdOuNumero(at.documentoId, at.documentoNumero);
-  const doc = docResult.success && docResult.data ? docResult.data : null;
+  const meta = await montarMetadadosDocumentoAtendimento(at, itensEstorno);
+  const documentoNumero =
+    atendimentoTemVariosDocumentos(at, itensEstorno) ? 'MULTIPLOS' : at.documentoNumero;
 
   return {
     atendimento: at,
-    documentoNumero: at.documentoNumero,
-    documentoRevisao: doc?.revisao ?? '—',
-    documentoDescricao: doc?.descricao ?? '(Documento nao encontrado ou indisponivel.)',
-    documentoResponsavel: doc?.responsavel ?? '—',
+    documentoNumero,
+    documentoTitulo: meta.documentoTitulo,
+    documentoRevisao: meta.documentoRevisao,
+    documentoDescricao: meta.documentoDescricao,
+    documentoResponsavel: meta.documentoResponsavel,
     nomeQuemEstorna: campos.nomeQuemEstorna.trim(),
     nomeQuemDevolve: campos.nomeQuemDevolve.trim(),
     motivoEstorno: campos.motivoEstorno.trim(),

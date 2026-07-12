@@ -81,7 +81,8 @@ export function cssRelatorioNativoPreview(): string {
         padding: 16px 12px 28px;
       }
       .rir-doc,
-      .iso-report-sheet {
+      .iso-report-sheet,
+      .rfo-page {
         max-width: 210mm;
         margin: 0 auto;
         background: #fff;
@@ -122,7 +123,7 @@ export function scriptInicializarPagedMedia(loadingElementId = 'relatorio-paged-
     var box = page.querySelector('.pagedjs_page_content');
     if (!box) return false;
     if (box.querySelector(
-      'table tbody tr, .rir-hdr, .rir-page1-head, .inst-header, h1, h2, .rfo-sec, .rfo-indice, .rnc-sec, .rf-sec, .fc-item'
+      'table tbody tr, .rir-hdr, .rir-page1-head, .inst-header, h1, h2, .rfo-sec, .rfo-capa, .rfo-body, .rfo-indice, .rnc-sec, .rf-sec, .fc-item'
     )) return true;
     var txt = (box.textContent || '').replace(/\\s+/g, ' ').trim();
     txt = txt.replace(/Folha \\d+ \\/ \\d+/gi, '').trim();
@@ -154,15 +155,17 @@ export function scriptInicializarPagedMedia(loadingElementId = 'relatorio-paged-
 
   function marcarPaginacaoPronta(flow) {
     var pages = document.querySelectorAll('.pagedjs_page');
-    var ok = paginacaoDistribuidaOk();
+    var ok = paginacaoDistribuidaOk() && algumaPaginaTemConteudo();
     window.__relatorioPaginadoPronto = true;
     document.dispatchEvent(new Event('relatorio-paginado-pronto'));
     if (ok) {
+      document.body.classList.remove('relatorio-paged-falhou');
       document.body.classList.add('relatorio-paged-ready');
       ocultarLoading();
     } else {
+      document.body.classList.remove('relatorio-paged-ready');
       document.body.classList.add('relatorio-paged-falhou');
-      ocultarLoading('Paginação indisponível — a mostrar documento em modo simples.');
+      ocultarLoading(pages.length ? 'Paginação incompleta — a mostrar documento em modo simples.' : 'Paginação indisponível — a mostrar documento em modo simples.');
     }
     capturarHtmlImpressao();
   }

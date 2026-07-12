@@ -11,14 +11,19 @@ import {
 } from '../../../lib/localSnapshotWriteGuard';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
-import { listarMateriais, validarCodigosMateriaisAtivosNoCadastroParaRecebimento } from '../../materiais/services/materiais.service';
+import { listarMateriais, validarCodigosMateriaisAtivosNoCadastroParaRecebimento, carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
 import {
-  commitIsoProSnapshotWrite,
+  commitIsoProSnapshotPatch,
   invalidateIsoProSnapshotCache,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  readIsoProSnapshotSlicesForWrite,
+  SNAPSHOT_PLANEJAMENTO_SLICE_KEYS,
+  SNAPSHOT_SALDO_SLICE_KEYS,
 } from '../../../lib/isoProSnapshot';
-import { roundPesoKg } from '../../../lib/parseDecimal';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
+import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
+import { upsertDocumentosPlanejamentoEmLotes, listDocumentosPlanejamentoPageFromCloud, listDocumentosPlanejamentoIdsFromCloud } from '../../../lib/documentosPlanejamentoTabelas';
+import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
+import { parseDecimalFlexible, roundPesoKg } from '../../../lib/parseDecimal';
 import { executeWrite, getErrorMessage } from '../../../lib/service-result';
 import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
@@ -47,6 +52,7 @@ import {
 } from './documentoPlanejamento';
 import {
   documentosReconciliadosDoPayload,
+  montarSaldoPayloadComDocumentosReconciliados,
   type PayloadPlanejamentoReconcile,
 } from '../../../lib/snapshotDocumentosReconciliacao';
 import {
@@ -347,7 +353,7 @@ type SnapshotPayload = PayloadPlanejamentoReconcile & {
 };
 
 async function readSnapshotDocumentos(): Promise<Documento[]> {
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_PLANEJAMENTO_SLICE_KEYS);
   const rawDocs = payload.documentos ?? [];
   const reconciliados = documentosReconciliadosDoPayload(payload);
   const rawById = new Map(rawDocs.map((d, i) => [String(d.id ?? `doc-${i + 1}`), d]));
@@ -387,22 +393,88 @@ export function contarDocumentosNoArmazenamentoLocal(): number {
   return contarRegistosArrayLocalStorage(documentosStorageKey());
 }
 
+function contarLinhasMaterialEmDocumentosSnapshot(
+  documentos: Array<{ itens?: unknown }> | undefined,
+): { comItens: number; totalItens: number } {
+  let comItens = 0;
+  let totalItens = 0;
+  for (const doc of documentos ?? []) {
+    const n = Array.isArray(doc.itens) ? doc.itens.length : 0;
+    if (n > 0) {
+      comItens += 1;
+      totalItens += n;
+    }
+  }
+  return { comItens, totalItens };
+}
+
+function contarLinhasMaterialNoArmazenamentoLocal(): { comItens: number; totalItens: number } {
+  const items = readAll();
+  let comItens = 0;
+  let totalItens = 0;
+  for (const doc of items) {
+    const n = doc.itens?.length ?? 0;
+    if (n > 0) {
+      comItens += 1;
+      totalItens += n;
+    }
+  }
+  return { comItens, totalItens };
+}
+
 /**
- * Compara planejamento local vs snapshot remoto. `noSnapshot === 0` com `noNavegador > 0` explica mobile sem desenhos apesar do Supabase OK.
+ * Compara planejamento local vs snapshot remoto.
+ * `nuvemSemLinhasMaterial` explica mobile com desenhos mas sem lista de materiais (cabecalhos sem itens[]).
  */
 export async function diagnosticarPlanejamentoLocalVersusNuvem(): Promise<{
   noNavegador: number;
   noSnapshot: number;
+  comItensNoLocal: number;
+  totalItensNoLocal: number;
+  comItensNaNuvem: number;
+  totalItensNaNuvem: number;
+  nuvemSemLinhasMaterial: boolean;
 }> {
+  const localItens = contarLinhasMaterialNoArmazenamentoLocal();
   const noNavegador = contarDocumentosNoArmazenamentoLocal();
   if (!hasSupabaseConfig()) {
-    return { noNavegador, noSnapshot: -1 };
+    return {
+      noNavegador,
+      noSnapshot: -1,
+      comItensNoLocal: localItens.comItens,
+      totalItensNoLocal: localItens.totalItens,
+      comItensNaNuvem: -1,
+      totalItensNaNuvem: -1,
+      nuvemSemLinhasMaterial: false,
+    };
   }
   try {
-    const naNuvem = await loadDocumentos();
-    return { noNavegador, noSnapshot: naNuvem.length };
+    const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_PLANEJAMENTO_SLICE_KEYS);
+    const cloudItens = contarLinhasMaterialEmDocumentosSnapshot(payload.documentos);
+    const noSnapshot = payload.documentos?.length ?? 0;
+    const nuvemSemLinhasMaterial =
+      noSnapshot > 0 &&
+      localItens.totalItens > 0 &&
+      cloudItens.totalItens < Math.max(5, Math.floor(localItens.totalItens * 0.02));
+    return {
+      noNavegador,
+      noSnapshot,
+      comItensNoLocal: localItens.comItens,
+      totalItensNoLocal: localItens.totalItens,
+      comItensNaNuvem: cloudItens.comItens,
+      totalItensNaNuvem: cloudItens.totalItens,
+      nuvemSemLinhasMaterial,
+    };
   } catch {
-    return { noNavegador, noSnapshot: -1 };
+    return {
+      noNavegador,
+      noSnapshot: -1,
+      comItensNoLocal: localItens.comItens,
+      totalItensNoLocal: localItens.totalItens,
+      comItensNaNuvem: -1,
+      totalItensNaNuvem: -1,
+      nuvemSemLinhasMaterial: false,
+    };
   }
 }
 
@@ -435,6 +507,14 @@ export async function sincronizarPlanejamentoLocalComNuvem(): Promise<ServiceRes
         error: `Gravacao foi enviada mas a verificacao na nuvem nao bateu: local ${items.length} documento(s), nuvem ${naNuvem.length} apos releitura. Confira permissoes/RLS em iso_pro_snapshot, conflitos de outra sessao, ou recarregue a pagina e tente de novo.`,
       };
     }
+    const localItens = contarLinhasMaterialNoArmazenamentoLocal();
+    const cloudItens = contarLinhasMaterialEmDocumentosSnapshot(naNuvem);
+    if (localItens.totalItens > 0 && cloudItens.totalItens < Math.max(5, Math.floor(localItens.totalItens * 0.5))) {
+      return {
+        success: false,
+        error: `Planejamento enviado mas a nuvem ficou sem linhas de material (${cloudItens.totalItens} linha(s) vs ${localItens.totalItens} neste PC). Recarregue a pagina e use novamente «Enviar planejamento deste PC para a nuvem».`,
+      };
+    }
     return { success: true, data: { total: items.length, confirmadoNaNuvem: naNuvem.length } };
   } catch (error) {
     return {
@@ -452,8 +532,10 @@ async function writeSnapshotDocumentos(
     actorLogin?: string;
   },
 ): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(
+      SNAPSHOT_PLANEJAMENTO_SLICE_KEYS,
+    );
     let payloadTrabalho = currentPayload as PayloadComRefsAtendimento;
     let removidosHistorico = 0;
     let removidosAtendimentos = 0;
@@ -486,30 +568,59 @@ async function writeSnapshotDocumentos(
       });
     }
 
+    const documentosWire = items.map((item) => ({
+      id: item.id,
+      numero: item.numero,
+      revisao: item.revisao,
+      data: item.dataDocumento,
+      descricao: item.descricao,
+      responsavel: item.responsavel,
+      itens: item.itens.map((docItem) => ({
+        id: docItem.id,
+        codigo: docItem.codigoMaterial,
+        descricao: docItem.descricaoMaterial,
+        unidade: docItem.unidade,
+        quantidade: docItem.quantidadeProjeto,
+        quantidadeAtendida: docItem.quantidadeAtendida,
+        localizacao: (docItem.localizacao ?? '').trim(),
+      })),
+    }));
+
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...payloadTrabalho,
-        documentos: items.map((item) => ({
-          id: item.id,
-          numero: item.numero,
-          revisao: item.revisao,
-          data: item.dataDocumento,
-          descricao: item.descricao,
-          responsavel: item.responsavel,
-          itens: item.itens.map((docItem) => ({
-            id: docItem.id,
-            codigo: docItem.codigoMaterial,
-            descricao: docItem.descricaoMaterial,
-            unidade: docItem.unidade,
-            quantidade: docItem.quantidadeProjeto,
-            quantidadeAtendida: docItem.quantidadeAtendida,
-            localizacao: (docItem.localizacao ?? '').trim(),
-          })),
-        })),
+      patch: {
+        ...(opcoes?.limparHistoricoIncompativel
+          ? {
+              atendimentoHistorico: payloadTrabalho.atendimentoHistorico,
+              atendimentos: payloadTrabalho.atendimentos,
+            }
+          : {}),
+        documentos: documentosWire,
         dataAtualizacao: new Date().toISOString(),
       },
     };
+  });
+
+  // Dual-write Fase B: tabelas dedicadas em lotes (falha visível no painel se persistir).
+  await runDualWriteBestEffort('documentos', async () => {
+    const documentosWire = items.map((item) => ({
+      id: item.id,
+      numero: item.numero,
+      revisao: item.revisao,
+      data: item.dataDocumento,
+      descricao: item.descricao,
+      responsavel: item.responsavel,
+      itens: item.itens.map((docItem) => ({
+        id: docItem.id,
+        codigo: docItem.codigoMaterial,
+        descricao: docItem.descricaoMaterial,
+        unidade: docItem.unidade,
+        quantidade: docItem.quantidadeProjeto,
+        quantidadeAtendida: docItem.quantidadeAtendida,
+        localizacao: (docItem.localizacao ?? '').trim(),
+      })),
+    }));
+    return upsertDocumentosPlanejamentoEmLotes(documentosWire);
   });
 }
 
@@ -556,6 +667,48 @@ export async function listarDocumentos(
   filtro: DocumentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<DocumentoListItem>>> {
   try {
+    // Escala: lista paginada nas tabelas (não carrega 11k na memória).
+    if (hasSupabaseConfig()) {
+      const page = await listDocumentosPlanejamentoPageFromCloud({
+        busca: filtro.busca,
+        status: filtro.status,
+        offset: (filtro.page - 1) * filtro.pageSize,
+        limit: filtro.pageSize,
+      });
+      if (!page.error && page.source === 'tables') {
+        const items: DocumentoListItem[] = page.documentos.map((d) => {
+          const statusRaw = String(d.status ?? 'pendente');
+          const status = (
+            ['pendente', 'parcial', 'recebido', 'atendido', 'cancelado'].includes(statusRaw)
+              ? statusRaw
+              : 'pendente'
+          ) as Documento['status'];
+          return {
+            id: String(d.id ?? ''),
+            numero: String(d.numero ?? ''),
+            revisao: String(d.revisao ?? 'A'),
+            descricao: String(d.descricao ?? ''),
+            responsavel: String(d.responsavel ?? ''),
+            dataDocumento: String(d.data ?? '').slice(0, 10),
+            status,
+            totalItens: Number(d.totalItens) || 0,
+            quantidadePlanejada: Number(d.quantidadePlanejada) || 0,
+            quantidadeAtendida: Number(d.quantidadeAtendida) || 0,
+          };
+        });
+        return {
+          success: true,
+          data: {
+            items,
+            total: page.total,
+            page: filtro.page,
+            pageSize: filtro.pageSize,
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    }
+
     const { enriched: comStatusPlanejamento } = await obterBundlePlanejamentoDocumentos();
     const meta: NonNullable<ServiceResult<Documento[]>['meta']> = {
       source: shouldTryRemoteRead() ? 'supabase' : 'local',
@@ -586,6 +739,15 @@ export async function listarDocumentos(
 /** IDs de todos os documentos que correspondem ao filtro (ignora paginacao). */
 export async function obterIdsDocumentosFiltrados(filtro: DocumentoFiltro): Promise<ServiceResult<string[]>> {
   try {
+    if (hasSupabaseConfig()) {
+      const cloud = await listDocumentosPlanejamentoIdsFromCloud({
+        busca: filtro.busca,
+        status: filtro.status,
+      });
+      if (!cloud.error && cloud.source === 'tables') {
+        return { success: true, data: cloud.ids, meta: { source: 'supabase' } };
+      }
+    }
     const { enriched: comStatus } = await obterBundlePlanejamentoDocumentos();
     const filtered = aplicarFiltrosListaDocumentos(comStatus, filtro);
     return { success: true, data: filtered.map((d) => d.id) };
@@ -1104,24 +1266,69 @@ type CadastroMaterialExport = {
 };
 
 async function mapaCadastroMaterialPorCodigo(): Promise<Map<string, CadastroMaterialExport>> {
-  const matResult = await listarMateriais({
-    busca: '',
-    disciplina: '',
-    ativo: 'todos',
-    page: 1,
-    pageSize: 999999,
-  });
   const map = new Map<string, CadastroMaterialExport>();
-  if (!matResult.success || !matResult.data) return map;
-  for (const m of matResult.data.items) {
-    const cod = m.codigo.trim().toLowerCase();
-    if (!cod) continue;
-    map.set(cod, {
-      peso: Number(m.peso) || 0,
-      disciplina: String(m.disciplina ?? '').trim(),
-      saldoAtual: Number(m.saldoAtual) || 0,
-    });
+
+  // Cadastro completo (mesma fonte do ecrã Editar material) — não usar list_page (limite 200).
+  try {
+    const materiais = await carregarMateriaisDoCadastro();
+    for (const m of materiais) {
+      const cod = codigoMaterialKey(m.codigo);
+      if (!cod) continue;
+      map.set(cod, {
+        peso: roundPesoKg(typeof m.peso === 'number' ? m.peso : parseDecimalFlexible(String(m.peso ?? 0))),
+        disciplina: String(m.disciplina ?? '').trim(),
+        saldoAtual: Number(m.saldoAtual) || 0,
+      });
+    }
+  } catch {
+    /* tenta paginação RPC como fallback */
+    const pageSize = 200;
+    let page = 1;
+    let total = Infinity;
+    while ((page - 1) * pageSize < total) {
+      const matResult = await listarMateriais({
+        busca: '',
+        disciplina: '',
+        ativo: 'todos',
+        page,
+        pageSize,
+      });
+      if (!matResult.success || !matResult.data) break;
+      total = Number(matResult.data.total) || matResult.data.items.length;
+      for (const m of matResult.data.items) {
+        const cod = codigoMaterialKey(m.codigo);
+        if (!cod) continue;
+        map.set(cod, {
+          peso: roundPesoKg(typeof m.peso === 'number' ? m.peso : parseDecimalFlexible(String(m.peso ?? 0))),
+          disciplina: String(m.disciplina ?? '').trim(),
+          saldoAtual: Number(m.saldoAtual) || 0,
+        });
+      }
+      if (matResult.data.items.length === 0) break;
+      page += 1;
+      if (page > 500) break;
+    }
   }
+
+  // Saldo operacional por cima do cadastro (não apaga peso/disciplina).
+  if (shouldTryRemoteRead() || hasSupabaseConfig()) {
+    try {
+      const payload = await readSnapshotRemoteSliceOrFull<Record<string, unknown>>(SNAPSHOT_SALDO_SLICE_KEYS);
+      const docsRec = documentosReconciliadosDoPayload(payload as PayloadPlanejamentoReconcile);
+      const saldoMap = buildSaldoMap(
+        montarSaldoPayloadComDocumentosReconciliados(payload as PayloadPlanejamentoReconcile, docsRec),
+      );
+      for (const [key, saldo] of saldoMap) {
+        const cod = codigoMaterialKey(key);
+        if (!cod) continue;
+        const cur = map.get(cod) ?? { peso: 0, disciplina: '', saldoAtual: 0 };
+        map.set(cod, { ...cur, saldoAtual: Number(saldo) || 0 });
+      }
+    } catch {
+      /* mantém saldo do cadastro */
+    }
+  }
+
   return map;
 }
 
@@ -1315,7 +1522,7 @@ export async function montarExportacaoDocumentosCsvResumo(
 
   for (const doc of documentos) {
     for (const item of doc.itens) {
-      const cod = item.codigoMaterial.trim().toLowerCase();
+      const cod = codigoMaterialKey(item.codigoMaterial);
       const cad = cadastroPorCodigo.get(cod);
       const pesoUn = roundPesoKg(cad?.peso ?? 0);
       const disciplina = cad?.disciplina ?? '';

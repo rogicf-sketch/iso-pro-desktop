@@ -29,7 +29,7 @@ export function injetarBarraPreviewElectronNoHtml(html: string): string {
     border:1px solid #64748b;background:#1e293b;color:#f1f5f9;cursor:pointer;
   ">Guardar PDF…</button>
   <span id="iso-electron-preview-hint" style="flex:1 1 220px;font-size:12px;color:#94a3b8;line-height:1.35;">
-    Pré-visualização I.S.O PRO — «Imprimir / PDF» é rápido (Folha 1/N). «Guardar PDF» gera ficheiro oficial idêntico ao arquivo.
+    Pré-visualização I.S.O PRO — «Guardar PDF» grava o ficheiro oficial (recomendado). «Imprimir / PDF» abre o diálogo para impressora ou Microsoft Print to PDF.
   </span>
   <span id="iso-electron-preview-status" role="status" style="font-size:12px;color:#38bdf8;min-width:120px;text-align:right;"></span>
 </div>
@@ -61,7 +61,7 @@ export function injetarBarraPreviewElectronNoHtml(html: string): string {
         return;
       }
       setBusy(true);
-      aviso('A abrir impressão…');
+      aviso('A preparar impressão…');
       aguardarPaginacao(function () {
         void desktop.printJanelaAtual().then(function (res) {
           setBusy(false);

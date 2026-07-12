@@ -2,14 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { InventarioFormData } from '../types/inventario.types';
-import { fecharInventario, montarExportacaoInventarioCsv, salvarInventario } from './inventario.service';
+import { fecharInventario, montarExportacaoInventarioCsv, salvarInventario, validateInventario } from './inventario.service';
 
 const STORAGE_KEY = 'iso-pro-desktop-inventarios';
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
+}));
+
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -22,9 +27,33 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     ...actual,
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare: () => Promise<unknown>) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare: () => Promise<{ patch: Record<string, unknown>; baselineUpdatedAt: string | null }>) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+}
 
 function minimalInventario(overrides: Partial<InventarioFormData> = {}): InventarioFormData {
   return {
@@ -42,6 +71,7 @@ function minimalInventario(overrides: Partial<InventarioFormData> = {}): Inventa
         unidade: 'UN',
         saldoSistema: 10,
         quantidadeContada: 10,
+        localizacaoContada: '',
       },
     ],
     ...overrides,
@@ -53,6 +83,7 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -106,6 +137,82 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
     const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { codigo: string; status: string }[];
     expect(local.some((inv) => inv.codigo === 'INV-CREATE-OK' && inv.status === 'aberto')).toBe(true);
   });
+
+  it('permite criar inventario aberto sem itens para contagem mobile posterior', async () => {
+    mockReadForWrite.mockResolvedValue({
+      payload: { inventarios: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[STORAGE_KEY] = JSON.stringify([]);
+
+    const payload = minimalInventario({
+      codigo: 'INV-SHELL-MOBILE',
+      contagemMobileHabilitada: true,
+      itens: [],
+    });
+    expect(validateInventario(payload)).toBeNull();
+
+    const result = await salvarInventario(payload);
+
+    expect(result.success).toBe(true);
+    expect(result.data?.itens).toEqual([]);
+    expect(result.data?.contagemMobileHabilitada).toBe(true);
+  });
+
+  it('com nuvem vazia edita inventario local (exemplo) e publica lista completa na nuvem', async () => {
+    mockReadPayload.mockResolvedValue({ inventarios: [] });
+    mockReadForWrite.mockResolvedValue({
+      payload: { inventarios: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[STORAGE_KEY] = JSON.stringify([
+      {
+        id: 'inv-1',
+        codigo: 'INV-2026-001',
+        descricao: 'Inventario exemplo',
+        responsavel: 'Carlos Lima',
+        dataInventario: '2026-04-01',
+        status: 'aberto',
+        contagemMobileHabilitada: false,
+        observacoes: '',
+        itens: [
+          {
+            id: 'inv-1-item-1',
+            codigoMaterial: 'TB-0001',
+            descricaoMaterial: 'Tubo',
+            unidade: 'UN',
+            saldoSistema: 12,
+            quantidadeContada: 10,
+          },
+        ],
+      },
+    ]);
+
+    const result = await salvarInventario(
+      {
+        ...minimalInventario({
+          codigo: 'INV-2026-001',
+          descricao: 'Inventario exemplo',
+          responsavel: 'Carlos Lima',
+          dataInventario: '2026-04-01',
+          contagemMobileHabilitada: true,
+        }),
+      },
+      'inv-1',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.contagemMobileHabilitada).toBe(true);
+    expect(mockCommitPatch).toHaveBeenCalled();
+  });
 });
 
 function snapshotInventarioAbertoEdicao() {
@@ -140,6 +247,7 @@ describe('inventario.service / salvarInventario edicao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -180,6 +288,7 @@ describe('inventario.service / salvarInventario edicao (Supabase)', () => {
             unidade: 'UN',
             saldoSistema: 4,
             quantidadeContada: 4,
+            localizacaoContada: '',
           },
         ],
       }),
@@ -216,6 +325,7 @@ describe('inventario.service / salvarInventario edicao (Supabase)', () => {
             unidade: 'UN',
             saldoSistema: 4,
             quantidadeContada: 4,
+            localizacaoContada: '',
           },
         ],
       }),
@@ -233,6 +343,7 @@ describe('inventario.service / fecharInventario (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -291,6 +402,7 @@ describe('inventario.service / montarExportacaoInventarioCsv', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',

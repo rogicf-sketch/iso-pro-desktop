@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { Button } from '../../../components/ui/Button';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -42,6 +43,7 @@ function formatSalvo(iso: string): string {
 
 export function RelatorioFotograficoListPage() {
   const navigate = useNavigate();
+  const { confirm } = useConfirmDialog();
   const { canAccessAction } = useAuth();
   const canEdit = canAccessAction('relatorios', 'editar');
 
@@ -102,9 +104,13 @@ export function RelatorioFotograficoListPage() {
 
   const onLimparTodosLocais = async () => {
     if (!canEdit) return;
-    const ok = window.confirm(
-      'Apagar TODOS os relatórios fotográficos guardados neste computador?\n\nIsto remove o catálogo, os dados em localStorage e as fotos em IndexedDB (prefixo rf:). Não pode ser desfeito.',
-    );
+    const ok = await confirm({
+      title: 'Limpar armazenamento local',
+      message:
+        'Apagar TODOS os relatórios fotográficos guardados neste computador?\n\nIsto remove o catálogo, os dados em localStorage e as fotos em IndexedDB (prefixo rf:). Não pode ser desfeito.',
+      danger: true,
+      confirmLabel: 'Apagar tudo',
+    });
     if (!ok) return;
     setMsg(null);
     const r = await limparTodosRelatoriosFotograficosLocais();
@@ -120,9 +126,11 @@ export function RelatorioFotograficoListPage() {
 
   const onExcluir = async (m: RelatorioFotograficoMeta) => {
     if (!canEdit) return;
-    const ok = window.confirm(
-      `Excluir o relatório "${m.titulo}"${m.numeroRelatorio ? ` (${m.numeroRelatorio})` : ''}? Esta ação não pode ser desfeita.`,
-    );
+    const ok = await confirm({
+      message: `Excluir o relatório "${m.titulo}"${m.numeroRelatorio ? ` (${m.numeroRelatorio})` : ''}? Esta ação não pode ser desfeita.`,
+      danger: true,
+      confirmLabel: 'Excluir',
+    });
     if (!ok) return;
     const r = await excluirRelatorioFotograficoLocal(m.id);
     if (!r.success) {

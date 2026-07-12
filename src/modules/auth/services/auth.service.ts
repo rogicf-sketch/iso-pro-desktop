@@ -1,6 +1,9 @@
 import { isElectronApp } from '../../../lib/isElectronApp';
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { clearIsoProJwtSession, tryBootstrapJwtSessionAfterLogin } from '../../../lib/isoProJwtSession';
+import { verifyIsoProMfaChallenge } from '../../../lib/isoProMfa';
+import { captureOperationalEvent } from '../../../lib/errorReporting';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
 import { getSupabase, hasSupabaseConfig, resetSupabaseClient, formatSupabaseConnectionError } from '../../../lib/supabase';
 import { verifyPassword } from 'iso-pro-shared';
@@ -26,6 +29,25 @@ export const AUTH_REMEMBER_LOGIN_PREFERENCE_KEY_BASE = 'iso-pro-auth-permanecer-
 export const AUTH_SESSION_LAST_ACTIVITY_KEY_BASE = 'iso-pro-auth-last-activity';
 /** Mesmo com «permanecer logado», a sessão expira após este tempo sem uso (ms). */
 export const AUTH_SESSION_MAX_IDLE_MS = 8 * 60 * 60 * 1000;
+
+/** Login Auth exige código TOTP antes de gravar a sessão ISO PRO. */
+export class IsoProMfaRequiredError extends Error {
+  readonly factorId: string;
+  readonly pendingUser: AuthUser;
+  readonly permanecerLogado: boolean;
+
+  constructor(factorId: string, pendingUser: AuthUser, permanecerLogado: boolean) {
+    super('Introduza o codigo do authenticator (MFA).');
+    this.name = 'IsoProMfaRequiredError';
+    this.factorId = factorId;
+    this.pendingUser = pendingUser;
+    this.permanecerLogado = permanecerLogado;
+  }
+}
+
+export function isIsoProMfaRequiredError(error: unknown): error is IsoProMfaRequiredError {
+  return error instanceof IsoProMfaRequiredError;
+}
 
 export function getAuthSessionStorageKey(): string {
   return getScopedIsoProStorageKey(AUTH_SESSION_STORAGE_KEY_BASE);
@@ -245,12 +267,31 @@ const mockPermissionsByProfileId = new Map(
   ]),
 );
 
+const SEED_PERFIL_CODIGO_BY_NOME: Record<string, string> = {
+  administrador: 'admin',
+  planejamento: 'planejamento',
+  operacao: 'operacao',
+  operação: 'operacao',
+  consulta: 'consulta',
+};
+
+/** Perfis na nuvem usam UUID em `perfil.id`; o baseline seed usa codigos (`admin`, `operacao`, …). */
+function resolveSeedPerfilCodigo(perfilId: string, perfilNome?: string): string {
+  if (mockPermissionsByProfileId.has(perfilId)) return perfilId;
+  const nomeKey = perfilNome?.trim().toLowerCase();
+  if (nomeKey && SEED_PERFIL_CODIGO_BY_NOME[nomeKey]) {
+    return SEED_PERFIL_CODIGO_BY_NOME[nomeKey];
+  }
+  return perfilId;
+}
+
 /**
  * Utilizadores guardados antes de existir um novo modulo em `ALL_MODULES` ficam sem linhas para esse modulo.
  * Sobrepõe as permissões gravadas ao baseline do perfil (seed) para novos modulos herdarem o acesso esperado.
  */
-function mergePermissoesComDefaultsPerfil(stored: Permission[], perfilId: string): Permission[] {
-  const baseline = buildPermissions(mockPermissionsByProfileId.get(perfilId) ?? []);
+function mergePermissoesComDefaultsPerfil(stored: Permission[], perfilId: string, perfilNome?: string): Permission[] {
+  const seedCodigo = resolveSeedPerfilCodigo(perfilId, perfilNome);
+  const baseline = buildPermissions(mockPermissionsByProfileId.get(seedCodigo) ?? []);
   const storedMap = new Map(stored.map((p) => [`${p.modulo}:${p.acao}`, p.permitido]));
   return baseline.map((p) => {
     const key = `${p.modulo}:${p.acao}`;
@@ -345,6 +386,7 @@ function readLocalUsers(): Array<AuthUser & { senha: string }> {
                 permitido: permission.permitido,
               })),
               item.perfilId,
+              item.perfilNome,
             )
           : buildPermissions(mockPermissionsByProfileId.get(item.perfilId) ?? []),
     }));
@@ -369,7 +411,7 @@ function mapAuthRpcUserToAuthUser(
     login: rpcUser.login,
     nome: rpcUser.nome,
     perfil: { id: rpcUser.perfil.id, nome: rpcUser.perfil.nome },
-    permissoes: mergePermissoesComDefaultsPerfil(permissoes, rpcUser.perfil.id),
+    permissoes: mergePermissoesComDefaultsPerfil(permissoes, rpcUser.perfil.id, rpcUser.perfil.nome),
   };
 }
 
@@ -382,6 +424,11 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
   if (rpc.ok) {
     const sessionUser = mapAuthRpcUserToAuthUser(rpc.user);
     setVolatileSessionPasswordAfterSuccessfulLogin(senha);
+    const jwtOutcome = await tryBootstrapJwtSessionAfterLogin(login, senha);
+    if (jwtOutcome.kind === 'mfa_required') {
+      captureOperationalEvent('mfa_challenge', { login }, 'info');
+      throw new IsoProMfaRequiredError(jwtOutcome.factorId, sessionUser, payload.permanecerLogado);
+    }
     persistAuthSession(sessionUser, payload.permanecerLogado);
     markSessionCloudValidationOk();
     return sessionUser;
@@ -402,6 +449,24 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
   }
 
   throw new AuthServiceError(rpc.error || 'Login ou senha invalidos.', 'invalid_credentials');
+}
+
+/** Após código MFA correcto: grava sessão ISO PRO (JWT já em aal2). */
+export async function completeLoginAfterMfa(
+  factorId: string,
+  code: string,
+  pendingUser: AuthUser,
+  permanecerLogado: boolean,
+): Promise<AuthUser> {
+  await verifyIsoProMfaChallenge(factorId, code);
+  persistAuthSession(pendingUser, permanecerLogado);
+  markSessionCloudValidationOk();
+  appendAuthAuditEvent({
+    type: 'login_success',
+    actorLogin: pendingUser.login,
+    detail: 'Login com MFA (JWT aal2) concluido.',
+  });
+  return pendingUser;
 }
 
 export async function login(payload: LoginPayload): Promise<AuthUser> {
@@ -432,6 +497,9 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
     try {
       return await loginRemote(payload);
     } catch (error) {
+      if (isIsoProMfaRequiredError(error)) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : 'Falha ao autenticar no Supabase.';
       appendAuthAuditEvent({
         type: 'login_failure',
@@ -477,6 +545,7 @@ export function logout() {
   clearAuthSessionStorage();
   clearVolatileSessionPassword();
   resetSessionCloudHealth();
+  void clearIsoProJwtSession();
   invalidateIsoProSnapshotCache();
   resetSupabaseClient();
 }
@@ -515,7 +584,7 @@ export function getCurrentUser(): AuthUser | null {
     return null;
   }
 
-  const merged = mergePermissoesComDefaultsPerfil(user.permissoes, user.perfil.id);
+  const merged = mergePermissoesComDefaultsPerfil(user.permissoes, user.perfil.id, user.perfil.nome);
   if (JSON.stringify(merged) !== JSON.stringify(user.permissoes)) {
     const next: AuthUser = { ...user, permissoes: merged };
     const backend = getActiveAuthSessionStorage() ?? window.localStorage;

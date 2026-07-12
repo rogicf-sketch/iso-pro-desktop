@@ -19,6 +19,7 @@ import { totalizarLinhas, useAtendimento } from '../hooks/useAtendimento';
 import type { Atendimento } from '../types/atendimento.types';
 import { montarHtmlRecibo, montarHtmlReciboConsolidado } from '../utils/imprimirReciboAtendimento';
 import { montarDadosReciboParaAtendimento } from '../utils/montarDadosReciboParaAtendimento';
+import { atendimentoTemVariosDocumentos } from '../utils/estornoDocumento.utils';
 
 export function AtendimentoPage() {
   const { canAccessAction } = useAuth();
@@ -82,6 +83,7 @@ export function AtendimentoPage() {
     iniciarEstorno,
     estornoLinhas,
     setEstornoLinhas,
+    estornoDuplicadosAviso,
     idsMarcados,
     itensSelecionados,
     toggleMarcaItem,
@@ -284,12 +286,12 @@ export function AtendimentoPage() {
   }
 
   return (
-    <div className="stack-grid">
+    <div className="stack-grid" data-e2e="atendimento-page">
       <div className="panel">
         <div className="panel-header">
           <div>
             <p className="panel-kicker">Modulo</p>
-            <h2>Atendimento</h2>
+            <h2 data-e2e="atendimento-title">Atendimento</h2>
           </div>
         </div>
 
@@ -464,7 +466,7 @@ export function AtendimentoPage() {
                 <span className="panel-toolbar__label">Planilha</span>
                 <div className="panel-toolbar__buttons">
                   <Button onClick={() => void exportarAtendimentosMateriaisExcel()} type="button" variant="ghost">
-                    Exportar Excel (CSV)
+                    Exportar Excel (ZIP)
                   </Button>
                 </div>
               </div>
@@ -474,8 +476,9 @@ export function AtendimentoPage() {
 
         <ModuleHelp>
           <OperationalNotice>
-            O CSV inclui documento, descricao, revisao, datas, atendente, recebedor, origem (PC ou Mobile quando registrado assim), material, quantidade e IDs para cruzar com estorno. Colunas{' '}
-            <code>estorno_permitido</code> (sim/nao) e <code>qtd_pode_estornar</code> (numero) mostram se a linha ainda pode ser estornada e a quantidade maxima; <code>atendido</code> indica material ainda com quantidade no lote; <code>pode_estornar_linha</code> repete o mesmo criterio que estorno_permitido. Lotes com estorno total (sem itens no lote) aparecem uma linha resumo com <code>status_lote</code> estornado e descricao explicando. No Excel, use importar com separador{' '}
+            O ZIP inclui <strong>atendimentos-materiais.csv</strong> (uma linha por material, com saldo atual no lote) e <strong>estornos-log.csv</strong> (historico auditavel de cada estorno: data, lote, documento, quantidade estornada, operador e motivo). Colunas{' '}
+            <code>quantidade_retirada_original</code> e <code>quantidade_estornada_acumulada</code> no CSV principal mostram a retirada inicial e o total ja devolvido por linha. Tambem ha{' '}
+            <code>estorno_permitido</code> (sim/nao) e <code>qtd_pode_estornar</code> (numero) para ver se a linha ainda pode ser estornada; <code>atendido</code> indica material ainda com quantidade no lote. Lotes com estorno total aparecem uma linha resumo com <code>status_lote</code> estornado. No Excel, use importar com separador{' '}
             <strong>ponto e virgula (;)</strong> se as colunas nao separarem. A coluna <code>atendimento_item_id</code> corresponde a cada linha do lote na tela de estorno.
           </OperationalNotice>
         </ModuleHelp>
@@ -593,12 +596,28 @@ export function AtendimentoPage() {
                 <p className="panel-copy">
                   Preencha os dados do estorno. O recibo impresso inclui documento, itens, motivo e assinaturas. O estorno so e aplicado ao confirmar.
                 </p>
+                {estornoDuplicadosAviso.length > 0 ? (
+                  <OperationalNotice>
+                    <strong>Atencao — mesmo material em outro lote:</strong> estornar este lote{' '}
+                    <strong>nao</strong> altera retiradas registadas noutros protocolos. Confirme se esta no lote correto.
+                    <ul className="stack-grid" style={{ marginTop: '0.5rem' }}>
+                      {estornoDuplicadosAviso.map((av) => (
+                        <li key={`${av.loteId}-${av.codigoMaterial}`}>
+                          Lote <strong>{av.loteNumero}</strong> ({av.origem === 'mobile' ? 'Mobile' : 'PC'}) —{' '}
+                          {av.codigoMaterial} no desenho <strong>{av.documentoNumero}</strong>:{' '}
+                          {av.quantidadeAtendida} {av.recebedor ? `• recebedor ${av.recebedor}` : ''} •{' '}
+                          {new Date(av.dataAtendimento).toLocaleString('pt-BR')}
+                        </li>
+                      ))}
+                    </ul>
+                  </OperationalNotice>
+                ) : null}
                 <div className="document-summary">
-                  <strong>
-                    {estornoAlvo.documentoNumero} Rev. {estornoDocInfo.revisao}
-                  </strong>
+                  <strong>{estornoDocInfo.titulo}</strong>
                   <p className="panel-copy">{estornoDocInfo.descricao}</p>
-                  <p className="panel-copy">Responsavel (documento): {estornoDocInfo.responsavel}</p>
+                  {atendimentoTemVariosDocumentos(estornoAlvo) ? null : (
+                    <p className="panel-copy">Responsavel (documento): {estornoDocInfo.responsavel}</p>
+                  )}
                   <p className="panel-copy">
                     Atendimento <strong>{estornoAlvo.numero}</strong> — retirada em{' '}
                     {new Date(estornoAlvo.dataAtendimento).toLocaleString('pt-BR')}
@@ -650,6 +669,7 @@ export function AtendimentoPage() {
                       <thead>
                         <tr>
                           <th style={{ width: 40 }}></th>
+                          {atendimentoTemVariosDocumentos(estornoAlvo) ? <th>Documento</th> : null}
                           <th>Codigo</th>
                           <th>Descricao</th>
                           <th>UN</th>
@@ -660,6 +680,7 @@ export function AtendimentoPage() {
                       <tbody>
                         {estornoAlvo.itens.map((it, rowIndex) => {
                           const cfg = estornoLinhas[it.id] ?? { marcado: false, quantidade: it.quantidadeAtendida };
+                          const mostrarColDoc = atendimentoTemVariosDocumentos(estornoAlvo);
                           return (
                             <tr key={it.id}>
                               <td>
@@ -679,6 +700,9 @@ export function AtendimentoPage() {
                                   type="checkbox"
                                 />
                               </td>
+                              {mostrarColDoc ? (
+                                <td>{it.documentoNumero?.trim() || estornoAlvo.documentoNumero || '—'}</td>
+                              ) : null}
                               <td>{it.codigoMaterial}</td>
                               <td>{it.descricaoMaterial}</td>
                               <td>{it.unidade}</td>

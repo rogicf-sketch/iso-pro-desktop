@@ -1,73 +1,11 @@
 import { buscarColaboradorPorId, listarColaboradoresAtivos } from '../../colaboradores/services/colaboradores.service';
-import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
 import type { Atendimento, DadosReciboAtendimento } from '../types/atendimento.types';
+import { montarMetadadosDocumentoAtendimento } from './montarMetadadosDocumentoAtendimento';
 import { resolverColaboradorPorTextoAtendente } from './resolverColaboradorPorTextoAtendente';
-
-async function montarMetadadosDocumentoRecibo(at: Atendimento): Promise<{
-  documentoDescricao: string;
-  documentoRevisao: string;
-  documentoResponsavel: string;
-}> {
-  const placeholder = '(Documento nao encontrado ou indisponivel.)';
-
-  const docPrincipal = await buscarDocumentoPorIdOuNumero(at.documentoId, at.documentoNumero);
-  const doc = docPrincipal.success && docPrincipal.data ? docPrincipal.data : null;
-  if (doc) {
-    return {
-      documentoDescricao: doc.descricao?.trim() || placeholder,
-      documentoRevisao: doc.revisao || '—',
-      documentoResponsavel: doc.responsavel || '—',
-    };
-  }
-
-  const numerosLinha = [
-    ...new Set(
-      at.itens
-        .map((it) => it.documentoNumero?.trim())
-        .filter((x): x is string => Boolean(x)),
-    ),
-  ];
-
-  if (numerosLinha.length === 1) {
-    const r = await buscarDocumentoPorIdOuNumero('', numerosLinha[0]);
-    if (r.success && r.data) {
-      return {
-        documentoDescricao: r.data.descricao?.trim() || placeholder,
-        documentoRevisao: r.data.revisao || '—',
-        documentoResponsavel: r.data.responsavel || '—',
-      };
-    }
-  }
-
-  if (numerosLinha.length > 1) {
-    const partes: string[] = [];
-    for (const num of numerosLinha) {
-      const r = await buscarDocumentoPorIdOuNumero('', num);
-      if (r.success && r.data?.descricao) {
-        partes.push(`${num}: ${r.data.descricao}`);
-      } else {
-        partes.push(num);
-      }
-    }
-    if (partes.length) {
-      return {
-        documentoDescricao: partes.join(' · '),
-        documentoRevisao: '—',
-        documentoResponsavel: '—',
-      };
-    }
-  }
-
-  return {
-    documentoDescricao: placeholder,
-    documentoRevisao: '—',
-    documentoResponsavel: '—',
-  };
-}
 
 /** Monta dados completos do recibo a partir de um atendimento ja registrado (historico). */
 export async function montarDadosReciboParaAtendimento(at: Atendimento): Promise<DadosReciboAtendimento> {
-  const meta = await montarMetadadosDocumentoRecibo(at);
+  const meta = await montarMetadadosDocumentoAtendimento(at);
 
   let atRecibo: Atendimento = { ...at };
   if (

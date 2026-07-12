@@ -57,7 +57,16 @@ WHERE n.nspname = 'public'
     'usuarios_sistema',
     'perfis_acesso',
     'usuario_permissoes',
-    'perfil_permissoes'
+    'perfil_permissoes',
+    'iso_pro_documentos_planejamento',
+    'iso_pro_documento_itens_planejamento',
+    'iso_pro_recebimentos',
+    'iso_pro_recebimento_itens',
+    'iso_pro_inventarios',
+    'iso_pro_inventario_itens',
+    'iso_pro_rir',
+    'iso_pro_rnc',
+    'iso_pro_atendimento_comandos'
   )
 GROUP BY c.relname, c.relrowsecurity
 ORDER BY c.relname;
@@ -87,7 +96,9 @@ WHERE schemaname = 'public'
 ORDER BY tablename, policyname;
 
 -- Checklist manual após correr este script:
--- [ ] iso_pro_snapshot: RLS ON + policies por tenant_id (JWT ou equivalente)
+-- [ ] iso_pro_snapshot: RLS ON + policies *_tenant_rls (híbrido JWT)
+-- [ ] Tabelas de escala (documentos/recebimentos/inventários/RIR/RNC): *_tenant_rls (não só tenant_id IS NOT NULL)
 -- [ ] dispositivos_mobile: só tenant/admin altera autorização
 -- [ ] Nenhuma policy anon com USING (true) em tabelas de negócio
+-- [ ] Sessão authenticated com claim errado: RPCs devolvem ISO_PRO_TENANT_FORBIDDEN
 -- [ ] Testar com utilizador de outro tenant: SELECT/UPDATE deve falhar

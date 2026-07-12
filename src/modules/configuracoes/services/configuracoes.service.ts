@@ -10,6 +10,7 @@ import { dispatchIsoProConfigUpdatedEvent } from '../../../lib/configEvents';
 import { getCurrentUser } from '../../auth/services/auth.service';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { getSupabaseConfigDiagnostics, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
 import {
   readIsoProCloudConnectionComMigracao,
@@ -22,12 +23,18 @@ import { normalizeIaApiBaseUrl } from '../../../lib/isoProIaApi.service';
 import { LEGACY_LOGO_STORAGE_KEY_BASE } from '../../../lib/logoInstitucional';
 import { syncOciUploadContextFromConfig } from './ociUploadContextSync.service';
 import { sincronizarConfigAlertaEstoqueParaNuvem } from './syncAlertaEstoqueConfigNuvem.service';
+import {
+  type ConfigReciboMobileSnapshot,
+  logoInstitucionalLocalConfigurado,
+  reciboConfigLocalPendenteEnvioNuvem,
+} from '../utils/configReciboMobileSnapshot';
 import { sincronizarBackupOracleSettingsFromConfig } from '../../../lib/backupOracleAuto.client';
 import {
   hydrateConfigSecretsVault,
   mergeConfigSecrets,
   persistConfigSecretsVault,
 } from '../../../lib/configSecrets.client';
+import { normalizeTemaSistemaId } from '../../../lib/temaSistema';
 
 const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
 
@@ -35,7 +42,7 @@ function configStorageKey(): string {
   return getScopedIsoProStorageKey(STORAGE_KEY_BASE);
 }
 
-const TEMAS_VALIDOS: ConfiguracaoSistema['tema'][] = ['padrao', 'escuro', 'claro', 'verde', 'neon'];
+const TEMAS_VALIDOS: ConfiguracaoSistema['tema'][] = ['padrao', 'escuro', 'hibrido', 'campo', 'verde', 'neon'];
 const RIR_MODOS_VALIDOS: ConfiguracaoSistema['rirModoNumeracao'][] = ['auto', 'disciplina', 'manual'];
 
 function normalizeRirModoNumeracao(m: unknown): ConfiguracaoSistema['rirModoNumeracao'] {
@@ -48,7 +55,7 @@ function normalizeTema(t: unknown): ConfiguracaoSistema['tema'] {
   if (t === undefined || t === null || t === '') {
     return defaultConfig.tema;
   }
-  return TEMAS_VALIDOS.includes(t as ConfiguracaoSistema['tema']) ? (t as ConfiguracaoSistema['tema']) : 'padrao';
+  return normalizeTemaSistemaId(t, 'padrao');
 }
 
 const defaultConfig: ConfiguracaoSistema = {
@@ -56,7 +63,7 @@ const defaultConfig: ConfiguracaoSistema = {
   projeto: '',
   contrato: '',
   local: '',
-  tema: 'neon',
+  tema: 'campo',
   mostrarAjudaModulos: true,
   sequenciaAtendimento: 0,
   rirModoNumeracao: 'auto',
@@ -118,7 +125,7 @@ function normalizeRelatorioFinalIaBaseUrl(url: unknown): string {
 
 export function aplicarTemaSistema(tema: ConfiguracaoSistema['tema']) {
   if (typeof document === 'undefined') return;
-  document.body.classList.remove('theme-padrao', 'theme-escuro', 'theme-claro', 'theme-verde', 'theme-neon');
+  document.body.classList.remove('theme-padrao', 'theme-escuro', 'theme-hibrido', 'theme-campo', 'theme-verde', 'theme-neon');
   document.body.classList.add(`theme-${tema}`);
 }
 
@@ -143,7 +150,8 @@ export function readUsuarioTemaPreferido(): ConfiguracaoSistema['tema'] | null {
   if (!u?.login?.trim()) return null;
   const raw = localStorage.getItem(chaveLocalStorageTemaPreferidoUsuario(u.login))?.trim();
   if (!raw) return null;
-  return TEMAS_VALIDOS.includes(raw as ConfiguracaoSistema['tema']) ? (raw as ConfiguracaoSistema['tema']) : null;
+  const mapped = normalizeTemaSistemaId(raw, 'padrao');
+  return TEMAS_VALIDOS.includes(mapped) ? mapped : null;
 }
 
 export function salvarUsuarioTemaPreferido(tema: ConfiguracaoSistema['tema']): void {
@@ -286,9 +294,39 @@ export function aplicarTemaEfetivoNaSessao(): void {
   aplicarTemaSistema(readTemaEfetivoParaSessao());
 }
 
-function logoJaConfigurado(url: string): boolean {
-  const t = url.trim();
-  return Boolean(t && t !== LOGO_INSTITUCIONAL_PADRAO_FABRICA);
+function bootstrapSyncReciboConfigSessionKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-recibo-bootstrap-sync-session');
+}
+
+/** Indica se logo/CNPJ locais ainda nao foram enviados ao snapshot na nuvem. */
+export async function consultarReciboConfigPendenteNuvem(
+  config: ConfiguracaoSistema,
+): Promise<boolean> {
+  if (!hasSupabaseConfig()) return false;
+  try {
+    const payload = await readSnapshotRemoteSliceOrFull<{ configuracoesSistema?: ConfigReciboMobileSnapshot }>([
+      'configuracoesSistema',
+    ]);
+    const nuvem = payload?.configuracoesSistema;
+    return reciboConfigLocalPendenteEnvioNuvem(config, nuvem);
+  } catch {
+    return false;
+  }
+}
+
+async function tentarBootstrapSyncReciboConfigNuvem(config: ConfiguracaoSistema): Promise<void> {
+  if (!hasSupabaseConfig() || typeof sessionStorage === 'undefined') return;
+  if (sessionStorage.getItem(bootstrapSyncReciboConfigSessionKey())) return;
+  sessionStorage.setItem(bootstrapSyncReciboConfigSessionKey(), '1');
+
+  try {
+    const pendente = await consultarReciboConfigPendenteNuvem(config);
+    if (!pendente) return;
+    await sincronizarConfigAlertaEstoqueParaNuvem(config);
+    invalidateIsoProSnapshotCache();
+  } catch {
+    /* bootstrap best-effort; utilizador pode gravar Config manualmente */
+  }
 }
 
 /** Migra `iso-pro-desktop-recibo-logo-url` (legado) para `logoInstitucionalUrl` em Configuracoes. */
@@ -299,7 +337,7 @@ function migrateLegacyLogoInstitucionalStorage(): void {
   if (!legacy) return;
 
   const config = readConfiguracoes();
-  if (logoJaConfigurado(config.logoInstitucionalUrl)) {
+  if (logoInstitucionalLocalConfigurado(config.logoInstitucionalUrl)) {
     localStorage.removeItem(legacyKey);
     return;
   }
@@ -327,6 +365,7 @@ export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
   const config = readConfiguracoes();
   aplicarTemaEfetivoNaSessao();
   void sincronizarBackupOracleSettingsFromConfig(config);
+  void tentarBootstrapSyncReciboConfigNuvem(config);
   return config;
 }
 
@@ -556,10 +595,25 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
 
   void sincronizarBackupOracleSettingsFromConfig(normalized);
 
+  let warning: string | undefined;
+  let info: string | undefined;
   if (hasSupabaseConfig()) {
-    void sincronizarConfigAlertaEstoqueParaNuvem(normalized);
+    const sync = await sincronizarConfigAlertaEstoqueParaNuvem(normalized);
+    if (!sync.success) {
+      warning =
+        sync.error ??
+        'Configuracoes salvas neste PC, mas nao foi possivel enviar logo/CNPJ e demais dados para a nuvem. O app Campo pode nao refletir as alteracoes ate a sincronizacao funcionar.';
+    } else if (sync.data?.sincronizado) {
+      info = 'Logo, CNPJ e dados do projeto foram enviados para a nuvem (app Campo). No telemovel, use «Carregar dados da nuvem».';
+    }
   }
 
+  if (warning) {
+    return { success: true, data: normalized, warning, info };
+  }
+  if (info) {
+    return { success: true, data: normalized, info };
+  }
   return { success: true, data: normalized };
 }
 
@@ -584,11 +638,12 @@ export function registrarValidacaoDesktop(timestamp = new Date().toISOString()) 
   return next;
 }
 
-export function consumirSequenciaAtendimento() {
+export function consumirSequenciaAtendimento(snapshotMaxSequencia?: number) {
   const current = readConfiguracoes();
+  const base = Math.max(current.sequenciaAtendimento, Number(snapshotMaxSequencia) || 0);
   const next = {
     ...current,
-    sequenciaAtendimento: current.sequenciaAtendimento + 1,
+    sequenciaAtendimento: base + 1,
   };
   localStorage.setItem(configStorageKey(), JSON.stringify(next));
   return next.sequenciaAtendimento;

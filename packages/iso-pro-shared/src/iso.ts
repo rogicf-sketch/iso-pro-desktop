@@ -120,6 +120,8 @@ export interface InventarioItemSnapshot {
   unidade?: string;
   saldoSistema?: number;
   quantidadeContada?: number;
+  /** Onde o material foi contado (mobile/PC); histórico da apuração. */
+  localizacaoContada?: string;
 }
 
 /** Inventário alinhado ao I.S.O PRO desktop (snapshot `inventarios`). */

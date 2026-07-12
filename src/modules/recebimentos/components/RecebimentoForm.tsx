@@ -8,6 +8,7 @@ import { Modal } from '../../../components/ui/Modal';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
+import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import type { ServiceWriteResult } from '../../../types/common.types';
 import { RecebimentoItensEditor } from './RecebimentoItensEditor';
 import { listarColaboradores } from '../../colaboradores/services/colaboradores.service';
@@ -19,7 +20,11 @@ import {
   previewItensRecebimentoCsv,
   validarItensRecebimentoCsvContraCadastroMateriais,
 } from '../services/recebimentos.import.csv';
-import type { RecebimentoFormData } from '../types/recebimento.types';
+import type { Recebimento, RecebimentoFormData } from '../types/recebimento.types';
+import {
+  imprimirRecebimentoCampoHtml,
+  preVisualizarRecebimentoCampoHtml,
+} from '../utils/imprimirRecebimentoCampoHtml';
 
 type Props = {
   initialValue: RecebimentoFormData;
@@ -35,6 +40,11 @@ type Props = {
    * com cabecalho travado. So aplicavel quando o recebimento esta aguardando conferencia no servidor.
    */
   podeCorrigirItensNaVisualizacao?: boolean;
+  /** Visualizacao: metadados para folha de campo (status na base). */
+  recebimentoRelatorioMeta?: {
+    status: Recebimento['status'];
+    dataConferencia?: string;
+  };
 };
 
 export function RecebimentoForm({
@@ -45,12 +55,15 @@ export function RecebimentoForm({
   allowImportItens = false,
   readOnly = false,
   podeCorrigirItensNaVisualizacao = false,
+  recebimentoRelatorioMeta,
 }: Props) {
   const [form, setForm] = useState<RecebimentoFormData>(initialValue);
   const [editandoItensNf, setEditandoItensNf] = useState(false);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [folhaCampoBusy, setFolhaCampoBusy] = useState(false);
+  const [folhaCampoAviso, setFolhaCampoAviso] = useState<string | null>(null);
   const guardedCancel = useModalGuardedClose(onCancel);
   useModalFormDirty(isPlainFormDirty(initialValue, form));
   const [importStaging, setImportStaging] = useState<{
@@ -453,11 +466,73 @@ export function RecebimentoForm({
           {error}
         </div>
       ) : null}
+      {folhaCampoAviso ? (
+        <div style={{ marginTop: 12 }}>
+          <OperationalNotice tone="critical">{folhaCampoAviso}</OperationalNotice>
+        </div>
+      ) : null}
 
       <div className="form-actions">
         <Button onClick={guardedCancel} type="button" variant="ghost">
           {readOnly ? 'Fechar' : 'Cancelar'}
         </Button>
+        {readOnly && recebimentoRelatorioMeta && !editandoItensNf ? (
+          <>
+            <Button
+              disabled={folhaCampoBusy}
+              onClick={() => {
+                setFolhaCampoBusy(true);
+                setFolhaCampoAviso(null);
+                void (async () => {
+                  try {
+                    const ok = await imprimirRecebimentoCampoHtml({
+                      ...form,
+                      status: recebimentoRelatorioMeta.status,
+                      dataConferencia: recebimentoRelatorioMeta.dataConferencia,
+                    });
+                    if (!ok) {
+                      setFolhaCampoAviso(
+                        traduzirErroImpressaoIsoPro(
+                          'Nao foi possivel abrir o dialogo de impressao. Verifique a impressora padrao.',
+                        ),
+                      );
+                    }
+                  } finally {
+                    setFolhaCampoBusy(false);
+                  }
+                })();
+              }}
+              type="button"
+              variant="ghost"
+            >
+              Imprimir / PDF (folha de campo, paisagem)
+            </Button>
+            <Button
+              disabled={folhaCampoBusy}
+              onClick={() => {
+                setFolhaCampoBusy(true);
+                setFolhaCampoAviso(null);
+                void (async () => {
+                  try {
+                    const res = await preVisualizarRecebimentoCampoHtml({
+                      ...form,
+                      status: recebimentoRelatorioMeta.status,
+                      dataConferencia: recebimentoRelatorioMeta.dataConferencia,
+                    });
+                    if (!res.ok && res.error) {
+                      setFolhaCampoAviso(traduzirErroImpressaoIsoPro(res.error));
+                    }
+                  } finally {
+                    setFolhaCampoBusy(false);
+                  }
+                })();
+              }}
+              type="button"
+            >
+              Pre-visualizar folha de campo
+            </Button>
+          </>
+        ) : null}
         {readOnly && podeCorrigirItensNaVisualizacao && !editandoItensNf ? (
           <Button onClick={() => setEditandoItensNf(true)} type="button">
             Editar itens da nota fiscal

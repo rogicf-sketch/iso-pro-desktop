@@ -20,6 +20,7 @@ describe('parseInventariosPersistidos', () => {
             unidade: 'UN',
             saldoSistema: 1,
             quantidadeContada: 1,
+            localizacaoContada: 'Prateleira A',
           },
         ],
       },
@@ -27,6 +28,7 @@ describe('parseInventariosPersistidos', () => {
     const out = parseInventariosPersistidos(raw);
     expect(out).not.toBeNull();
     expect(out![0].itens).toHaveLength(1);
+    expect(out![0].itens[0].localizacaoContada).toBe('Prateleira A');
   });
 
   it('aceita observacoes omitida', () => {

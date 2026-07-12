@@ -1,4 +1,4 @@
-import { commitIsoProSnapshotWrite, readIsoProSnapshotPayloadForWrite } from '../../../lib/isoProSnapshot';
+import { commitIsoProSnapshotPatch, readIsoProSnapshotSlicesForWrite } from '../../../lib/isoProSnapshot';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
@@ -6,9 +6,14 @@ import {
   extrairConfigAlertaEstoqueParaSnapshot,
   lerConfigAlertaEstoqueDoSnapshot,
 } from '../utils/configAlertaEstoqueSnapshot';
+import {
+  extrairConfigReciboMobileParaSnapshot,
+  normalizarLogoInstitucionalParaSnapshotMobile,
+} from '../utils/configReciboMobileSnapshot';
 
 /**
- * Copia configuracao de alerta de estoque (SMTP + destinatarios) para `configuracoesSistema` no snapshot na nuvem.
+ * Copia configuracao de alerta de estoque (SMTP + destinatarios) e recibo mobile (logo, CNPJ, projeto)
+ * para `configuracoesSistema` no snapshot na nuvem.
  * Preserva `alertaEstoqueEmailState` gerido pela Edge Function.
  */
 export async function sincronizarConfigAlertaEstoqueParaNuvem(
@@ -19,15 +24,19 @@ export async function sincronizarConfigAlertaEstoqueParaNuvem(
   }
 
   try {
-    await commitIsoProSnapshotWrite(async () => {
-      const { payload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite();
+    await commitIsoProSnapshotPatch(async () => {
+      const { slices, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['configuracoesSistema']);
+      const payload = slices;
       const atual = lerConfigAlertaEstoqueDoSnapshot(payload.configuracoesSistema);
-      const parcial = extrairConfigAlertaEstoqueParaSnapshot(config);
+      const parcialAlerta = extrairConfigAlertaEstoqueParaSnapshot(config);
+      const logoMobile = await normalizarLogoInstitucionalParaSnapshotMobile(config.logoInstitucionalUrl);
+      const parcialRecibo = extrairConfigReciboMobileParaSnapshot(config, logoMobile);
       const nextConfig = {
         ...(payload.configuracoesSistema && typeof payload.configuracoesSistema === 'object'
           ? (payload.configuracoesSistema as Record<string, unknown>)
           : {}),
-        ...parcial,
+        ...parcialAlerta,
+        ...parcialRecibo,
         alertaEstoqueEmailState: atual.alertaEstoqueEmailState ?? {
           lastNotifiedCriticalIds: [],
           lastSentAt: '',
@@ -39,8 +48,7 @@ export async function sincronizarConfigAlertaEstoqueParaNuvem(
       };
       return {
         baselineUpdatedAt,
-        nextPayload: {
-          ...payload,
+        patch: {
           configuracoesSistema: nextConfig,
           dataAtualizacao: new Date().toISOString(),
         },
@@ -50,7 +58,10 @@ export async function sincronizarConfigAlertaEstoqueParaNuvem(
   } catch (e) {
     return {
       success: false,
-      error: e instanceof Error ? e.message : 'Falha ao sincronizar alerta de estoque na nuvem.',
+      error:
+        e instanceof Error ?
+          e.message
+        : 'Falha ao sincronizar configuracoes na nuvem (logo/CNPJ do recibo mobile, alertas e projeto).',
     };
   }
 }

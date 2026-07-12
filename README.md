@@ -6,6 +6,9 @@ Aplicacao desktop em `React + TypeScript + Electron`, preparada para ser o execu
 
 - [Contribuir](CONTRIBUTING.md) — `npm run ci`, fluxo de PR, desenvolvimento.
 - [Runbook de operação](docs/runbook-operacao.md) — backups, incidentes, licenças, go-live.
+- [Checklist activação JWT (TI)](docs/checklist-ativacao-jwt.html) — página interactiva; em produção: `/checklist-ativacao-jwt.html`.
+- [Guia piloto JWT (`admin`)](docs/guia-piloto-jwt-admin.md) — menus passo a passo.
+- [Email TI (modelo)](docs/email-ti-ativacao-jwt.md).
 - [Sentry (SDK + lockfile)](docs/sentry-sdk-opcional.md) — `@sentry/react` / `npm install` após pull.
 - [Seguranca](SECURITY.md) — como reportar vulnerabilidades.
 - **CI** (GitHub Actions): typecheck, testes, lint, build, ícone, **smoke E2E web (Playwright)**, audit.
@@ -65,6 +68,18 @@ Execute as **migrações** em `supabase/migrations/` do repositório, **por orde
 3. `20260208120000_perfis_acesso_codigo_unique_per_tenant.sql`
 4. `20260503120000_iso_pro_usuarios_colaborador_id.sql`
 5. `20260503120100_iso_pro_usuario_admin_rpcs.sql`
+6. `20260529120000_iso_pro_password_hash.sql`
+7. `20260530120000_materiais_codigo_unique_per_tenant.sql`
+8. `20260530220000_materiais_pkey_per_tenant.sql`
+9. `20260530223000_drop_materiais_codigo_global_unique.sql`
+10. `20260604120000_pdf_jobs.sql`
+11. `20260604130000_iso_pro_security_hardening.sql`
+12. `20260604140000_iso_pro_pgcrypto_extensions_schema.sql`
+13. `20260604150000_iso_pro_rls_hardening.sql`
+14. `20260604160000_iso_pro_auth_hook_prep.sql`
+15. `20260607120000_iso_pro_snapshot_slices_rls_jwt.sql` — leitura/gravacao parcial do snapshot + RLS JWT (compativel com login anon actual)
+
+**Importante:** as migrações 13–15 preparam RLS/JWT multi-tenant; só activar JWT hook em produção após plano operacional — ver `supabase/OPERACAO_POS_MELHORIAS.md`.
 
 Para setup inicial ou novo tenant, use também os snippets em `supabase/snippets/` (ex.: `cole_uma_vez_sql_editor_setup_iso_pro.sql`, `provision_novo_tenant.sql`). Edge Functions em `supabase/functions/` exigem deploy separado — ver `supabase/functions/README.md`.
 

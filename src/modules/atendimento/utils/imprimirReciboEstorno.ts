@@ -11,6 +11,48 @@ import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../..
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { DadosReciboEstorno } from '../types/atendimento.types';
+import { cssReciboAtendimentoBase, htmlAssinaturasRecibo } from './imprimirReciboAtendimento';
+
+function totalQuantidadeEstorno(dados: DadosReciboEstorno): number {
+  return dados.itensEstorno.reduce((acc, it) => acc + (Number(it.quantidadeAtendida) || 0), 0);
+}
+
+function cssReciboEstornoExtra(): string {
+  return `
+    .recibo-estorno-badge {
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      font-size: 10pt;
+      line-height: 1.45;
+      color: #334155;
+      background: linear-gradient(90deg, #fff7ed 0%, #f8fafc 100%);
+      border: 1px solid #fed7aa;
+      border-left: 4px solid #ea580c;
+      border-radius: 8px;
+    }
+    .recibo-estorno-badge strong { color: #c2410c; font-weight: 700; }
+    .recibo-estorno-motivo {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      font-size: 10pt;
+      line-height: 1.45;
+      color: #334155;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      white-space: pre-wrap;
+    }
+    .recibo-estorno-motivo strong { display: block; margin-bottom: 6px; color: #475569; }
+    .recibo-tabela-itens .col-doc { width: 14%; font-size: 9pt; }
+    @media print {
+      .recibo-estorno-badge,
+      .recibo-estorno-motivo {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+  `;
+}
 
 export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   const at = dados.atendimento;
@@ -26,80 +68,73 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
     }
   })();
 
-  const docTitulo = `${escapeHtmlRelatorio(dados.documentoNumero)} Rev. ${escapeHtmlRelatorio(dados.documentoRevisao)}`;
+  const docTitulo =
+    dados.documentoTitulo?.trim() ||
+    (dados.documentoNumero === 'MULTIPLOS'
+      ? 'Varios desenhos (ver coluna Documento)'
+      : `${escapeHtmlRelatorio(dados.documentoNumero)} Rev. ${escapeHtmlRelatorio(dados.documentoRevisao)}`);
 
   const linhasHtml = dados.itensEstorno
     .map(
       (it, idx) =>
         `<tr>
-          <td>${idx + 1}</td>
-          <td>${escapeHtmlRelatorio((it.documentoNumero?.trim() || at.documentoNumero || '—').trim())}</td>
-          <td>${escapeHtmlRelatorio(it.codigoMaterial)}</td>
-          <td>${escapeHtmlRelatorio(it.descricaoMaterial)}</td>
-          <td>${escapeHtmlRelatorio(it.unidade)}</td>
-          <td class="num">${escapeHtmlRelatorio(String(it.quantidadeAtendida))}</td>
+          <td class="col-num">${idx + 1}</td>
+          <td class="col-doc">${escapeHtmlRelatorio((it.documentoNumero?.trim() || at.documentoNumero || '—').trim())}</td>
+          <td class="col-codigo">${escapeHtmlRelatorio(it.codigoMaterial)}</td>
+          <td class="col-desc">${escapeHtmlRelatorio(it.descricaoMaterial)}</td>
+          <td class="col-un">${escapeHtmlRelatorio(it.unidade)}</td>
+          <td class="col-qtd">${escapeHtmlRelatorio(String(it.quantidadeAtendida))}</td>
         </tr>`,
     )
     .join('');
 
-  const extraEstorno = `
-    .motivo-box { border: 1px solid #333; border-radius: 6px; padding: 12px 14px; margin: 12px 0 16px; background: #fafafa; }
-    .motivo-box strong { display: block; margin-bottom: 6px; }
-    .assinaturas { margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; page-break-inside: avoid; }
-    .assinatura-box { text-align: center; }
-    .linha-ass { border-top: 1px solid #000; margin: 48px 8px 8px; padding-top: 6px; }
-    .rotulo-ass { font-weight: 700; font-size: 10pt; }
-    .nome-ass { font-size: 10pt; margin-top: 4px; min-height: 1.2em; }
-    @media print {
-      .assinaturas { margin-top: 28px; }
-    }
-    .estorno-doc-foot {
-      margin-top: 18px;
-      padding-top: 10px;
-      border-top: 1px solid #cbd5e1;
-      font-size: 8pt;
-      color: #64748b;
-      line-height: 1.45;
-      text-align: center;
-      page-break-inside: avoid;
-    }
-  `;
+  const total = totalQuantidadeEstorno(dados);
+  const classeDensidade = dados.itensEstorno.length > 6 ? ' recibo-body--denso' : '';
+  const avisoParcial =
+    dados.estornoParcial ?
+      `<p class="recibo-estorno-badge" role="note"><strong>Estorno parcial</strong> — apenas os itens abaixo foram devolvidos nesta operacao.</p>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Estorno ${escapeHtmlRelatorio(at.numero)}</title>
   <style>
     ${cssInstitucionalRelatorio()}
     ${cssBarraPreVisualizacaoImpressaoHtml()}
-    ${extraEstorno}
+    ${cssReciboAtendimentoBase()}
+    ${cssReciboEstornoExtra()}
   </style>
 </head>
-<body>
+<body class="recibo-body${classeDensidade}">
   ${htmlBarraPreVisualizacaoImpressao()}
-  <div class="inst-topbar">
+  <div class="recibo-sheet">
+  <div class="inst-topbar recibo-topbar">
     <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
     <span>Estorno ${escapeHtmlRelatorio(at.numero)}</span>
   </div>
 
-  <header class="inst-header">
-    ${htmlBlocoLogoInstitucional(logoUrl)}
-    <div class="inst-title-col">
+  <header class="recibo-header-main recibo-header-main--titulo-centro">
+    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
+    <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de estorno de material</h1>
     </div>
   </header>
 
-  <section class="bloco">
+  <section class="bloco recibo-bloco-info">
     <div class="grid2">
       <p><strong>Documento:</strong> ${docTitulo}</p>
-      <p><strong>Responsavel (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel)}</p>
+      <p><strong>Responsavel (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel || '—')}</p>
     </div>
-    <p><strong>Descricao do documento:</strong></p>
-    <p>${escapeHtmlRelatorio(dados.documentoDescricao)}</p>
+    <div class="recibo-doc-desc">
+      <strong>Descricao do documento</strong>
+      <p style="margin: 6px 0 0">${escapeHtmlRelatorio(dados.documentoDescricao || '—')}</p>
+    </div>
   </section>
 
-  <section class="bloco">
+  <section class="bloco recibo-bloco-info">
     <h2>Atendimento original (referencia)</h2>
     <div class="grid2">
       <p><strong>Lote / atendimento:</strong> ${escapeHtmlRelatorio(at.numero)}</p>
@@ -109,12 +144,12 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
     </div>
   </section>
 
-  <section class="motivo-box">
+  <div class="recibo-estorno-motivo">
     <strong>Motivo do estorno</strong>
-    <p style="margin:0; white-space: pre-wrap;">${escapeHtmlRelatorio(dados.motivoEstorno)}</p>
-  </section>
+    ${escapeHtmlRelatorio(dados.motivoEstorno)}
+  </div>
 
-  <section class="bloco">
+  <section class="bloco recibo-bloco-info">
     <h2>Registro do estorno</h2>
     <div class="grid2">
       <p><strong>Quem registrou o estorno:</strong> ${escapeHtmlRelatorio(dados.nomeQuemEstorna)}</p>
@@ -122,37 +157,45 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
     </div>
   </section>
 
-  <section class="bloco">
+  ${avisoParcial}
+
+  <section class="bloco recibo-bloco-itens">
     <h2>Materiais devolvidos (estorno)</h2>
-    ${dados.estornoParcial ? `<p class="panel-copy" style="margin:0 0 8px;font-size:10pt;color:#444;">Estorno parcial: apenas os itens abaixo foram devolvidos nesta operacao.</p>` : ''}
-    <table>
+    <div class="recibo-tabela-wrap">
+    <table class="recibo-tabela-itens">
       <thead>
         <tr>
-          <th>#</th>
-          <th>Documento</th>
-          <th>Codigo</th>
-          <th>Descricao</th>
-          <th>UN</th>
-          <th>Quantidade</th>
+          <th class="col-num">#</th>
+          <th class="col-doc">Documento</th>
+          <th class="col-codigo">Codigo</th>
+          <th class="col-desc">Descricao do material</th>
+          <th class="col-un">UN</th>
+          <th class="col-qtd">Qtd</th>
         </tr>
       </thead>
       <tbody>${linhasHtml}</tbody>
     </table>
+    </div>
   </section>
 
-  <section class="assinaturas">
-    <div class="assinatura-box">
-      <div class="linha-ass"></div>
-      <p class="rotulo-ass">Responsavel pelo estorno (operador)</p>
-      <p class="nome-ass">${escapeHtmlRelatorio(dados.nomeQuemEstorna)}</p>
-    </div>
-    <div class="assinatura-box">
-      <div class="linha-ass"></div>
-      <p class="rotulo-ass">Quem devolveu o material</p>
-      <p class="nome-ass">${escapeHtmlRelatorio(dados.nomeQuemDevolve)}</p>
-    </div>
-  </section>
-  <p class="estorno-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: estorno ${escapeHtmlRelatorio(at.numero)}.</p>
+  <div class="recibo-fechamento">
+    <div class="recibo-total-linha"><strong>Total de unidades devolvidas (esta operacao):</strong> ${escapeHtmlRelatorio(String(total))}</div>
+
+  <div class="recibo-rodape-fin">
+  ${htmlAssinaturasRecibo(
+    dados.nomeQuemEstorna.trim() || '—',
+    '—',
+    dados.nomeQuemDevolve.trim() || '—',
+    '—',
+    {
+      atendente: 'Responsavel pelo estorno (operador)',
+      atendido: 'Quem devolveu o material',
+    },
+  )}
+  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: estorno ${escapeHtmlRelatorio(at.numero)}.</p>
+  </div>
+  </div>
+  </div>
   ${scriptBarraPreVisualizacaoImpressao()}
 </body>
 </html>`;

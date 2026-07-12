@@ -5,7 +5,8 @@ import {
 } from '../../documentos/services/documentoPlanejamento';
 import { carregarMetricasPlanejamentoPorCodigo } from '../../documentos/services/documentos.service';
 import { buildSaldoMap, type SaldoSnapshotPayload } from '../../estoque/saldoFromSnapshot';
-import { readIsoProSnapshotPayload } from '../../../lib/isoProSnapshot';
+import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import type { Material } from '../types/material.types';
 import { carregarMateriaisDoCadastro } from './materiais.service';
@@ -85,7 +86,7 @@ async function carregarMateriaisComSaldo(): Promise<Material[]> {
   const base = await carregarMateriaisDoCadastro();
   if (!hasSupabaseConfig()) return base;
   try {
-    const payload = await readIsoProSnapshotPayload<SaldoSnapshotPayload>();
+    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
     const saldoMap = buildSaldoMap(payload);
     return base.map((m) => ({
       ...m,

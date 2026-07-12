@@ -8,4 +8,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_PREFER_SAVED_CONFIG?: string;
   /** DSN Sentry (opcional). Em builds públicos use taxa de amostragem baixa no projecto Sentry. */
   readonly VITE_SENTRY_DSN?: string;
+  /** Canal de release: stable | canary */
+  readonly VITE_RELEASE_CHANNEL?: string;
+  /** JWT Auth bootstrap: true/false (omissão activo) */
+  readonly VITE_ISO_PRO_JWT_AUTH?: string;
 }

@@ -58,9 +58,18 @@ Scripts úteis: `supabase/snippets/auditar_multi_tenant_iso_pro.sql`
 
 ### 2.1 Segurança Supabase (Web + Mobile + Desktop)
 
-- [ ] Supabase Auth + JWT com claim `tenant_id`
-- [ ] RLS em todas as tabelas com `tenant_id` (hoje o isolamento é sobretudo na aplicação + chave anon)
-- [ ] Rever snippets: `rls_auth_jwt_tenant_exemplo.sql`, `custom_access_token_hook_iso_pro.sql`
+- [x] RLS híbrido: `anon` mantém modelo actual; `authenticated` exige `tenant_id` no JWT (`20260607120000`)
+- [x] RPC leitura parcial + patch atómico do snapshot (`iso_pro_read_snapshot_slices`, `iso_pro_patch_snapshot`)
+- [ ] Supabase Auth + JWT com claim `tenant_id` (activar hook no Dashboard)
+- [ ] Migrar login desktop/mobile para `signInWithPassword`
+- [ ] Remover fallback anon largo após migracao JWT
+
+### 2.2 Snapshot monolítico (parcial)
+
+- [x] Leitura por fatias em **todos os cadastros** na web (fornecedores, colaboradores, equipamentos, etiquetas, planejamento, RIR, RNC, inventário, configurações)
+- [x] Gravacao parcial (patch) nos modulos operacionais e cadastros
+- [x] Painel tamanho snapshot em Configuracoes (admin)
+- [ ] Tabelas dedicadas para historico operacional (longo prazo)
 
 ### 2.2 Mobile (app Campo)
 
@@ -85,7 +94,7 @@ Scripts úteis: `supabase/snippets/auditar_multi_tenant_iso_pro.sql`
 
 ## Prioridade 3 — Longo prazo
 
-- [ ] Snapshot menos monolítico (listas muito grandes em tabelas ou blobs paginados)
+- [ ] Snapshot menos monolítico — restantes listas (ver 2.2)
 - [ ] Sequência de IDs materiais com lock/retry (race em imports paralelos)
 - [ ] 2FA para administradores na web
 - [ ] Sentry: alertas por taxa de erro e versão de build

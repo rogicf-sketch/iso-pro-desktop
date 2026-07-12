@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
@@ -56,6 +57,7 @@ function recebimentosListaQueryKey(filters: RecebimentoFiltro, userLogin: string
 }
 
 export function useRecebimentos() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
@@ -241,7 +243,7 @@ export function useRecebimentos() {
       setError('Recebimentos com conferencia iniciada nao podem ser cancelados por este fluxo.');
       return;
     }
-    if (!window.confirm(`Confirma o cancelamento do recebimento ${item.notaFiscal || item.id}?`)) {
+    if (!(await confirm({ message: `Confirma o cancelamento do recebimento ${item.notaFiscal || item.id}?` }))) {
       return;
     }
     const result = await cancelarRecebimento(item.id);

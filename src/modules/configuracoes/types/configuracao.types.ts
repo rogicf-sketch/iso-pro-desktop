@@ -11,7 +11,7 @@ export type ConfiguracaoSistema = {
   projeto: string;
   contrato: string;
   local: string;
-  tema: 'padrao' | 'escuro' | 'claro' | 'verde' | 'neon';
+  tema: 'padrao' | 'escuro' | 'hibrido' | 'campo' | 'verde' | 'neon';
   /** Quando falso, oculta blocos explicativos longos nos modulos (CSV, regras descritivas). */
   mostrarAjudaModulos: boolean;
   sequenciaAtendimento: number;

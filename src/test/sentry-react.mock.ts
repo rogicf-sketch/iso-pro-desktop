@@ -7,3 +7,5 @@ export function init(options?: unknown): void {
 }
 
 export function captureException(): void {}
+
+export function captureMessage(): void {}

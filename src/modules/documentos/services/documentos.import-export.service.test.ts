@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { invalidateMateriaisBaseCache } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import type { Documento } from '../types/documento.types';
 import {
@@ -40,6 +41,7 @@ describe('documentos.service / exportacao e importacao JSON (local)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    invalidateMateriaisBaseCache();
     store = {};
     store[MATERIAIS_STORAGE_KEY] = JSON.stringify(materiaisParaTestesImportacaoDocumentos());
     vi.stubGlobal(

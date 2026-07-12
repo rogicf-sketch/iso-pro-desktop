@@ -22,6 +22,7 @@ import {
   imprimirPlanejamentoCampoHtml,
   preVisualizarPlanejamentoCampoHtml,
 } from '../utils/imprimirPlanejamentoCampoHtml';
+import { formatarDataDocumentoPtBr } from '../utils/formatarDataDocumento';
 
 function statusLinhaPlanejamentoMeta(status: ReturnType<typeof resolverStatusLinhaDocumento>) {
   if (status === 'atendido') return createStatusMeta('Atendido', 'ok');
@@ -55,6 +56,7 @@ export function DocumentosPage() {
     enviarPlanejamentoLocalParaNuvem,
     planejamentoDiag,
     planejamentoMaisNoLocal,
+    planejamentoNuvemSemLinhas,
     hasCloudConfig,
     filters,
     formInitialValue,
@@ -205,6 +207,13 @@ export function DocumentosPage() {
             ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
             : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
       </OperationalNotice>
+      <ModuleHelp>
+        <OperationalNotice>
+          Status (mesma lingua em lista, Visualizar e folha): <strong>Pendente</strong> = sem recebimento;
+          <strong> Recebido</strong> = material ja no estoque (ainda pode ter QTD ATENDIDA = 0);
+          <strong> Atendido</strong> = ja baixado no Atendimento; <strong>Parcial</strong> = mistura.
+        </OperationalNotice>
+      </ModuleHelp>
       {fallbackReason ? (
         <OperationalNotice tone="warning">
           {`Fallback ativo por falha de consulta: ${fallbackReason}. O telemovel so le a nuvem — se ve desenhos aqui mas nao no app, use o botao abaixo para gravar esta lista no Supabase.`}
@@ -231,11 +240,21 @@ export function DocumentosPage() {
           abaixo (ou abra cada documento e salve com Supabase ligado).
         </OperationalNotice>
       ) : null}
+      {hasCloudConfig && canEdit && planejamentoNuvemSemLinhas && planejamentoDiag ? (
+        <OperationalNotice tone="warning">
+          <strong>Mobile sem lista de material:</strong> a nuvem tem <strong>{planejamentoDiag.noSnapshot}</strong> desenho(s), mas apenas{' '}
+          <strong>{planejamentoDiag.comItensNaNuvem}</strong> com linhas de material ({planejamentoDiag.totalItensNaNuvem} linha(s) no total).
+          Neste PC ha <strong>{planejamentoDiag.totalItensNoLocal}</strong> linha(s) em <strong>{planejamentoDiag.comItensNoLocal}</strong>{' '}
+          desenho(s). O telemovel nao consegue carregar materiais ate gravar o planejamento completo — use{' '}
+          <strong>Enviar planejamento deste PC para a nuvem</strong> abaixo e depois «Carregar dados da nuvem» no mobile.
+        </OperationalNotice>
+      ) : null}
       {hasCloudConfig &&
       canEdit &&
       (documentosSource === 'local' ||
         Boolean(fallbackReason) ||
         planejamentoMaisNoLocal ||
+        planejamentoNuvemSemLinhas ||
         (planejamentoDiag != null &&
           planejamentoDiag.noSnapshot === 0 &&
           planejamentoDiag.noNavegador > 0)) ? (
@@ -666,7 +685,7 @@ export function DocumentosPage() {
           <div className="editor-block">
             <p className="panel-copy" style={{ marginTop: 0 }}>
               {viewDocument.descricao || 'Sem descricao.'} — Responsavel: {viewDocument.responsavel || '-'} — Data:{' '}
-              {viewDocument.dataDocumento}
+              {formatarDataDocumentoPtBr(viewDocument.dataDocumento)}
             </p>
             <div className="table-shell">
               <table className="data-table">

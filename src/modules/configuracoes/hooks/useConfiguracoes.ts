@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { getRuntimeSupabaseConfig, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
@@ -13,10 +14,11 @@ import {
   type DesktopSecurityContext,
 } from '../services/desktopSecurity.service';
 import { parseDesktopLicencaImportFile } from '../schemas/desktopLicencaImportFile.zod';
-import { carregarConfiguracoes, salvarConfiguracoes } from '../services/configuracoes.service';
+import { carregarConfiguracoes, consultarReciboConfigPendenteNuvem, salvarConfiguracoes } from '../services/configuracoes.service';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 
 export function useConfiguracoes() {
+  const { confirm } = useConfirmDialog();
   const runtimeSupabase = getRuntimeSupabaseConfig();
   const hasCloudConfig = hasSupabaseConfig();
   const cloudMaterialsEnabled = shouldUseCloudMaterials();
@@ -25,6 +27,9 @@ export function useConfiguracoes() {
   const [form, setForm] = useState<ConfiguracaoSistema | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');
+  const [info, setInfo] = useState('');
+  const [reciboNuvemPendente, setReciboNuvemPendente] = useState(false);
   const [success, setSuccess] = useState('');
   const [desktopSecurity, setDesktopSecurity] = useState<DesktopSecurityContext | null>(null);
   const [desktopLicenseRegistryStatus, setDesktopLicenseRegistryStatus] = useState<DesktopLicenseRegistryStatus>('unavailable');
@@ -61,8 +66,24 @@ export function useConfiguracoes() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    if (!hasCloudConfig || !form) {
+      setReciboNuvemPendente(false);
+      return;
+    }
+    let cancelled = false;
+    void consultarReciboConfigPendenteNuvem(form).then((pendente) => {
+      if (!cancelled) setReciboNuvemPendente(pendente);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasCloudConfig, form]);
+
   async function submit() {
     setError('');
+    setWarning('');
+    setInfo('');
     setSuccess('');
 
     if (!canAccessAction('configuracoes', 'administrar')) {
@@ -90,14 +111,23 @@ export function useConfiguracoes() {
     }
 
     setSuccess('Configuracoes salvas com sucesso.');
+    if (result.warning) {
+      setWarning(result.warning);
+    }
+    if (result.info) {
+      setInfo(result.info);
+    }
+    if (hasCloudConfig) {
+      void consultarReciboConfigPendenteNuvem(form).then(setReciboNuvemPendente);
+    }
   }
 
-  function autorizarInstalacaoAtual() {
+  async function autorizarInstalacaoAtual() {
     if (!desktopSecurity) {
       setError('Instalacao desktop atual nao esta disponivel para vinculacao.');
       return;
     }
-    if (!window.confirm(`Confirma vincular esta instalacao ao equipamento ${desktopSecurity.machineLabel}?`)) {
+    if (!(await confirm({ message: `Confirma vincular esta instalacao ao equipamento ${desktopSecurity.machineLabel}?` }))) {
       return;
     }
 
@@ -121,8 +151,8 @@ export function useConfiguracoes() {
     setSuccess('Instalacao atual preparada para vinculacao. Salve as configuracoes para aplicar a blindagem.');
   }
 
-  function desativarVinculoDesktop() {
-    if (!window.confirm('Confirma remover o vinculo de instalacao desktop?')) {
+  async function desativarVinculoDesktop() {
+    if (!(await confirm({ message: 'Confirma remover o vinculo de instalacao desktop?' }))) {
       return;
     }
     setForm((current) =>
@@ -203,7 +233,7 @@ export function useConfiguracoes() {
     }
   }
 
-  function limparLicencaDesktop() {
+  async function limparLicencaDesktop() {
     setError('');
     setSuccess('');
 
@@ -212,7 +242,7 @@ export function useConfiguracoes() {
       return;
     }
 
-    if (!window.confirm('Confirma limpar a licenca desktop carregada nesta configuracao?')) {
+    if (!(await confirm({ message: 'Confirma limpar a licenca desktop carregada nesta configuracao?' }))) {
       return;
     }
 
@@ -249,7 +279,7 @@ export function useConfiguracoes() {
       setError('Nenhuma licenca desktop carregada para revogar.');
       return;
     }
-    if (!window.confirm('Confirma revogar centralmente a licenca desktop atual?')) {
+    if (!(await confirm({ message: 'Confirma revogar centralmente a licenca desktop atual?', danger: true }))) {
       return;
     }
 
@@ -281,7 +311,7 @@ export function useConfiguracoes() {
       setError('Nenhuma licenca desktop carregada para reativar.');
       return;
     }
-    if (!window.confirm('Confirma reativar centralmente a licenca desktop atual?')) {
+    if (!(await confirm({ message: 'Confirma reativar centralmente a licenca desktop atual?' }))) {
       return;
     }
 
@@ -305,6 +335,9 @@ export function useConfiguracoes() {
     form,
     loading,
     error,
+    warning,
+    info,
+    reciboNuvemPendente,
     success,
     setSuccess,
     runtimeSupabase,

@@ -72,6 +72,22 @@ body.rir-preview-body {
 }
 .rir-preview-toolbar button.secondary { border-color: #64748b; background: #1e293b; }
 .rir-preview-toolbar span { color: #cbd5e1; font-size: 12px; flex: 1 1 200px; }
+.rir-app-alert { display: none; position: fixed; inset: 0; z-index: 9999; }
+.rir-app-alert-backdrop {
+  position: absolute; inset: 0; display: grid; place-items: center; padding: 20px;
+  background: rgba(2, 6, 23, 0.72);
+}
+.rir-app-alert-card {
+  width: min(480px, calc(100vw - 40px)); background: #0f172a; color: #e2e8f0;
+  border: 1px solid #334155; border-radius: 10px; padding: 18px 20px 16px;
+  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45); font: 500 14px ${RIR_PDF_THEME.fontFamily};
+}
+.rir-app-alert-card h2 { margin: 0 0 10px; font: 700 16px ${RIR_PDF_THEME.fontFamily}; color: #f8fafc; }
+.rir-app-alert-card p { margin: 0 0 16px; line-height: 1.45; color: #cbd5e1; }
+.rir-app-alert-card button {
+  padding: 8px 16px; font: 600 13px ${RIR_PDF_THEME.fontFamily};
+  border-radius: 6px; border: 1px solid #38bdf8; background: #0284c7; color: #fff; cursor: pointer;
+}
 .rir-preview-sheet {
   max-width: 210mm; margin: 0 auto 18px; background: ${c.white};
   padding: 10mm 10mm 12mm; box-shadow: 0 6px 20px rgba(15,23,42,.14);
@@ -152,10 +168,26 @@ function scriptPreviewRir(): string {
 (function () {
   var pdfB64 = window.__rirPdfBase64 || '';
   var pdfName = window.__rirPdfFileName || 'RIR-documento.pdf';
+  function showAppAlert(message) {
+    var root = document.getElementById('rir-app-alert');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'rir-app-alert';
+      root.className = 'rir-app-alert';
+      root.innerHTML = '<div class="rir-app-alert-backdrop" role="presentation"><div class="rir-app-alert-card" role="alertdialog" aria-labelledby="rir-app-alert-title"><h2 id="rir-app-alert-title">Aviso</h2><p></p><button type="button">Entendi</button></div></div>';
+      document.body.appendChild(root);
+      root.querySelector('button').addEventListener('click', function () { root.style.display = 'none'; });
+      root.querySelector('.rir-app-alert-backdrop').addEventListener('click', function (event) {
+        if (event.target === event.currentTarget) root.style.display = 'none';
+      });
+    }
+    root.querySelector('p').textContent = message;
+    root.style.display = 'block';
+  }
   document.querySelectorAll('[data-rir-action]').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var action = btn.getAttribute('data-rir-action');
-      if (!window.isoProDesktop) { alert('Disponível apenas no I.S.O PRO Desktop.'); return; }
+      if (!window.isoProDesktop) { showAppAlert('Disponível apenas no I.S.O PRO Desktop.'); return; }
       if (action === 'save' && window.isoProDesktop.saveRirPdf) {
         void window.isoProDesktop.saveRirPdf(pdfB64, pdfName);
       } else if (action === 'print' && window.isoProDesktop.printRirPdf) {

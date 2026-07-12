@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -13,6 +14,7 @@ type Props = {
 };
 
 export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
+  const { confirm } = useConfirmDialog();
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [base, setBase] = useState('');
@@ -68,7 +70,7 @@ export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
   }
 
   async function excluir(id: string) {
-    if (!canEdit || !window.confirm('Excluir este procedimento da lista de sugestoes?')) return;
+    if (!canEdit || !(await confirm({ message: 'Excluir este procedimento da lista de sugestoes?', danger: true }))) return;
     const cfg = readConfiguracoes();
     const atual = (cfg.rirProcedimentosCadastro ?? []).filter((x) => x.id !== id);
     const result = await salvarConfiguracoes({ ...cfg, rirProcedimentosCadastro: atual });

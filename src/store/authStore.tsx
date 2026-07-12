@@ -7,10 +7,12 @@ import {
   ensureDevLocalAdminSession,
   getCurrentUser,
   login as doLogin,
+  completeLoginAfterMfa,
   logout as doLogout,
   touchAuthSessionActivity,
   validateCurrentSession,
 } from '../modules/auth/services/auth.service';
+import { clearIsoProJwtSession } from '../lib/isoProJwtSession';
 import { aplicarTemaEfetivoNaSessao } from '../modules/configuracoes/services/configuracoes.service';
 import type { AuthUser } from '../modules/auth/types/auth.types';
 import { AuthContext, type AuthContextValue } from './authContext';
@@ -111,9 +113,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const nextUser = await doLogin(payload);
         setUser(nextUser);
       },
+      completeMfaLogin: async (factorId, code, pendingUser, permanecerLogado) => {
+        const nextUser = await completeLoginAfterMfa(factorId, code, pendingUser, permanecerLogado);
+        setUser(nextUser);
+      },
       logout: () => {
         doLogout();
         setUser(null);
+      },
+      cancelMfaLogin: () => {
+        void clearIsoProJwtSession();
       },
       canAccessModule: (modulo) => checkModuleAccess(user, modulo),
       canAccessAction: (modulo, acao) => checkActionAccess(user, modulo, acao),

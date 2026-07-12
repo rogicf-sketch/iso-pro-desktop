@@ -1,13 +1,20 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
-import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout, REMOTE_READ_TIMEOUT_HEAVY_MS } from '../../../lib/dataReadPolicy';
 import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
 import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
-import { hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  readIsoProSnapshotSlicesForWrite,
+  SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
+  SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS,
+  SNAPSHOT_OPERATIONAL_SLICE_KEYS,
 } from '../../../lib/isoProSnapshot';
+import {
+  fetchQuantidadeAtendidaPorCodigo,
+  listDocumentosPendentesAtendimentoFromCloud,
+} from '../../../lib/operacaoEscalaContagens';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { mergeSnapshotRowsById } from '../../../lib/snapshotPatchMerge';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
@@ -26,8 +33,19 @@ import {
   listarColaboradoresAtivos,
   registrarRetiranteExterno,
 } from '../../colaboradores/services/colaboradores.service';
+import {
+  atendimentoTemVariosDocumentos,
+  encontrarLinhaDocumentoParaItemEstorno,
+  resolverIndiceDocumentoParaItemEstorno,
+} from '../utils/estornoDocumento.utils';
 import { resolverColaboradorPorTextoAtendente } from '../utils/resolverColaboradorPorTextoAtendente';
+import {
+  buildDesktopAtendimentoIdempotencyKey,
+  gravarAtendimentoNaNuvemComComando,
+} from './atendimentoComandoDesktop';
+import type { SnapshotSlice } from './atendimentoSnapshotPatch';
 import { consumirSequenciaAtendimento } from '../../configuracoes/services/configuracoes.service';
+import { chaveAgrupamentoHistoricoAtendimento, formatNumeroAtendimento, maxSequenciaAtendimentoNoPayload } from 'iso-pro-shared';
 import { carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
@@ -39,7 +57,19 @@ import type {
   AtendimentoItem,
   AtendimentoRecebedorTipo,
   EstornoAtendimentoLinha,
+  EstornoAtendimentoMeta,
+  EstornoLogRegistro,
 } from '../types/atendimento.types';
+import {
+  CSV_EXCEL_SEP_ATD,
+  montarCsvEstornoLog,
+  nomeArquivoExportAtendimentos,
+  nomeArquivoExportAtendimentosZip,
+  nomeArquivoExportEstornoLog,
+  quantidadeEstornadaAcumuladaItem,
+  quantidadeRetiradaOriginalItem,
+} from '../utils/exportAtendimentosEstornoLog.utils';
+import JSZip from 'jszip';
 
 type DocumentoStored = DocumentoPlanejamentoStored;
 
@@ -61,6 +91,10 @@ function materiaisKeyAtendimento(): string {
 
 function atendimentosStorageKey(): string {
   return getScopedIsoProStorageKey('iso-pro-desktop-atendimentos');
+}
+
+function estornoLogStorageKey(): string {
+  return getScopedIsoProStorageKey('iso-pro-desktop-atendimento-estorno-log');
 }
 
 function bloqueioLocalChavesAtendimento(param: {
@@ -184,7 +218,28 @@ type SnapshotPayload = {
       descricaoMaterial?: string;
       unidade?: string;
       quantidadeAtendida?: number | string;
+      quantidadeRetiradaOriginal?: number | string;
+      documentoNumero?: string;
     }>;
+  }>;
+  /** Log auditavel de estornos (PC/web). */
+  atendimentoEstornoLog?: Array<{
+    id?: string;
+    dataEstorno?: string;
+    loteNumero?: string;
+    loteId?: string;
+    atendimentoItemId?: string;
+    documentoNumero?: string;
+    codigoMaterial?: string;
+    descricaoMaterial?: string;
+    unidade?: string;
+    quantidadeEstornada?: number | string;
+    quantidadeRetiradaOriginal?: number | string;
+    quantidadeRestanteNoLote?: number | string;
+    nomeQuemEstorna?: string;
+    nomeQuemDevolve?: string;
+    motivoEstorno?: string;
+    estornoParcialLote?: boolean;
   }>;
 };
 
@@ -213,7 +268,53 @@ function loadLocalState() {
     documentos: readJson<DocumentoStored>(documentosKeyAtendimento()),
     materiais: readJson<MaterialStored>(materiaisKeyAtendimento()),
     atendimentos: readJson<Atendimento>(atendimentosStorageKey()),
+    estornoLog: readJson<EstornoLogRegistro>(estornoLogStorageKey()),
   };
+}
+
+function mapEstornoLogFromSnapshot(raw: SnapshotPayload['atendimentoEstornoLog']): EstornoLogRegistro[] {
+  if (!raw?.length) return [];
+  return raw.map((r, index) => ({
+    id: String(r.id ?? `est-log-${index}`),
+    dataEstorno: String(r.dataEstorno ?? ''),
+    loteNumero: String(r.loteNumero ?? ''),
+    loteId: String(r.loteId ?? ''),
+    atendimentoItemId: String(r.atendimentoItemId ?? ''),
+    documentoNumero: String(r.documentoNumero ?? ''),
+    codigoMaterial: String(r.codigoMaterial ?? ''),
+    descricaoMaterial: String(r.descricaoMaterial ?? ''),
+    unidade: String(r.unidade ?? 'UN'),
+    quantidadeEstornada: Number(r.quantidadeEstornada ?? 0),
+    quantidadeRetiradaOriginal: Number(r.quantidadeRetiradaOriginal ?? 0),
+    quantidadeRestanteNoLote: Number(r.quantidadeRestanteNoLote ?? 0),
+    nomeQuemEstorna: String(r.nomeQuemEstorna ?? ''),
+    nomeQuemDevolve: String(r.nomeQuemDevolve ?? ''),
+    motivoEstorno: String(r.motivoEstorno ?? ''),
+    estornoParcialLote: Boolean(r.estornoParcialLote),
+  }));
+}
+
+function estornoLogToSnapshotRecord(entry: EstornoLogRegistro): NonNullable<SnapshotPayload['atendimentoEstornoLog']>[number] {
+  return { ...entry };
+}
+
+function mergeEstornoLog(local: EstornoLogRegistro[], remote: EstornoLogRegistro[]): EstornoLogRegistro[] {
+  const porId = new Map<string, EstornoLogRegistro>();
+  for (const entry of local) porId.set(entry.id, entry);
+  for (const entry of remote) porId.set(entry.id, entry);
+  return Array.from(porId.values()).sort((a, b) => b.dataEstorno.localeCompare(a.dataEstorno));
+}
+
+async function carregarEstornoLog(): Promise<EstornoLogRegistro[]> {
+  if (hasSupabaseConfig()) {
+    try {
+      const payload = await readSnapshotPayload();
+      return mapEstornoLogFromSnapshot(payload.atendimentoEstornoLog);
+    } catch {
+      /* fallback local */
+    }
+  }
+  return readJson<EstornoLogRegistro>(estornoLogStorageKey());
 }
 
 /** Mescla lotes do snapshot remoto (mobile/web) com o cache local do desktop. */
@@ -266,8 +367,10 @@ async function mesclarAtendimentoDesktopComNuvem(): Promise<'ok' | 'skip' | 'fai
       const local = loadLocalState();
       const atendimentos = mergeAtendimentosHistorico(local.atendimentos, remote.atendimentos);
       const documentos = mergeDocumentosAtendimentoLocal(local.documentos, remote.documentos);
+      const estornoLog = mergeEstornoLog(local.estornoLog, remote.estornoLog ?? []);
       writeJson(atendimentosStorageKey(), atendimentos);
       writeJson(documentosKeyAtendimento(), documentos);
+      writeJson(estornoLogStorageKey(), estornoLog);
       if (remote.materiais.length) {
         writeJson(materiaisKeyAtendimento(), remote.materiais);
       }
@@ -283,7 +386,72 @@ async function mesclarAtendimentoDesktopComNuvem(): Promise<'ok' | 'skip' | 'fai
 }
 
 async function readSnapshotPayload(): Promise<SnapshotPayload> {
-  return await readIsoProSnapshotPayload<SnapshotPayload>();
+  return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_OPERATIONAL_SLICE_KEYS);
+}
+
+async function readSnapshotPayloadLight(): Promise<SnapshotPayload> {
+  return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS);
+}
+
+async function readSnapshotPayloadHistorico(): Promise<SnapshotPayload> {
+  return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS);
+}
+
+/** Histórico de lotes sem documentos[] / materiais — abertura do módulo. */
+async function readRemoteHistoricoAtendimentos(): Promise<Atendimento[]> {
+  const payload = await readSnapshotPayloadHistorico();
+  return mapSnapshotAtendimentos(payload);
+}
+
+function documentosSinteticosDeAtendidoPorCodigo(
+  atendidoPorCodigo: Map<string, number>,
+): NonNullable<SnapshotPayload['documentos']> {
+  return [
+    {
+      id: '__atendido_agg__',
+      itens: [...atendidoPorCodigo.entries()].map(([codigo, quantidadeAtendida]) => ({
+        codigo,
+        quantidade: quantidadeAtendida,
+        quantidadeAtendida,
+      })),
+    },
+  ];
+}
+
+async function carregarDocumentoStoredDaNuvem(documentoId: string): Promise<DocumentoStored | null> {
+  const supabase = getSupabase();
+  if (!supabase || !documentoId.trim()) return null;
+  const { data, error } = await supabase.rpc('iso_pro_read_documento_planejamento', {
+    p_tenant_id: getActiveTenantId(),
+    p_documento_id: documentoId,
+    p_numero: null,
+    p_revisao: null,
+  });
+  if (error) return null;
+  const row = (data ?? {}) as { documento?: Record<string, unknown>; _error?: string };
+  if (row._error || !row.documento) return null;
+  const doc = row.documento;
+  const itensRaw = Array.isArray(doc.itens) ? doc.itens : [];
+  return {
+    id: String(doc.id ?? documentoId),
+    numero: String(doc.numero ?? ''),
+    revisao: String(doc.revisao ?? 'A'),
+    descricao: String(doc.descricao ?? ''),
+    responsavel: String(doc.responsavel ?? ''),
+    status: (String(doc.status ?? 'pendente') as DocumentoStored['status']) || 'pendente',
+    itens: itensRaw.map((raw, index) => {
+      const item = raw as Record<string, unknown>;
+      return {
+        id: String(item.id ?? `item-${index + 1}`),
+        codigoMaterial: String(item.codigo ?? item.codigoMaterial ?? ''),
+        descricaoMaterial: String(item.descricao ?? item.descricaoMaterial ?? ''),
+        unidade: String(item.unidade ?? 'UN'),
+        quantidadeProjeto: Number(item.quantidade ?? item.quantidadeProjeto ?? 0) || 0,
+        quantidadeAtendida: Number(item.quantidadeAtendida ?? 0) || 0,
+        localizacao: String(item.localizacao ?? ''),
+      };
+    }),
+  };
 }
 
 type SnapshotDocumentoRecord = NonNullable<SnapshotPayload['documentos']>[number];
@@ -339,6 +507,8 @@ function atendimentoToSnapshotRecord(atendimento: Atendimento): SnapshotAtendime
       descricaoMaterial: item.descricaoMaterial,
       unidade: item.unidade,
       quantidadeAtendida: item.quantidadeAtendida,
+      quantidadeRetiradaOriginal: item.quantidadeRetiradaOriginal,
+      documentoNumero: item.documentoNumero,
     })),
   };
 }
@@ -349,8 +519,10 @@ function buildAtendimentoHistoricoFromAtendimentos(atendimentos: Atendimento[]):
       id: item.id,
       loteNumero: atendimento.numero,
       data: atendimento.dataAtendimento,
-      documentoId: atendimento.documentoId,
-      documento: atendimento.documentoNumero,
+      documentoId: item.documentoNumero && item.documentoNumero !== atendimento.documentoNumero
+        ? ''
+        : atendimento.documentoId,
+      documento: String(item.documentoNumero?.trim() || atendimento.documentoNumero || '-'),
       atendente: atendimento.atendente,
       atendenteMatricula: atendimento.atendenteMatricula,
       atendenteFuncao: atendimento.atendenteFuncao,
@@ -386,41 +558,83 @@ export function mergeAtendimentoHistoricoPreservingLegacy(
   return [...legacyHistorico, ...buildAtendimentoHistoricoFromAtendimentos(atendimentosMerged)];
 }
 
-/** Grava documento(s) e atendimento(s) com merge por `id` sobre o snapshot fresco (concorrência). */
+/** Grava documento(s) e atendimento(s) via comando idempotente + patch delta (arquitetura enterprise). */
 async function writeSnapshotAtendimentoPatch(patch: {
   documentos?: DocumentoStored[];
   atendimentos?: Atendimento[];
+  estornoLogAppend?: EstornoLogRegistro[];
 }): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
-    const currentDocumentos = (currentPayload.documentos ?? []) as SnapshotDocumentoRecord[];
-    const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
+  await gravarAtendimentoNaNuvemComComando({
+    prepare: async () => {
+      const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite([
+        'documentos',
+        'atendimentos',
+        'atendimentoHistorico',
+        'atendimentoEstornoLog',
+        'configuracoesSistema',
+      ]);
+      const currentDocumentos = (currentPayload.documentos ?? []) as SnapshotDocumentoRecord[];
+      const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
+      const existingEstornoLog = mapEstornoLogFromSnapshot(
+        currentPayload.atendimentoEstornoLog as SnapshotPayload['atendimentoEstornoLog'],
+      );
 
-    const documentos = patch.documentos?.length
-      ? mergeSnapshotRowsById(currentDocumentos, patch.documentos.map(documentoStoredToSnapshotRecord))
-      : currentDocumentos;
+      const documentos = patch.documentos?.length
+        ? mergeSnapshotRowsById(currentDocumentos, patch.documentos.map(documentoStoredToSnapshotRecord))
+        : currentDocumentos;
 
-    const atendimentosSnapshot = patch.atendimentos?.length
-      ? mergeSnapshotRowsById(currentAtendimentos, patch.atendimentos.map(atendimentoToSnapshotRecord))
-      : currentAtendimentos;
+      const atendimentosSnapshot = patch.atendimentos?.length
+        ? mergeSnapshotRowsById(currentAtendimentos, patch.atendimentos.map(atendimentoToSnapshotRecord))
+        : currentAtendimentos;
 
-    const atendimentosMerged = mapAtendimentosFromSnapshotArray({
-      ...currentPayload,
-      atendimentos: atendimentosSnapshot,
-    });
-    const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
-    const atendimentoHistorico = mergeAtendimentoHistoricoPreservingLegacy(existingHistorico, atendimentosMerged);
+      const atendimentoEstornoLog = patch.estornoLogAppend?.length
+        ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
+        : (currentPayload.atendimentoEstornoLog ?? existingEstornoLog.map(estornoLogToSnapshotRecord));
 
-    return {
-      baselineUpdatedAt,
-      nextPayload: {
+      const atendimentosMerged = mapAtendimentosFromSnapshotArray({
         ...currentPayload,
+        atendimentos: atendimentosSnapshot,
+      });
+      const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
+      const atendimentoHistorico = mergeAtendimentoHistoricoPreservingLegacy(existingHistorico, atendimentosMerged);
+
+      const nextSlices: SnapshotSlice = {
         documentos,
         atendimentos: atendimentosSnapshot,
         atendimentoHistorico,
+        atendimentoEstornoLog: Array.isArray(atendimentoEstornoLog) ? atendimentoEstornoLog : [],
+        configuracoesSistema: currentPayload.configuracoesSistema as Record<string, unknown> | undefined,
         dataAtualizacao: new Date().toISOString(),
-      },
-    };
+      };
+
+      const baselineSlices: SnapshotSlice = {
+        documentos: currentDocumentos,
+        atendimentos: currentAtendimentos,
+        atendimentoHistorico: existingHistorico,
+        atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
+          ? (currentPayload.atendimentoEstornoLog as unknown[])
+          : existingEstornoLog.map(estornoLogToSnapshotRecord),
+        configuracoesSistema: currentPayload.configuracoesSistema as Record<string, unknown> | undefined,
+        dataAtualizacao: currentPayload.dataAtualizacao as string | undefined,
+      };
+
+      const idempotencyKey = buildDesktopAtendimentoIdempotencyKey({
+        atendimentos: patch.atendimentos?.map((a) => ({ id: a.id, numero: a.numero })),
+        estornoLogIds: patch.estornoLogAppend?.map((e) => e.id),
+      });
+
+      return {
+        baseline: {
+          slices: baselineSlices,
+          baselineUpdatedAt,
+        },
+        next: {
+          slices: nextSlices,
+          baselineUpdatedAt,
+        },
+        idempotencyKey,
+      };
+    },
   });
   registrarAtividadeBackupOracle('atendimento');
 }
@@ -506,6 +720,17 @@ async function enrichMateriaisSaldoFromLocalMovement(
 async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
   if (shouldTryRemoteRead()) {
     try {
+      const [payloadLight, atendidoPorCodigo] = await Promise.all([
+        withRemoteReadTimeout(() => readSnapshotPayloadLight()),
+        fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
+      ]);
+      if (atendidoPorCodigo.size > 0) {
+        const payloadComAgg: SnapshotPayload = {
+          ...payloadLight,
+          documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+        };
+        return buildSaldoMap(payloadComAgg);
+      }
       const payload = await withRemoteReadTimeout(() => readSnapshotPayload());
       const documentosRec = documentosReconciliadosDoPayload(payload);
       return buildSaldoMap(montarSaldoPayloadComDocumentosReconciliados(payload, documentosRec));
@@ -594,7 +819,7 @@ function mergeMateriaisSnapshotComCadastroNuvem(
 
 function mapAtendimentosFromSnapshotArray(payload: SnapshotPayload): Atendimento[] {
   if (!payload.atendimentos?.length) return [];
-  return payload.atendimentos.map((atendimento, index) => ({
+  const mapped: Atendimento[] = payload.atendimentos.map((atendimento, index) => ({
     id: String(atendimento.id ?? `atd-${index + 1}`),
     numero: String(atendimento.numero ?? buildNumeroAtendimento(index + 1)),
     documentoId: String(atendimento.documentoId ?? ''),
@@ -623,9 +848,17 @@ function mapAtendimentosFromSnapshotArray(payload: SnapshotPayload): Atendimento
       descricaoMaterial: String(item.descricaoMaterial ?? ''),
       unidade: String(item.unidade ?? 'UN'),
       quantidadeAtendida: Number(item.quantidadeAtendida ?? 0),
-      documentoNumero: String(atendimento.documentoNumero ?? ''),
+      quantidadeRetiradaOriginal:
+        item.quantidadeRetiradaOriginal != null ? Number(item.quantidadeRetiradaOriginal) : undefined,
+      documentoNumero: String(
+        (item as { documentoNumero?: string }).documentoNumero?.trim() || atendimento.documentoNumero || '',
+      ),
     })),
   }));
+  for (const at of mapped) {
+    normalizarCabecalhoDocumentoAtendimentoAgrupado(at);
+  }
+  return mapped;
 }
 
 /** Copia matrícula/função das linhas planas do histórico (mobile grava `matricula` no atendente). */
@@ -652,16 +885,37 @@ function mergeIdentificacaoHistoricoLinha(
   }
 }
 
-/** Agrupa linhas planas do historico (formato mobile / legado) por `loteNumero`. */
+/** Ajusta cabecalho quando um lote mobile agrupa itens de varios desenhos. */
+export function normalizarCabecalhoDocumentoAtendimentoAgrupado(at: Atendimento): void {
+  const nums = new Set(
+    at.itens.map((it) => String(it.documentoNumero ?? '').trim()).filter((n) => n && n !== '-'),
+  );
+  if (nums.size > 1) {
+    at.documentoNumero = 'MULTIPLOS';
+    at.documentoId = '';
+  } else if (nums.size === 1) {
+    const unico = [...nums][0]!;
+    if (at.documentoNumero !== unico) {
+      at.documentoNumero = unico;
+    }
+  }
+}
+
+/** Agrupa linhas planas do historico (formato mobile / legado) por `loteNumero` + `loteId`. */
 function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendimento[] {
   const grouped = new Map<string, Atendimento>();
   for (const raw of payload.atendimentoHistorico ?? []) {
     const numero = String(raw.loteNumero ?? '');
     if (!numero) continue;
+    const groupKey = chaveAgrupamentoHistoricoAtendimento({
+      loteNumero: numero,
+      loteId: (raw as Record<string, unknown>).loteId as string | number | null | undefined,
+    });
+    if (!groupKey) continue;
     const current =
-      grouped.get(numero) ??
+      grouped.get(groupKey) ??
       {
-        id: numero,
+        id: groupKey,
         numero,
         documentoId: String(raw.documentoId ?? ''),
         documentoNumero: String(raw.documento ?? '-'),
@@ -692,7 +946,7 @@ function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendime
 
     current.itens.push({
       id: String(raw.id ?? crypto.randomUUID()),
-      documentoItemId: '',
+      documentoItemId: String((raw as Record<string, unknown>).documentoItemId ?? ''),
       materialId: null,
       codigoMaterial: String(raw.codigo ?? ''),
       descricaoMaterial: String(raw.descricao ?? ''),
@@ -701,10 +955,45 @@ function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendime
       documentoNumero: String(raw.documento ?? ''),
     });
 
-    grouped.set(numero, current);
+    grouped.set(groupKey, current);
   }
 
-  return Array.from(grouped.values());
+  const result = Array.from(grouped.values());
+  for (const at of result) {
+    normalizarCabecalhoDocumentoAtendimentoAgrupado(at);
+  }
+  return result;
+}
+
+function contarDocumentosDistintosItens(at: Atendimento): number {
+  return new Set(
+    at.itens.map((it) => String(it.documentoNumero ?? '').trim()).filter((n) => n && n !== '-'),
+  ).size;
+}
+
+/** Quando o mesmo lote existe em `atendimentos` e `atendimentoHistorico`, prefere o historico se tiver documentos por item mais fieis (mobile). */
+function devePreferirHistoricoAgrupado(fromArray: Atendimento, fromHistorico: Atendimento): boolean {
+  if (fromHistorico.itens.length > fromArray.itens.length) return true;
+  const docsHist = contarDocumentosDistintosItens(fromHistorico);
+  const docsArr = contarDocumentosDistintosItens(fromArray);
+  if (docsHist > docsArr) return true;
+  if (fromHistorico.origem === 'mobile' && docsHist > 1 && docsArr <= 1) return true;
+  if (fromHistorico.origem === 'mobile' && fromHistorico.itens.length >= fromArray.itens.length && docsHist >= docsArr) {
+    return true;
+  }
+  return false;
+}
+
+/** Chave unificada para fundir `atendimentos[]` (PC) com `atendimentoHistorico[]` (mobile). */
+function chaveListaAtendimentoUnificada(a: Atendimento): string {
+  const numero = String(a.numero ?? '').trim();
+  const idStr = String(a.id ?? '').trim();
+  let loteId: string | number | null | undefined;
+  const sep = `${numero}::`;
+  if (numero && idStr.startsWith(sep)) {
+    loteId = idStr.slice(sep.length);
+  }
+  return chaveAgrupamentoHistoricoAtendimento({ loteNumero: numero, loteId }) || idStr || numero;
 }
 
 /**
@@ -713,16 +1002,20 @@ function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendime
  * a listagem antiga ignorava o historico — lotes criados so no telefone sumiam na lista do PC.
  */
 function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
-  const porNumero = new Map<string, Atendimento>();
+  const porChave = new Map<string, Atendimento>();
   for (const a of mapAtendimentosFromSnapshotArray(payload)) {
-    porNumero.set(a.numero, a);
+    porChave.set(chaveListaAtendimentoUnificada(a), a);
   }
   for (const a of mapAtendimentosFromHistoricoGrouped(payload)) {
-    if (!porNumero.has(a.numero)) {
-      porNumero.set(a.numero, a);
+    const key = chaveListaAtendimentoUnificada(a);
+    const existing = porChave.get(key);
+    if (!existing) {
+      porChave.set(key, a);
+    } else if (devePreferirHistoricoAgrupado(existing, a)) {
+      porChave.set(key, a);
     }
   }
-  return Array.from(porNumero.values()).sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+  return Array.from(porChave.values()).sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
 
 async function readRemoteState() {
@@ -739,10 +1032,70 @@ async function readRemoteState() {
     }
   }
   return {
+    payload,
     documentos: documentosRec,
     materiais,
     atendimentos: mapSnapshotAtendimentos(payload),
+    estornoLog: mapEstornoLogFromSnapshot(payload.atendimentoEstornoLog),
   };
+}
+
+/** Leitura operacional sem documentos[] completo — carrega só os IDs pedidos nas tabelas. */
+async function readRemoteStateForWrite(documentoIds: string[]) {
+  const uniqueIds = [...new Set(documentoIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
+  try {
+    const [payloadLight, atendidoPorCodigo] = await Promise.all([
+      readSnapshotPayloadLight(),
+      fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
+    ]);
+    const saldoMap =
+      atendidoPorCodigo.size > 0
+        ? buildSaldoMap({
+            ...payloadLight,
+            documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+          })
+        : buildSaldoMap(payloadLight);
+    let materiais = mapSnapshotMateriais(payloadLight, saldoMap);
+    if (shouldUseCloudMaterials()) {
+      try {
+        const cadastro = await carregarMateriaisDoCadastro();
+        materiais = mergeMateriaisSnapshotComCadastroNuvem(materiais, cadastro, saldoMap);
+      } catch {
+        /* mantem snapshot */
+      }
+    }
+    const documentos: DocumentoStored[] = [];
+    for (const id of uniqueIds) {
+      const doc = await carregarDocumentoStoredDaNuvem(id);
+      if (doc) documentos.push(doc);
+    }
+    if (uniqueIds.length > 0 && documentos.length === 0) {
+      return await readRemoteState();
+    }
+    return {
+      payload: payloadLight,
+      documentos,
+      materiais,
+      atendimentos: mapSnapshotAtendimentos(payloadLight),
+      estornoLog: mapEstornoLogFromSnapshot(payloadLight.atendimentoEstornoLog),
+    };
+  } catch {
+    return await readRemoteState();
+  }
+}
+
+function mesclarDocumentosLocaisComRemotos(
+  localDocs: DocumentoStored[],
+  remoteDocs: DocumentoStored[],
+): DocumentoStored[] {
+  if (!remoteDocs.length) return [...localDocs];
+  const out = [...localDocs];
+  for (const remote of remoteDocs) {
+    const idx = out.findIndex((d) => d.id === remote.id);
+    if (idx >= 0) out[idx] = remote;
+    else out.push(remote);
+  }
+  return out;
 }
 
 function deriveDocumentoStatus(doc: DocumentoStored): DocumentoStored['status'] {
@@ -775,8 +1128,12 @@ function documentoSemSaldoParaAtendimento(doc: DocumentoStored): boolean {
 }
 
 function buildNumeroAtendimento(index: number) {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  return `ATD-${stamp}-${String(index).padStart(4, '0')}`;
+  return formatNumeroAtendimento(index);
+}
+
+function consumirSequenciaComSnapshot(payload: SnapshotPayload | null | undefined): number {
+  const maxSnapshot = payload ? maxSequenciaAtendimentoNoPayload(payload as import('iso-pro-shared').IsoSnapshotPayload) : 0;
+  return consumirSequenciaAtendimento(maxSnapshot);
 }
 
 function validateRequestedItems(items: Array<{ documentoItemId: string; quantidade: number }>) {
@@ -806,6 +1163,77 @@ function validateRequestedItems(items: Array<{ documentoItemId: string; quantida
 }
 
 export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[]> {
+  if (shouldTryRemoteRead()) {
+    try {
+      const cloud = await withRemoteReadTimeout(() => listDocumentosPendentesAtendimentoFromCloud());
+      if (cloud.source === 'tables' && !cloud.error) {
+        const [saldoMap, payloadLight] = await Promise.all([
+          obterSaldoMapOperacional(),
+          withRemoteReadTimeout(() => readSnapshotPayloadLight()),
+        ]);
+        let materiais = mapSnapshotMateriais(payloadLight, saldoMap);
+        if (shouldUseCloudMaterials()) {
+          try {
+            const cadastro = await carregarMateriaisDoCadastro();
+            materiais = mergeMateriaisSnapshotComCadastroNuvem(materiais, cadastro, saldoMap);
+          } catch {
+            /* mantem snapshot */
+          }
+        }
+        const materialByCode = new Map(
+          materiais.map((material) => [codigoMaterialKey(material.codigo), material]),
+        );
+
+        return cloud.documentos
+          .map((doc) => {
+            const statusRaw = String(doc.status ?? 'pendente');
+            const status = (
+              statusRaw === 'parcial' || statusRaw === 'atendido' || statusRaw === 'cancelado' || statusRaw === 'recebido'
+                ? statusRaw
+                : 'pendente'
+            ) as AtendimentoDocumento['status'];
+            return {
+              id: String(doc.id ?? ''),
+              numero: String(doc.numero ?? ''),
+              revisao: String(doc.revisao ?? 'A'),
+              descricao: String(doc.descricao ?? ''),
+              responsavel: String(doc.responsavel ?? ''),
+              status,
+              linhas: (doc.itens ?? [])
+                .map((item) => {
+                  const codigo = String(item.codigo ?? '');
+                  const key = codigoMaterialKey(codigo);
+                  const material = materialByCode.get(key);
+                  const saldoOperacional = saldoMap.get(key);
+                  const saldo =
+                    saldoOperacional !== undefined ? saldoOperacional : (material?.saldoAtual ?? 0);
+                  const quantidadeProjeto = Number(item.quantidade ?? 0) || 0;
+                  const quantidadeAtendida = Number(item.quantidadeAtendida ?? 0) || 0;
+                  const pendente = Math.max(0, quantidadeProjeto - quantidadeAtendida);
+                  return {
+                    documentoItemId: String(item.id ?? ''),
+                    materialId: material?.id ?? null,
+                    codigoMaterial: codigo,
+                    descricaoMaterial: String(item.descricao ?? ''),
+                    unidade: String(item.unidade ?? 'UN'),
+                    quantidadeProjeto,
+                    quantidadeAtendida,
+                    quantidadePendente: pendente,
+                    saldoDisponivel: saldo,
+                    quantidadeNestaOperacao: 0,
+                  };
+                })
+                .filter((item) => item.quantidadePendente > 0),
+            };
+          })
+          .filter((doc) => doc.id && doc.linhas.length > 0)
+          .sort((a, b) => a.numero.localeCompare(b.numero));
+      }
+    } catch {
+      /* fallback legado */
+    }
+  }
+
   const { documentos, materiais } = await resolveDocumentosEMateriaisAtendimento();
 
   const materialByCode = new Map(materiais.map((material) => [codigoMaterialKey(material.codigo), material]));
@@ -855,8 +1283,16 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
 
   if (shouldTryRemoteRead()) {
     try {
-      await withRemoteReadTimeout(() => readRemoteState());
-      source = 'supabase';
+      const cloud = await withRemoteReadTimeout(
+        () => listDocumentosPendentesAtendimentoFromCloud(),
+        REMOTE_READ_TIMEOUT_HEAVY_MS,
+      );
+      if (cloud.source === 'tables' && !cloud.error) {
+        source = 'supabase';
+      } else {
+        await withRemoteReadTimeout(() => readRemoteState(), REMOTE_READ_TIMEOUT_HEAVY_MS);
+        source = 'supabase';
+      }
     } catch (error) {
       if (!isIsoProDesktop()) {
         fallbackReason = traduzirErroOperacionalIsoPro(
@@ -880,7 +1316,7 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
 export async function listarHistoricoAtendimentos(): Promise<Atendimento[]> {
   if (shouldTryRemoteRead()) {
     const items = await readRemoteOrLocal({
-      readRemote: async () => (await readRemoteState()).atendimentos,
+      readRemote: () => readRemoteHistoricoAtendimentos(),
       readLocal: () => readJson<Atendimento>(atendimentosStorageKey()),
     });
     return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
@@ -911,13 +1347,28 @@ export async function listarDocumentosComAtendimentoVinculado(
   const atendimentos = await listarHistoricoAtendimentos();
   const porDoc = new Map<string, { count: number; lotes: string[] }>();
   const docMeta = new Map(candidatos.map((c) => [c.id, c]));
+  const numeroParaId = new Map(
+    candidatos.filter((c) => c.id && c.numero).map((c) => [String(c.numero).trim().toLowerCase(), c.id]),
+  );
 
   for (const at of atendimentos) {
-    if (!idSet.has(at.documentoId)) continue;
-    const cur = porDoc.get(at.documentoId) ?? { count: 0, lotes: [] };
-    cur.count += 1;
-    if (cur.lotes.length < 10) cur.lotes.push(at.numero);
-    porDoc.set(at.documentoId, cur);
+    const idsVinculados = new Set<string>();
+    if (at.documentoId && idSet.has(at.documentoId)) {
+      idsVinculados.add(at.documentoId);
+    }
+    for (const it of at.itens) {
+      const num = String(it.documentoNumero ?? '').trim().toLowerCase();
+      if (num && num !== 'multiplos' && num !== '-') {
+        const docId = numeroParaId.get(num);
+        if (docId && idSet.has(docId)) idsVinculados.add(docId);
+      }
+    }
+    for (const docId of idsVinculados) {
+      const cur = porDoc.get(docId) ?? { count: 0, lotes: [] };
+      cur.count += 1;
+      if (cur.lotes.length < 10) cur.lotes.push(at.numero);
+      porDoc.set(docId, cur);
+    }
   }
 
   const out: DocumentoBloqueadoPorAtendimento[] = [];
@@ -933,8 +1384,6 @@ export async function listarDocumentosComAtendimentoVinculado(
   }
   return out.sort((a, b) => a.rotulo.localeCompare(b.rotulo));
 }
-
-const CSV_EXCEL_SEP_ATD = ';';
 
 function rotuloOrigemAtendimento(origem: Atendimento['origem'] | undefined): string {
   if (origem === 'mobile') return 'Mobile';
@@ -1003,6 +1452,8 @@ function linhaCsvLoteSemItens(
     msg,
     '',
     '0',
+    '0',
+    '0',
   ];
 }
 
@@ -1044,15 +1495,17 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
     'descricao_material',
     'unidade',
     'quantidade_no_lote',
+    'quantidade_retirada_original',
+    'quantidade_estornada_acumulada',
   ];
 
   const linhas: string[] = [header.join(CSV_EXCEL_SEP_ATD)];
 
   for (const at of atendimentos) {
-    const doc = docMap.get(at.documentoId);
-    const docDesc = doc?.descricao ?? '';
-    const docRev = doc?.revisao ?? '';
-    const docResp = doc?.responsavel ?? '';
+    const docCab = docMap.get(at.documentoId);
+    const docRev = docCab?.revisao ?? '';
+    const docDesc = docCab?.descricao ?? '';
+    const docResp = docCab?.responsavel ?? '';
 
     if (at.itens.length === 0) {
       linhas.push(
@@ -1064,6 +1517,11 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
     }
 
     for (const it of at.itens) {
+      const docNumItem = String(it.documentoNumero?.trim() || at.documentoNumero || '-');
+      const docItem = docMap.get(at.documentoId) ?? [...docMap.values()].find((d) => d.numero === docNumItem);
+      const docRevItem = docItem?.revisao ?? docRev;
+      const docDescItem = docItem?.descricao ?? docDesc;
+      const docRespItem = docItem?.responsavel ?? docResp;
       const qtdLinha = Number(it.quantidadeAtendida) || 0;
       const podeLinha = at.status === 'concluido' && qtdLinha > 0 ? 'sim' : 'nao';
       const atendidoLinha = qtdLinha > 0 ? 'sim' : 'nao';
@@ -1079,10 +1537,10 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
           estornoPermitidoLinha,
           qtdPodeEstornar,
           podeLinha,
-          at.documentoNumero,
-          docRev,
-          docDesc,
-          docResp,
+          docNumItem,
+          docRevItem,
+          docDescItem,
+          docRespItem,
           at.atendente,
           at.recebedorColaboradorId ?? '',
           at.recebedorTipo,
@@ -1099,6 +1557,8 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
           it.descricaoMaterial,
           it.unidade,
           formatDecimalExcelPtBr(Number(it.quantidadeAtendida)),
+          formatDecimalExcelPtBr(quantidadeRetiradaOriginalItem(it)),
+          formatDecimalExcelPtBr(quantidadeEstornadaAcumuladaItem(it)),
         ]
           .map((c) => escapeCsvCellSemicolon(String(c)))
           .join(CSV_EXCEL_SEP_ATD),
@@ -1108,19 +1568,47 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
 
   const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const fileName = `iso-pro-atendimentos-materiais-${stamp}.csv`;
+  const fileName = nomeArquivoExportAtendimentos(stamp);
   return { success: true, data: { csv, fileName } };
+}
+
+/** ZIP com CSV de atendimentos e CSV de log de estornos (auditoria). */
+export async function montarExportacaoAtendimentosPacoteZip(): Promise<
+  ServiceResult<{ zipBlob: Blob; fileName: string }>
+> {
+  const csvResult = await montarExportacaoAtendimentosCsvItens();
+  if (!csvResult.success || !csvResult.data) {
+    return { success: false, error: csvResult.error ?? 'Nao foi possivel gerar o CSV de atendimentos.' };
+  }
+
+  const estornoLog = await carregarEstornoLog();
+  const csvEstorno = montarCsvEstornoLog(estornoLog);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+
+  const zip = new JSZip();
+  zip.file(nomeArquivoExportAtendimentos(stamp), csvResult.data.csv);
+  zip.file(nomeArquivoExportEstornoLog(stamp), csvEstorno);
+
+  const zipBlob = await zip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
+
+  return { success: true, data: { zipBlob, fileName: nomeArquivoExportAtendimentosZip(stamp) } };
 }
 
 export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResult<Atendimento[]>> {
   let source: 'supabase' | 'local' = 'local';
   let fallbackReason = '';
+  let data: Atendimento[] = [];
 
   if (shouldTryRemoteRead()) {
     try {
-      await withRemoteReadTimeout(() => readRemoteState());
+      data = await withRemoteReadTimeout(() => readRemoteHistoricoAtendimentos(), REMOTE_READ_TIMEOUT_HEAVY_MS);
       source = 'supabase';
     } catch (error) {
+      data = await listarHistoricoAtendimentos();
       if (!isIsoProDesktop()) {
         fallbackReason = traduzirErroOperacionalIsoPro(
           error instanceof Error ? error.message : 'Falha ao consultar historico de atendimentos no Supabase.',
@@ -1133,12 +1621,14 @@ export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResul
     else if (merged === 'fail') {
       fallbackReason = 'Nao foi possivel alinhar o historico com a nuvem (mobile/web). Verifique ligacao ao Supabase.';
     }
+    data = await listarHistoricoAtendimentos();
+  } else {
+    data = await listarHistoricoAtendimentos();
   }
 
-  const data = await listarHistoricoAtendimentos();
   return {
     success: true,
-    data,
+    data: [...data].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento)),
     meta: {
       source,
       fallbackReason: fallbackReason || undefined,
@@ -1225,9 +1715,14 @@ export async function registrarAtendimento(payload: {
   const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
   const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
 
-  const remoteState = shouldTryRemoteRead() ? await readRemoteState().catch(() => null) : null;
+  const remoteState = shouldTryRemoteRead()
+    ? await readRemoteStateForWrite([payload.documentoId]).catch(() => null)
+    : null;
   const localState = loadLocalState();
-  const documentos = remoteState?.documentos ?? localState.documentos;
+  const documentos = mesclarDocumentosLocaisComRemotos(
+    localState.documentos,
+    remoteState?.documentos ?? [],
+  );
   const materiais =
     remoteState != null && remoteState.materiais.length > 0
       ? remoteState.materiais
@@ -1284,6 +1779,8 @@ export async function registrarAtendimento(payload: {
       descricaoMaterial: documentoItem.descricaoMaterial,
       unidade: documentoItem.unidade,
       quantidadeAtendida: requestItem.quantidade,
+      quantidadeRetiradaOriginal: requestItem.quantidade,
+      documentoNumero: documento.numero,
     });
   }
 
@@ -1292,7 +1789,7 @@ export async function registrarAtendimento(payload: {
 
   const atendimento: Atendimento = {
     id: crypto.randomUUID(),
-    numero: buildNumeroAtendimento(consumirSequenciaAtendimento()),
+    numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(remoteState?.payload ?? null)),
     documentoId: documento.id,
     documentoNumero: documento.numero,
     atendente: payload.atendente.trim(),
@@ -1440,9 +1937,14 @@ export async function registrarAtendimentosSessao(
   const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
   const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
 
-  const remoteState = shouldTryRemoteRead() ? await readRemoteState().catch(() => null) : null;
+  const remoteState = shouldTryRemoteRead()
+    ? await readRemoteStateForWrite(gruposValidados.map((g) => g.documentoId)).catch(() => null)
+    : null;
   const localState = loadLocalState();
-  const documentos = remoteState?.documentos ?? localState.documentos;
+  const documentos = mesclarDocumentosLocaisComRemotos(
+    localState.documentos,
+    remoteState?.documentos ?? [],
+  );
   const materiais =
     remoteState != null && remoteState.materiais.length > 0
       ? remoteState.materiais
@@ -1519,6 +2021,8 @@ export async function registrarAtendimentosSessao(
         descricaoMaterial: documentoItem.descricaoMaterial,
         unidade: documentoItem.unidade,
         quantidadeAtendida: requestItem.quantidade,
+        quantidadeRetiradaOriginal: requestItem.quantidade,
+        documentoNumero: documento.numero,
       });
     }
 
@@ -1528,7 +2032,7 @@ export async function registrarAtendimentosSessao(
 
     const atendimento: Atendimento = {
       id: crypto.randomUUID(),
-      numero: buildNumeroAtendimento(consumirSequenciaAtendimento()),
+      numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(remoteState?.payload ?? null)),
       documentoId: documento.id,
       documentoNumero: documento.numero,
       atendente: payload.atendente.trim(),
@@ -1590,15 +2094,38 @@ export async function registrarAtendimentosSessao(
  * Estorna quantidades do atendimento no documento e no saldo de materiais.
  * Se `linhasEstorno` for omitido ou vazio, estorna todo o lote (comportamento anterior).
  * Caso contrario, apenas as linhas e quantidades indicadas; o lote permanece `concluido` se ainda houver itens.
+ *
+ * Escopo deliberado: estorno (devolucao ao estoque) existe apenas no PC/desktop e na web.
+ * O app Campo regista somente retiradas — exige perfil administrador e recibo de estorno auditavel.
  */
 export async function estornarAtendimento(
   id: string,
   linhasEstorno?: EstornoAtendimentoLinha[],
+  meta?: EstornoAtendimentoMeta,
 ): Promise<ServiceResult<Atendimento>> {
-  const remoteState = shouldTryRemoteRead() ? await readRemoteState().catch(() => null) : null;
   const localState = loadLocalState();
+  let remoteState: Awaited<ReturnType<typeof readRemoteState>> | null = null;
+  if (shouldTryRemoteRead()) {
+    try {
+      const light = await readRemoteStateForWrite([]);
+      const atPreview = light.atendimentos.find((item) => item.id === id);
+      const headerDocId = String(atPreview?.documentoId ?? '').trim();
+      const precisaPlanejamentoCompleto =
+        !headerDocId ||
+        String(atPreview?.documentoNumero ?? '').toUpperCase() === 'MULTIPLOS' ||
+        (atPreview != null && atendimentoTemVariosDocumentos(atPreview));
+      remoteState = precisaPlanejamentoCompleto
+        ? await readRemoteState()
+        : await readRemoteStateForWrite([headerDocId]);
+    } catch {
+      remoteState = await readRemoteState().catch(() => null);
+    }
+  }
   const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
-  const documentos = remoteState?.documentos ?? localState.documentos;
+  const documentos = mesclarDocumentosLocaisComRemotos(
+    localState.documentos,
+    remoteState?.documentos ?? [],
+  );
   const materiais =
     remoteState != null && remoteState.materiais.length > 0
       ? remoteState.materiais
@@ -1612,11 +2139,6 @@ export async function estornarAtendimento(
     return { success: false, error: 'Atendimento ja estornado.' };
   }
 
-  const documentoIndex = documentos.findIndex((item) => item.id === atendimento.documentoId);
-  if (documentoIndex === -1) return { success: false, error: 'Documento do atendimento nao encontrado.' };
-
-  const documento = documentos[documentoIndex];
-  const documentoItemById = new Map(documento.itens.map((item) => [item.id, item]));
   const materialByCode = new Map(materiais.map((material) => [codigoMaterialKey(material.codigo), material]));
 
   const linhasEfetivas: EstornoAtendimentoLinha[] =
@@ -1641,7 +2163,13 @@ export async function estornarAtendimento(
     porItemId.set(itemId, (porItemId.get(itemId) ?? 0) + q);
   }
 
-  const workingItems: AtendimentoItem[] = atendimento.itens.map((i) => ({ ...i }));
+  const workingItems: AtendimentoItem[] = atendimento.itens.map((i) => ({
+    ...i,
+    quantidadeRetiradaOriginal: quantidadeRetiradaOriginalItem(i),
+  }));
+  const documentosAlterados = new Set<number>();
+  const estornoLogAppend: EstornoLogRegistro[] = [];
+  const dataEstorno = new Date().toISOString();
 
   for (const [itemId, qTotal] of porItemId) {
     const idx = workingItems.findIndex((i) => i.id === itemId);
@@ -1656,7 +2184,16 @@ export async function estornarAtendimento(
       };
     }
 
-    const documentoItem = documentoItemById.get(item.documentoItemId);
+    const docIdx = resolverIndiceDocumentoParaItemEstorno(documentos, atendimento, item);
+    if (docIdx === -1) {
+      return {
+        success: false,
+        error: `Documento nao encontrado no planejamento para estornar ${item.codigoMaterial}. Verifique os desenhos vinculados ao lote.`,
+      };
+    }
+
+    const documento = documentos[docIdx]!;
+    const documentoItem = encontrarLinhaDocumentoParaItemEstorno(documento, item);
     if (documentoItem) {
       documentoItem.quantidadeAtendida = Math.max(0, documentoItem.quantidadeAtendida - qTotal);
     }
@@ -1666,19 +2203,55 @@ export async function estornarAtendimento(
       material.saldoAtual = (material.saldoAtual ?? 0) + qTotal;
     }
 
+    const retiradaOriginal = quantidadeRetiradaOriginalItem(item);
     const novaQ = item.quantidadeAtendida - qTotal;
     if (novaQ <= 0) {
       workingItems.splice(idx, 1);
     } else {
-      workingItems[idx] = { ...item, quantidadeAtendida: novaQ };
+      workingItems[idx] = {
+        ...item,
+        quantidadeAtendida: novaQ,
+        quantidadeRetiradaOriginal: retiradaOriginal,
+      };
     }
+
+    documento.status = deriveDocumentoStatus(documento);
+    documentos[docIdx] = documento;
+    documentosAlterados.add(docIdx);
+
+    estornoLogAppend.push({
+      id: crypto.randomUUID(),
+      dataEstorno,
+      loteNumero: atendimento.numero,
+      loteId: atendimento.id,
+      atendimentoItemId: itemId,
+      documentoNumero: String(item.documentoNumero?.trim() || atendimento.documentoNumero || ''),
+      codigoMaterial: item.codigoMaterial,
+      descricaoMaterial: item.descricaoMaterial,
+      unidade: item.unidade,
+      quantidadeEstornada: qTotal,
+      quantidadeRetiradaOriginal: retiradaOriginal,
+      quantidadeRestanteNoLote: Math.max(0, novaQ),
+      nomeQuemEstorna: String(meta?.nomeQuemEstorna ?? '').trim(),
+      nomeQuemDevolve: String(meta?.nomeQuemDevolve ?? '').trim(),
+      motivoEstorno: String(meta?.motivoEstorno ?? '').trim(),
+      estornoParcialLote: true,
+    });
   }
 
-  documento.status = deriveDocumentoStatus(documento);
-  documentos[documentoIndex] = documento;
+  const documentosPatch = [...documentosAlterados].map((i) => documentos[i]!);
 
   const novoStatus: Atendimento['status'] = workingItems.length === 0 ? 'estornado' : 'concluido';
+  for (const entry of estornoLogAppend) {
+    entry.estornoParcialLote = novoStatus === 'concluido';
+  }
   atendimentos[atendimentoIndex] = { ...atendimento, itens: workingItems, status: novoStatus };
+
+  const appendEstornoLogLocal = () => {
+    if (!estornoLogAppend.length) return;
+    const existing = readJson<EstornoLogRegistro>(estornoLogStorageKey());
+    writeJson(estornoLogStorageKey(), [...existing, ...estornoLogAppend]);
+  };
 
   if (remoteState) {
     const bloqueioEstorno = bloqueioLocalChavesAtendimento({
@@ -1691,13 +2264,15 @@ export async function estornarAtendimento(
       shouldWriteRemote: true,
       writeRemote: () =>
         writeSnapshotAtendimentoPatch({
-          documentos: [documento],
+          documentos: documentosPatch,
           atendimentos: [atendimentos[atendimentoIndex]],
+          estornoLogAppend,
         }),
       writeLocal: () => {
         writeJson(documentosKeyAtendimento(), documentos);
         writeJson(materiaisKeyAtendimento(), materiais);
         writeJson(atendimentosStorageKey(), atendimentos);
+        appendEstornoLogLocal();
       },
       successData: atendimentos[atendimentoIndex],
       fallbackMessage: 'Falha ao estornar atendimento no Supabase.',
@@ -1708,5 +2283,6 @@ export async function estornarAtendimento(
   writeJson(documentosKeyAtendimento(), documentos);
   writeJson(materiaisKeyAtendimento(), materiais);
   writeJson(atendimentosStorageKey(), atendimentos);
+  appendEstornoLogLocal();
   return { success: true, data: atendimentos[atendimentoIndex], meta: { source: 'local' } };
 }

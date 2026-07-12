@@ -7,11 +7,16 @@ import { cancelarDocumento, excluirDocumentoDefinitivamente, excluirDocumentosDe
 const STORAGE_KEY = 'iso-pro-desktop-documentos';
 const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockListarMateriais } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, mockListarMateriais } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
   mockListarMateriais: vi.fn(),
+}));
+
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
 }));
 
 vi.mock('../../../lib/supabase', async (importOriginal) => {
@@ -41,9 +46,33 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     ...actual,
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare: () => Promise<unknown>) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare: () => Promise<{ patch: Record<string, unknown>; baselineUpdatedAt: string | null }>) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+}
 
 function minimalForm(overrides: Partial<DocumentoFormData> = {}): DocumentoFormData {
   return {
@@ -104,6 +133,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     resetMateriaisMockParaDocumentos();
     store = {};
     const ls = {
@@ -288,6 +318,7 @@ describe('documentos.service / cancelarDocumento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     resetMateriaisMockParaDocumentos();
     store = {};
     vi.stubGlobal(
@@ -402,6 +433,7 @@ describe('documentos.service / excluirDocumentoDefinitivamente (Supabase)', () =
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     resetMateriaisMockParaDocumentos();
     store = {};
     const ls = {

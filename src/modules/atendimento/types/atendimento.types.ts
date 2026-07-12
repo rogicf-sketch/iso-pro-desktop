@@ -8,6 +8,8 @@ export type AtendimentoItem = {
   descricaoMaterial: string;
   unidade: string;
   quantidadeAtendida: number;
+  /** Quantidade registrada na retirada original (antes de estornos parciais). */
+  quantidadeRetiradaOriginal?: number;
   /** Numero do desenho / documento de planejamento desta linha (historico mobile ou exibicao no recibo). */
   documentoNumero?: string;
 };
@@ -134,10 +136,39 @@ export type EstornoAtendimentoLinha = {
   quantidade: number;
 };
 
+/** Metadados auditaveis registrados junto com cada operacao de estorno (PC/web). */
+export type EstornoAtendimentoMeta = {
+  nomeQuemEstorna: string;
+  nomeQuemDevolve: string;
+  motivoEstorno: string;
+};
+
+/** Evento persistido no snapshot para exportacao e auditoria de estornos. */
+export type EstornoLogRegistro = {
+  id: string;
+  dataEstorno: string;
+  loteNumero: string;
+  loteId: string;
+  atendimentoItemId: string;
+  documentoNumero: string;
+  codigoMaterial: string;
+  descricaoMaterial: string;
+  unidade: string;
+  quantidadeEstornada: number;
+  quantidadeRetiradaOriginal: number;
+  quantidadeRestanteNoLote: number;
+  nomeQuemEstorna: string;
+  nomeQuemDevolve: string;
+  motivoEstorno: string;
+  estornoParcialLote: boolean;
+};
+
 /** Dados para impressao do recibo de estorno (reversao da retirada). */
 export type DadosReciboEstorno = {
   atendimento: Atendimento;
   documentoNumero: string;
+  /** Titulo exibido no cabecalho (ex.: «Varios desenhos…» ou «DOC Rev. A»). */
+  documentoTitulo?: string;
   documentoRevisao: string;
   documentoDescricao: string;
   documentoResponsavel: string;

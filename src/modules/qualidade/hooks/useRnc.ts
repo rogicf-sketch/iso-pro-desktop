@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { collectAllPages } from '../../../lib/collectAllPages';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
@@ -66,6 +67,7 @@ function rncListaQueryKey(filters: RncFiltro, userLogin: string | undefined) {
 }
 
 export function useRnc() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
@@ -162,7 +164,9 @@ export function useRnc() {
     if (validationError) return { success: false, error: validationError };
     if (
       (data.status === 'concluido' || data.status === 'cancelado') &&
-      !window.confirm(`Confirma salvar a RNC com status ${data.status === 'concluido' ? 'concluido' : 'cancelado'}?`)
+      !(await confirm({
+        message: `Confirma salvar a RNC com status ${data.status === 'concluido' ? 'concluido' : 'cancelado'}?`,
+      }))
     ) {
       return { success: false, error: 'Operacao cancelada pelo usuario.' };
     }

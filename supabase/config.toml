@@ -1,5 +1,25 @@
 # Supabase CLI — configuracao minima para funcoes deste repositorio.
 # Documentacao: https://supabase.com/docs/guides/functions/function-configuration
+#
+# Auth: valores abaixo espelham o projecto remoto antes do hook JWT; so o bloco
+# [auth.hook.custom_access_token] foi alterado. Aplicar: npx supabase config push
+
+[auth]
+site_url = "http://localhost:3000"
+additional_redirect_urls = []
+
+[auth.email]
+enable_confirmations = true
+max_frequency = "1m0s"
+otp_length = 8
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+[auth.hook.custom_access_token]
+enabled = true
+uri = "pg-functions://postgres/public/custom_access_token_hook"
 
 [functions.purge_cloud_data]
 # O desktop autentica com login+senha em `usuarios_sistema`, sem JWT do Supabase Auth no browser.

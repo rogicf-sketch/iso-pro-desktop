@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { listarColaboradoresAtivos } from '../../colaboradores/services/colaboradores.service';
-import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
 import { tocarFeedbackLeitor } from '../../../lib/leitorFeedbackSonoro';
 import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
@@ -11,7 +10,7 @@ import {
   estornarAtendimento,
   listarDocumentosPendentesComMeta,
   listarHistoricoAtendimentosComMeta,
-  montarExportacaoAtendimentosCsvItens,
+  montarExportacaoAtendimentosPacoteZip,
   registrarAtendimento,
   registrarAtendimentosSessao,
 } from '../services/atendimento.service';
@@ -32,6 +31,11 @@ import type {
 import { imprimirReciboAtendimento, imprimirReciboSessaoConsolidada } from '../utils/imprimirReciboAtendimento';
 import { imprimirReciboEstorno } from '../utils/imprimirReciboEstorno';
 import { montarDadosReciboEstorno } from '../utils/montarDadosReciboEstorno';
+import { montarMetadadosDocumentoAtendimento } from '../utils/montarMetadadosDocumentoAtendimento';
+import {
+  encontrarOutrosLotesMesmoMaterialDocumento,
+  type AvisoLoteDuplicadoMaterial,
+} from '../utils/lotesDuplicadosMaterial.utils';
 import { montarDadosReciboSessaoConsolidada } from '../utils/montarDadosReciboSessaoConsolidada';
 import { useRegistrarAtendimentoOperacaoGuard } from '../context/atendimentoOperacaoGuard.hooks';
 import {
@@ -195,15 +199,6 @@ export function useAtendimento() {
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
 
-  function baixarBlobCsv(blob: Blob, fileName: string) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
   async function exportarAtendimentosMateriaisExcel() {
     if (!canAccessAction('atendimento', 'visualizar')) {
       setError('Seu perfil nao possui permissao para exportar o relatorio de atendimentos.');
@@ -211,13 +206,20 @@ export function useAtendimento() {
     }
     setError('');
     setSuccess('');
-    const result = await montarExportacaoAtendimentosCsvItens();
+    const result = await montarExportacaoAtendimentosPacoteZip();
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar o arquivo.');
       return;
     }
-    baixarBlobCsv(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
-    setSuccess('Exportacao Excel (CSV) concluida — uma linha por material, com lote, documento e rastreio para estorno.');
+    const url = URL.createObjectURL(result.data.zipBlob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = result.data.fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setSuccess(
+      'Exportacao concluida — ZIP com atendimentos-materiais.csv (saldo no lote) e estornos-log.csv (historico de estornos).',
+    );
   }
   const hasCloudConfig = hasSupabaseConfig();
   const [documentos, setDocumentos] = useState<AtendimentoDocumento[]>([]);
@@ -285,6 +287,7 @@ export function useAtendimento() {
   const [estornoAlvo, setEstornoAlvo] = useState<Atendimento | null>(null);
   const [estornoDocLoading, setEstornoDocLoading] = useState(false);
   const [estornoDocInfo, setEstornoDocInfo] = useState<{
+    titulo: string;
     descricao: string;
     revisao: string;
     responsavel: string;
@@ -294,6 +297,7 @@ export function useAtendimento() {
   const [estornoMotivo, setEstornoMotivo] = useState('');
   /** Por item do lote: incluido no estorno e quantidade a devolver (<= ao registrado no lote). */
   const [estornoLinhas, setEstornoLinhas] = useState<Record<string, { marcado: boolean; quantidade: number }>>({});
+  const [estornoDuplicadosAviso, setEstornoDuplicadosAviso] = useState<AvisoLoteDuplicadoMaterial[]>([]);
 
   /**
    * `initial` → primeira aplicação após fetch (replace).
@@ -311,7 +315,8 @@ export function useAtendimento() {
     refetchInterval: () => {
       if (!hasCloudConfig) return false;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
-      return 30_000;
+      /** Fase A: 2 min em vez de 30 s — menos pressão no Supabase com snapshot grande. */
+      return 120_000;
     },
     queryFn: async (): Promise<AtendimentoCorePayload> => {
       const [docsResult, histResult, colaboradoresAtivos] = await Promise.all([
@@ -1194,6 +1199,7 @@ export function useAtendimento() {
     setEstornoNomeQuemDevolve('');
     setEstornoMotivo('');
     setEstornoLinhas({});
+    setEstornoDuplicadosAviso([]);
   }
 
   function montarLinhasEstornoRequest(): EstornoAtendimentoLinha[] {
@@ -1266,6 +1272,7 @@ export function useAtendimento() {
     }
   }
 
+  /** Estorno de material: fluxo exclusivo PC/web (seguranca — nao existe no app Campo). */
   async function iniciarEstorno(item: Atendimento) {
     setError('');
     setSuccess('');
@@ -1282,13 +1289,14 @@ export function useAtendimento() {
     setEstornoLinhas(
       Object.fromEntries(item.itens.map((it) => [it.id, { marcado: true, quantidade: it.quantidadeAtendida }])),
     );
+    setEstornoDuplicadosAviso(encontrarOutrosLotesMesmoMaterialDocumento(historico, item));
     setEstornoDocLoading(true);
-    const docResult = await buscarDocumentoPorIdOuNumero(item.documentoId, item.documentoNumero);
-    const doc = docResult.success && docResult.data ? docResult.data : null;
+    const meta = await montarMetadadosDocumentoAtendimento(item);
     setEstornoDocInfo({
-      descricao: doc?.descricao ?? '(Documento nao encontrado ou indisponivel.)',
-      revisao: doc?.revisao ?? '—',
-      responsavel: doc?.responsavel ?? '—',
+      titulo: meta.documentoTitulo,
+      descricao: meta.documentoDescricao,
+      revisao: meta.documentoRevisao,
+      responsavel: meta.documentoResponsavel,
     });
     setEstornoDocLoading(false);
   }
@@ -1347,7 +1355,11 @@ export function useAtendimento() {
 
     setSnapshotConflict(false);
     const numero = estornoAlvo.numero;
-    const result = await estornarAtendimento(estornoAlvo.id, linhas);
+    const result = await estornarAtendimento(estornoAlvo.id, linhas, {
+      nomeQuemEstorna: estornoNomeQuemEstorna,
+      nomeQuemDevolve: estornoNomeQuemDevolve,
+      motivoEstorno: estornoMotivo,
+    });
     if (!result.success) {
       setError(result.error ?? 'Nao foi possivel estornar o atendimento.');
       setSnapshotConflict(result.meta?.snapshotConflict === true);
@@ -1430,6 +1442,7 @@ export function useAtendimento() {
     iniciarEstorno,
     estornoLinhas,
     setEstornoLinhas,
+    estornoDuplicadosAviso,
     idsMarcados,
     toggleMarcaItem,
     marcarTodosItens,

@@ -1,12 +1,19 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
-import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  listInventariosPageFromCloud,
+  readInventarioFromCloud,
+  syncInventariosFromSnapshot,
+  upsertInventariosEmLotes,
+} from '../../../lib/inventariosTabelas';
+import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
+import {
+  commitIsoProSnapshotPatch,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -18,7 +25,8 @@ function inventariosStorageKey(): string {
   return getScopedIsoProStorageKey('iso-pro-desktop-inventarios');
 }
 
-function bloqueioLocalInventarios(tamanhoListaGravacao: number): string | null {
+function bloqueioLocalInventarios(tamanhoListaGravacao: number, nuvemJaTinhaDados: boolean): string | null {
+  if (!nuvemJaTinhaDados) return null;
   return mensagemSeSubstituirLocalPerderiaCadastros([
     { storageKey: inventariosStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'inventario(s)' },
   ]);
@@ -42,6 +50,7 @@ const seedData: Inventario[] = [
         unidade: 'UN',
         saldoSistema: 12,
         quantidadeContada: 10,
+        localizacaoContada: '',
       },
       {
         id: 'inv-1-item-2',
@@ -50,6 +59,7 @@ const seedData: Inventario[] = [
         unidade: 'M',
         saldoSistema: 200,
         quantidadeContada: 205,
+        localizacaoContada: '',
       },
     ],
   },
@@ -70,6 +80,7 @@ const seedData: Inventario[] = [
         unidade: 'UN',
         saldoSistema: 80,
         quantidadeContada: 80,
+        localizacaoContada: '',
       },
     ],
   },
@@ -102,17 +113,36 @@ function writeAll(items: Inventario[]) {
 
 /**
  * Leitura para listagem, detalhe e exportacao.
- * Se o snapshot remoto ainda nao tiver inventarios, mostra os exemplos de fabrica (mesma seed que o modo local).
+ * Com Supabase: prioriza nuvem e mantem copia local alinhada; se a nuvem estiver vazia, usa local (exemplos de fabrica).
  */
 async function loadInventarios(): Promise<Inventario[]> {
-  if (!shouldTryRemoteRead()) return readAll();
+  if (!hasSupabaseConfig()) return readAll();
   try {
     const remote = await withRemoteReadTimeout(() => readSnapshotInventarios());
-    if (remote.length === 0) return seedData;
-    return remote;
+    if (remote.length > 0) {
+      writeAll(remote);
+      return remote;
+    }
   } catch {
     return readAll();
   }
+  return readAll();
+}
+
+/** Base para criar/editar/fechar: nuvem quando existir; senao lista local (evita gravar [] por cima do que o operador ve no PC). */
+async function readInventariosParaMutacao(): Promise<{ items: Inventario[]; nuvemJaTinhaDados: boolean }> {
+  if (!hasSupabaseConfig()) {
+    return { items: readAll(), nuvemJaTinhaDados: false };
+  }
+  try {
+    const remote = await readSnapshotInventarios();
+    if (remote.length > 0) {
+      return { items: remote, nuvemJaTinhaDados: true };
+    }
+  } catch {
+    /* fallback local abaixo */
+  }
+  return { items: readAll(), nuvemJaTinhaDados: false };
 }
 
 function normalizeLookupValue(value: string) {
@@ -136,12 +166,13 @@ type SnapshotPayload = {
       unidade?: string;
       saldoSistema?: number;
       quantidadeContada?: number;
+      localizacaoContada?: string;
     }>;
   }>;
 };
 
 async function readSnapshotInventarios(): Promise<Inventario[]> {
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['inventarios']);
   return (payload.inventarios ?? []).map((inv, index) => ({
     id: String(inv.id ?? `inv-${index + 1}`),
     codigo: String(inv.codigo ?? ''),
@@ -158,17 +189,17 @@ async function readSnapshotInventarios(): Promise<Inventario[]> {
       unidade: String(item.unidade ?? 'UN'),
       saldoSistema: Number(item.saldoSistema ?? 0),
       quantidadeContada: Number(item.quantidadeContada ?? 0),
+      localizacaoContada: String(item.localizacaoContada ?? '').trim(),
     })),
   }));
 }
 
 async function writeSnapshotInventarios(items: Inventario[]): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['inventarios']);
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
+      patch: {
         inventarios: items.map((item) => ({
           id: item.id,
           codigo: item.codigo,
@@ -185,11 +216,17 @@ async function writeSnapshotInventarios(items: Inventario[]): Promise<void> {
             unidade: invItem.unidade,
             saldoSistema: invItem.saldoSistema,
             quantidadeContada: invItem.quantidadeContada,
+            localizacaoContada: invItem.localizacaoContada ?? '',
           })),
         })),
         dataAtualizacao: new Date().toISOString(),
       },
     };
+  });
+  await runDualWriteBestEffort('inventarios', async () => {
+    const sync = await syncInventariosFromSnapshot();
+    if (sync.ok) return sync;
+    return upsertInventariosEmLotes(items);
   });
 }
 
@@ -212,6 +249,7 @@ function normalizeInventarioPayload(payload: InventarioFormData): InventarioForm
       unidade: item.unidade.trim(),
       saldoSistema: Number(item.saldoSistema ?? 0),
       quantidadeContada: Number(item.quantidadeContada ?? 0),
+      localizacaoContada: String(item.localizacaoContada ?? '').trim(),
     })),
   };
 }
@@ -234,7 +272,7 @@ export function validateInventario(data: InventarioFormData): string | null {
   if (!data.codigo.trim()) return 'Informe o codigo do inventario.';
   if (!data.descricao.trim()) return 'Informe a descricao do inventario.';
   if (!data.responsavel.trim()) return 'Informe o responsavel.';
-  if (!data.itens.length) return 'Adicione pelo menos um item ao inventario.';
+  if (!data.itens.length) return null;
   const hasInvalidItem = data.itens.some(
     (item) => !item.codigoMaterial.trim() || !item.descricaoMaterial.trim() || !item.unidade.trim() || item.saldoSistema < 0 || item.quantidadeContada < 0,
   );
@@ -283,11 +321,55 @@ function validateInventarioForClosing(item: Inventario): string | null {
 export async function listarInventarios(
   filtro: InventarioFiltro,
 ): Promise<ServiceResult<PaginatedResult<InventarioListItem>>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const page = await listInventariosPageFromCloud({
+        busca: filtro.busca,
+        offset: (filtro.page - 1) * filtro.pageSize,
+        limit: filtro.pageSize,
+        status: filtro.status,
+      });
+      if (page.source === 'tables' && !page.error) {
+        const items: InventarioListItem[] = page.inventarios.map((row) => {
+          const statusRaw = String(row.status ?? 'aberto');
+          const status = (
+            statusRaw === 'fechado' || statusRaw === 'cancelado' ? statusRaw : 'aberto'
+          ) as Inventario['status'];
+          return {
+            id: String(row.id ?? ''),
+            codigo: String(row.codigo ?? ''),
+            descricao: String(row.descricao ?? ''),
+            responsavel: String(row.responsavel ?? ''),
+            dataInventario: String(row.dataInventario ?? ''),
+            status,
+            contagemMobileHabilitada: Boolean(row.contagemMobileHabilitada),
+            totalItens: Number(row.totalItens) || 0,
+            divergencias: Number(row.divergencias) || 0,
+          };
+        });
+        return {
+          success: true,
+          data: {
+            items,
+            total: page.total,
+            page: filtro.page,
+            pageSize: filtro.pageSize,
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
   const fallbackResult = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
+    shouldTryRemote: hasSupabaseConfig(),
     loadRemote: async () => {
       const remote = await readSnapshotInventarios();
-      return remote.length === 0 ? seedData : remote;
+      if (remote.length === 0) return readAll();
+      writeAll(remote);
+      return remote;
     },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar inventarios no Supabase.',
@@ -327,7 +409,7 @@ export async function salvarInventario(
 ): Promise<ServiceResult<Inventario>> {
   if (hasSupabaseConfig()) {
     try {
-      const items = await readSnapshotInventarios();
+      const { items, nuvemJaTinhaDados } = await readInventariosParaMutacao();
       const normalized = normalizeInventarioPayload(payload);
       const validationError = validateInventario(normalized);
       if (validationError) return { success: false, error: validationError };
@@ -341,7 +423,7 @@ export async function salvarInventario(
         if (index === -1) return { success: false, error: 'Inventario nao encontrado.' };
         if (items[index].status !== 'aberto') return { success: false, error: 'Apenas inventarios em aberto podem ser editados.' };
         items[index] = { ...items[index], ...normalized };
-        const bloqueioEdit = bloqueioLocalInventarios(items.length);
+        const bloqueioEdit = bloqueioLocalInventarios(items.length, nuvemJaTinhaDados);
         if (bloqueioEdit) return { success: false, error: bloqueioEdit };
         return executeWrite({
           shouldWriteRemote: true,
@@ -358,7 +440,7 @@ export async function salvarInventario(
         ...normalized,
       };
       items.push(created);
-      const bloqueioNovo = bloqueioLocalInventarios(items.length);
+      const bloqueioNovo = bloqueioLocalInventarios(items.length, nuvemJaTinhaDados);
       if (bloqueioNovo) return { success: false, error: bloqueioNovo };
       return executeWrite({
         shouldWriteRemote: true,
@@ -404,7 +486,7 @@ export async function salvarInventario(
 export async function fecharInventario(id: string): Promise<ServiceResult<Inventario>> {
   if (hasSupabaseConfig()) {
     try {
-      const items = await readSnapshotInventarios();
+      const { items, nuvemJaTinhaDados } = await readInventariosParaMutacao();
       const index = items.findIndex((item) => item.id === id);
       if (index === -1) return { success: false, error: 'Inventario nao encontrado.' };
       if (items[index].status === 'fechado') return { success: false, error: 'Inventario ja fechado.' };
@@ -412,7 +494,7 @@ export async function fecharInventario(id: string): Promise<ServiceResult<Invent
       const closingError = validateInventarioForClosing(items[index]);
       if (closingError) return { success: false, error: closingError };
       items[index] = { ...items[index], status: 'fechado' };
-      const bloqueioFechar = bloqueioLocalInventarios(items.length);
+      const bloqueioFechar = bloqueioLocalInventarios(items.length, nuvemJaTinhaDados);
       if (bloqueioFechar) return { success: false, error: bloqueioFechar };
       return executeWrite({
         shouldWriteRemote: true,
@@ -439,6 +521,47 @@ export async function fecharInventario(id: string): Promise<ServiceResult<Invent
 }
 
 export async function buscarInventarioPorId(id: string): Promise<ServiceResult<Inventario>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const cloud = await readInventarioFromCloud(id);
+      if (cloud.source === 'tables' && cloud.inventario) {
+        const row = cloud.inventario;
+        const statusRaw = String(row.status ?? 'aberto');
+        const status = (
+          statusRaw === 'fechado' || statusRaw === 'cancelado' ? statusRaw : 'aberto'
+        ) as Inventario['status'];
+        const itensRaw = Array.isArray(row.itens) ? row.itens : [];
+        return {
+          success: true,
+          data: {
+            id: String(row.id ?? id),
+            codigo: String(row.codigo ?? ''),
+            descricao: String(row.descricao ?? ''),
+            responsavel: String(row.responsavel ?? ''),
+            dataInventario: String(row.dataInventario ?? ''),
+            status,
+            contagemMobileHabilitada: Boolean(row.contagemMobileHabilitada),
+            observacoes: String(row.observacoes ?? ''),
+            itens: itensRaw.map((raw, itemIndex) => {
+              const item = raw as Record<string, unknown>;
+              return {
+                id: String(item.id ?? `${id}-item-${itemIndex + 1}`),
+                codigoMaterial: String(item.codigoMaterial ?? ''),
+                descricaoMaterial: String(item.descricaoMaterial ?? ''),
+                unidade: String(item.unidade ?? 'UN'),
+                saldoSistema: Number(item.saldoSistema ?? 0),
+                quantidadeContada: Number(item.quantidadeContada ?? 0),
+                localizacaoContada: String(item.localizacaoContada ?? '').trim(),
+              };
+            }),
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* fallback */
+    }
+  }
   const item = (await loadInventarios()).find((inventario) => inventario.id === id);
   if (!item) return { success: false, error: 'Inventario nao encontrado.' };
   return { success: true, data: item };
@@ -488,6 +611,7 @@ export async function montarExportacaoInventarioCsv(id: string): Promise<Service
     'unidade',
     'saldo_sistema',
     'quantidade_contada',
+    'local_contagem',
     'diferenca',
   ];
   const sep = ';';
@@ -509,6 +633,7 @@ export async function montarExportacaoInventarioCsv(id: string): Promise<Service
         row.unidade,
         formatDecimalExcelPtBr(Number(row.saldoSistema)),
         formatDecimalExcelPtBr(Number(row.quantidadeContada)),
+        String(row.localizacaoContada ?? ''),
         formatDecimalExcelPtBr(diferenca),
       ];
       return cells.map((c) => escapeCsvCellSemicolon(String(c))).join(sep);

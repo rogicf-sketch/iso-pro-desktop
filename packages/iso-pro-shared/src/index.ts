@@ -1,6 +1,15 @@
 export type * from './iso.js';
 export { stripJsonPollution } from './jsonSafe.js';
 export {
+  chaveAgrupamentoHistoricoAtendimento,
+  dataStampAtendimento,
+  formatNumeroAtendimento,
+  loteNumeroExisteNoPayload,
+  maxSequenciaAtendimentoNoPayload,
+  parseNumeroAtendimento,
+  reservarProximoNumeroAtendimento,
+} from './atendimentoNumero.js';
+export {
   isoSnapshotPayloadSchema,
   parseIsoSnapshotPayloadFromUnknown,
   type ParseIsoSnapshotPayloadResult,

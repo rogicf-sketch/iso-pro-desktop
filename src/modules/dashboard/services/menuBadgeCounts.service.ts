@@ -1,4 +1,6 @@
 import { collectAllPages } from '../../../lib/collectAllPages';
+import { fetchOperacaoContagens } from '../../../lib/operacaoEscalaContagens';
+import { hasSupabaseConfig } from '../../../lib/supabase';
 import { listarInventarios } from '../../inventario/services/inventario.service';
 import { listarRecebimentos } from '../../recebimentos/services/recebimentos.service';
 import { listarRir, listarRnc } from '../../qualidade/services/qualidade.service';
@@ -14,6 +16,17 @@ const BADGES_VAZIOS: MenuBadgeCounts = {
 
 export async function getMenuBadgeCounts(): Promise<MenuBadgeCounts> {
   try {
+    if (hasSupabaseConfig()) {
+      const c = await fetchOperacaoContagens();
+      return {
+        conferencia: c.conferenciaPendente,
+        recebimentos: c.recebimentosAguardando,
+        rir: c.rirAbertos,
+        rnc: c.rncAbertas,
+        inventario: c.inventariosAbertos,
+      };
+    }
+
     const [recebimentos, rir, rnc, inventarios] = await Promise.all([
       collectAllPages((page, pageSize) =>
         listarRecebimentos({ busca: '', status: 'todos', modo: 'todos', page, pageSize }),

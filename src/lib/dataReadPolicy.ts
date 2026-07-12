@@ -2,7 +2,9 @@ import { isIsoProDesktop } from './pdfCloud/pdfCloudConfig';
 import { hasSupabaseConfig } from './supabase';
 
 /** Tempo maximo para tentativa de leitura remota antes de cair no snapshot local. */
-export const REMOTE_READ_TIMEOUT_MS = 4_000;
+export const REMOTE_READ_TIMEOUT_MS = 15_000;
+/** Historico / fatias maiores no Atendimento (web) — evita falso "nao leu a nuvem". */
+export const REMOTE_READ_TIMEOUT_HEAVY_MS = 25_000;
 
 /**
  * Indica se a aplicacao deve tentar Supabase antes do armazenamento local.

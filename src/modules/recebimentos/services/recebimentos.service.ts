@@ -4,11 +4,22 @@ import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout } from '.
 import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotWrite,
+  deleteRecebimentosFromTables,
+  listRecebimentosIdsFromCloud,
+  listRecebimentosPageFromCloud,
+  readRecebimentoFromCloud,
+  syncRecebimentosFromSnapshot,
+  upsertRecebimentosEmLotes,
+  type RecebimentoListWire,
+  type RecebimentoWire,
+} from '../../../lib/recebimentosTabelas';
+import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
+import {
+  commitIsoProSnapshotPatch,
   invalidateIsoProSnapshotCache,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
@@ -436,7 +447,7 @@ type SnapshotPayload = {
 };
 
 async function readSnapshotRecebimentos(): Promise<Recebimento[]> {
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['recebimentos']);
   return (payload.recebimentos ?? []).map((rec, index) => ({
     id: String(rec.id ?? `rec-${index + 1}`),
     fornecedor: String(rec.fornecedorNome ?? ''),
@@ -518,8 +529,8 @@ export type SnapshotRecebimentosWrite =
 
 /** Grava recebimentos no snapshot: merge por `id` (padrão) ou lista completa (importação). */
 async function writeSnapshotRecebimentos(write: SnapshotRecebimentosWrite): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['recebimentos']);
     const current = (currentPayload.recebimentos ?? []) as SnapshotRecebimentoRecord[];
 
     let recebimentos: SnapshotRecebimentoRecord[];
@@ -533,14 +544,135 @@ async function writeSnapshotRecebimentos(write: SnapshotRecebimentosWrite): Prom
 
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
+      patch: {
         recebimentos,
         dataAtualizacao: new Date().toISOString(),
       },
     };
   });
   registrarAtividadeBackupOracle('recebimento');
+
+  await runDualWriteBestEffort('recebimentos', async () => {
+    if ('removeIds' in write) {
+      return deleteRecebimentosFromTables(write.removeIds);
+    }
+    if ('replaceAll' in write) {
+      return syncRecebimentosFromSnapshot();
+    }
+    return upsertRecebimentosEmLotes(write.upsert.map(recebimentoToWire));
+  });
+}
+
+function recebimentoToWire(item: Recebimento): RecebimentoWire {
+  return {
+    id: item.id,
+    fornecedor: item.fornecedor,
+    dataRecebimento: item.dataRecebimento,
+    notaFiscal: item.notaFiscal,
+    romaneio: item.romaneio,
+    conferente: item.conferente,
+    modoRecebimento: item.modoRecebimento,
+    status: item.status,
+    observacoes: item.observacoes,
+    dataConferencia: item.dataConferencia,
+    itens: item.itens.map((recItem) => ({
+      id: recItem.id,
+      codigoMaterial: recItem.codigoMaterial,
+      descricaoMaterial: recItem.descricaoMaterial,
+      unidade: recItem.unidade,
+      disciplina: recItem.disciplina,
+      localizacao: recItem.localizacao,
+      quantidadeRecebida: recItem.quantidadeRecebida,
+      quantidadeConferida: recItem.quantidadeConferida,
+      pesoUnitario: recItem.pesoUnitario ?? 0,
+      pesoTotal: recItem.pesoTotal ?? 0,
+      certificado: String(recItem.certificado ?? '').trim(),
+      observacaoItem: String(recItem.observacaoItem ?? '').trim(),
+    })),
+  };
+}
+
+function mapListWireToListItem(row: RecebimentoListWire): RecebimentoListItem {
+  const statusRaw = String(row.status ?? 'aguardando_conferencia');
+  const status = (
+    [
+      'rascunho',
+      'aguardando_conferencia',
+      'conferido',
+      'parcialmente_conferido',
+      'divergente',
+      'cancelado',
+    ].includes(statusRaw)
+      ? statusRaw
+      : 'aguardando_conferencia'
+  ) as Recebimento['status'];
+  const modoRaw = String(row.modoRecebimento ?? 'direto');
+  const modoRecebimento = (
+    modoRaw === 'aguardando_conferencia' ? 'aguardando_conferencia' : 'direto'
+  ) as Recebimento['modoRecebimento'];
+  return {
+    id: String(row.id ?? ''),
+    fornecedor: String(row.fornecedor ?? ''),
+    dataRecebimento: String(row.dataRecebimento ?? ''),
+    notaFiscal: String(row.notaFiscal ?? ''),
+    romaneio: String(row.romaneio ?? ''),
+    conferente: String(row.conferente ?? ''),
+    modoRecebimento,
+    status,
+    dataConferencia: row.dataConferencia ? String(row.dataConferencia) : undefined,
+    totalItens: Number(row.totalItens) || 0,
+    quantidadeRecebidaTotal: Number(row.quantidadeRecebidaTotal) || 0,
+    quantidadeConferidaTotal: Number(row.quantidadeConferidaTotal) || 0,
+    conferenciaItensDivergentes: Number(row.conferenciaItensDivergentes) || 0,
+  };
+}
+
+function mapWireToRecebimento(row: RecebimentoWire): Recebimento {
+  const statusRaw = String(row.status ?? 'aguardando_conferencia');
+  const status = (
+    [
+      'rascunho',
+      'aguardando_conferencia',
+      'conferido',
+      'parcialmente_conferido',
+      'divergente',
+      'cancelado',
+    ].includes(statusRaw)
+      ? statusRaw
+      : 'aguardando_conferencia'
+  ) as Recebimento['status'];
+  const modoRaw = String(row.modoRecebimento ?? 'direto');
+  const modoRecebimento = (
+    modoRaw === 'aguardando_conferencia' ? 'aguardando_conferencia' : 'direto'
+  ) as Recebimento['modoRecebimento'];
+  return {
+    id: String(row.id ?? ''),
+    fornecedor: String(row.fornecedor ?? row.fornecedorNome ?? ''),
+    dataRecebimento: String(row.dataRecebimento ?? row.data ?? ''),
+    notaFiscal: String(row.notaFiscal ?? row.nota ?? ''),
+    romaneio: String(row.romaneio ?? ''),
+    conferente: String(row.conferente ?? row.conferenteNome ?? ''),
+    modoRecebimento,
+    status,
+    observacoes: String(row.observacoes ?? ''),
+    dataConferencia: row.dataConferencia ? String(row.dataConferencia) : undefined,
+    itens: (row.itens ?? []).map((item, itemIndex) =>
+      normalizarItemPeso({
+        id: String(item.id ?? `${row.id}-item-${itemIndex + 1}`),
+        codigoMaterial: String(item.codigoMaterial ?? item.codigo ?? ''),
+        descricaoMaterial: String(item.descricaoMaterial ?? item.descricao ?? ''),
+        unidade: String(item.unidade ?? 'UN'),
+        disciplina: String(item.disciplina ?? ''),
+        localizacao: String(item.localizacao ?? ''),
+        quantidadeRecebida: coerceRecebimentoQuantidade(item.quantidadeRecebida ?? item.quantidade),
+        quantidadeConferida: coerceRecebimentoQuantidade(item.quantidadeConferida),
+        pesoUnitario: coerceRecebimentoQuantidade(item.pesoUnitario ?? 0),
+        pesoTotal: coerceRecebimentoQuantidade(item.pesoTotal ?? 0),
+        certificado: String(item.certificado ?? ''),
+        observacaoItem: String(item.observacaoItem ?? '').trim(),
+      }),
+    ),
+  };
 }
 export function aplicarFiltrosListaRecebimentos(
   items: Recebimento[],
@@ -740,6 +872,32 @@ function validateConferenciaPayload(
 export async function listarRecebimentos(
   filtro: RecebimentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<RecebimentoListItem>>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const page = await listRecebimentosPageFromCloud({
+        busca: filtro.busca,
+        offset: (filtro.page - 1) * filtro.pageSize,
+        limit: filtro.pageSize,
+        status: filtro.status,
+        modo: filtro.modo,
+      });
+      if (page.source === 'tables' && !page.error) {
+        return {
+          success: true,
+          data: {
+            items: page.recebimentos.map(mapListWireToListItem),
+            total: page.total,
+            page: filtro.page,
+            pageSize: filtro.pageSize,
+          },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* fallback legado */
+    }
+  }
+
   const base = await carregarRecebimentosBaseParaLeitura();
   const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
   const items = aplicarFiltrosListaRecebimentos(enriched, filtro);
@@ -763,6 +921,16 @@ export async function listarRecebimentos(
 /** IDs de todos os recebimentos que correspondem ao filtro (ignora paginacao). */
 export async function obterIdsRecebimentosFiltrados(filtro: RecebimentoFiltro): Promise<ServiceResult<string[]>> {
   try {
+    if (hasSupabaseConfig()) {
+      const cloud = await listRecebimentosIdsFromCloud({
+        busca: filtro.busca,
+        status: filtro.status,
+        modo: filtro.modo,
+      });
+      if (cloud.source === 'tables' && !cloud.error) {
+        return { success: true, data: cloud.ids };
+      }
+    }
     const base = await carregarRecebimentosBaseParaLeitura();
     const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
     const filtered = aplicarFiltrosListaRecebimentos(enriched, filtro);
@@ -1108,6 +1276,18 @@ export async function excluirRecebimentoDefinitivamente(
 }
 
 export async function buscarRecebimentoPorId(id: string): Promise<ServiceResult<Recebimento>> {
+  if (hasSupabaseConfig()) {
+    try {
+      const cloud = await readRecebimentoFromCloud(id);
+      if (cloud.source === 'tables' && cloud.recebimento) {
+        const mapped = mapWireToRecebimento(cloud.recebimento);
+        const [enriched] = await enriquecerRecebimentosComPesoCadastroMateriais([mapped]);
+        return { success: true, data: enriched, meta: { source: 'supabase' } };
+      }
+    } catch {
+      /* fallback */
+    }
+  }
   const raw = await readRemoteOrLocal({
     readRemote: readSnapshotRecebimentos,
     readLocal: readAll,

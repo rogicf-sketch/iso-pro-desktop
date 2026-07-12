@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+vi.mock('../../../components/ui/ConfirmDialogProvider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+}));
+
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => false),
 }));
@@ -27,9 +31,15 @@ vi.mock('../../auth/services/auth.service', () => ({
   verifyCurrentUserPassword: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
-vi.mock('../../materiais/services/materiais.service', () => ({
-  validarCodigosMateriaisAtivosNoCadastroParaRecebimento: vi.fn(),
-}));
+vi.mock('../../materiais/services/materiais.service', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../materiais/services/materiais.service')>();
+  return {
+    ...mod,
+    validarCodigosMateriaisAtivosNoCadastroParaRecebimento: vi.fn(),
+    construirIndicePesoPorCodigoMaterial: vi.fn(() => Promise.resolve(new Map<string, number>())),
+    construirIndiceDisciplinaUnidadePorCodigoMaterial: vi.fn(() => Promise.resolve(new Map<string, { disciplina: string; unidade: string }>())),
+  };
+});
 
 vi.mock('../services/documentos.service', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../services/documentos.service')>();
@@ -75,7 +85,7 @@ describe('useDocumentos — lista', () => {
         ],
         total: 1,
         page: 1,
-        pageSize: 6,
+        pageSize: 20,
       },
       meta: { source: 'local' as const },
     });

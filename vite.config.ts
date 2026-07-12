@@ -38,6 +38,19 @@ export default defineConfig(({ mode }) => {
     /** Não abrir browser extra — `npm run dev` usa janela Electron. Use `npm run dev:browser` para abrir no Chrome. */
     open: process.env.VITE_OPEN_BROWSER === '1',
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('pdf-lib')) return 'vendor-pdf-lib';
+          if (id.includes('pagedjs')) return 'vendor-pagedjs';
+          if (id.includes('jszip')) return 'vendor-jszip';
+          if (id.includes('@pdf-lib') || id.includes('fontkit')) return 'vendor-pdf-fonts';
+        },
+      },
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],

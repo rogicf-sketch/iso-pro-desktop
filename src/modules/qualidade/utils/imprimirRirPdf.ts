@@ -138,15 +138,25 @@ export async function imprimirRirRelatorioPdf(
     };
   }
 
-  /** Web: popup reservado no clique + diálogo de impressão do navegador. */
+  /** Web: PDF oficial na nuvem + diálogo de impressão sobre o PDF (não HTML directo). */
   if (!isElectronApp()) {
+    const gerado = await gerarRirPdfOficialValidado(registro);
+    if (gerado.ok) {
+      const { imprimirPdfBytesNoNavegador } = await import('../../../lib/pdfCloud/imprimirPdfBytesNoNavegador');
+      const res = await imprimirPdfBytesNoNavegador(gerado.bytes, gerado.fileName);
+      if (res.ok) {
+        return { ok: true, detalhe: `Impressão PDF · ${gerado.origem} · ${RIR_PDF_MOTOR}` };
+      }
+      return { ok: false, error: traduzirErroImpressaoIsoPro(res.error ?? 'Falha na impressão.') };
+    }
     if (abrirImpressaoHtmlNavegador(html, opts?.printWindow)) {
-      return { ok: true, detalhe: 'Impressão HTML (navegador)' };
+      return { ok: true, detalhe: 'Impressão HTML (fallback navegador)' };
     }
     return {
       ok: false,
       error: traduzirErroImpressaoIsoPro(
-        'Não foi possível abrir a impressão. Permita pop-ups para este site ou use «Visualizar» e depois «Imprimir / PDF».',
+        gerado.error ??
+          'Não foi possível abrir a impressão. Permita pop-ups para este site ou use «Visualizar» e depois «Imprimir / PDF».',
       ),
     };
   }

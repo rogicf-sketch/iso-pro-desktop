@@ -503,6 +503,11 @@ export function RecebimentosPage() {
             Boolean(isViewOnly && canEdit && selected?.status === 'aguardando_conferencia')
           }
           readOnly={isViewOnly}
+          recebimentoRelatorioMeta={
+            isViewOnly && selected
+              ? { status: selected.status, dataConferencia: selected.dataConferencia }
+              : undefined
+          }
         />
       </Modal>
     </div>

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
@@ -46,6 +47,7 @@ function etiquetasListaQueryKey(filters: EtiquetaFiltro, userLogin: string | und
 }
 
 export function useEtiquetas() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const [filters, setFilters] = useState<EtiquetaFiltro>(initialFilters);
@@ -180,11 +182,12 @@ export function useEtiquetas() {
       return;
     }
     if (
-      !window.confirm(
-        status === 'cancelada'
-          ? `Confirma o cancelamento da etiqueta ${item.codigo}?`
-          : `Confirma a alteracao da etiqueta ${item.codigo} para ${status}?`,
-      )
+      !(await confirm({
+        message:
+          status === 'cancelada'
+            ? `Confirma o cancelamento da etiqueta ${item.codigo}?`
+            : `Confirma a alteracao da etiqueta ${item.codigo} para ${status}?`,
+      }))
     ) {
       return;
     }
@@ -217,7 +220,7 @@ export function useEtiquetas() {
       status === 'impressa'
         ? `marcar ${elegiveis.length} etiqueta(s) como impressa(s)`
         : `cancelar ${elegiveis.length} etiqueta(s)`;
-    if (!window.confirm(`Confirma ${acao}?`)) return;
+    if (!(await confirm({ message: `Confirma ${acao}?` }))) return;
     setError('');
     for (const e of elegiveis) {
       const result = await atualizarStatusEtiqueta(e.id, status);

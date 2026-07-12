@@ -32,15 +32,20 @@ function seedMateriaisAtivosNoArmazenamento(storage: Record<string, string>, cod
   );
 }
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
   shouldUseCloudMaterials: vi.fn(() => false),
+}));
+
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
 }));
 
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
@@ -49,9 +54,33 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     ...actual,
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+}
 
 function snapshotRecebimentoAntigo() {
   return {
@@ -154,6 +183,7 @@ describe('recebimentos.service / salvarRecebimento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -240,6 +270,7 @@ describe('recebimentos.service / salvarRecebimento criacao (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -313,6 +344,7 @@ describe('recebimentos.service / finalizarConferenciaRecebimento (Supabase)', ()
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -417,6 +449,7 @@ describe('recebimentos.service / cancelarRecebimento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -506,6 +539,7 @@ describe('recebimentos.service / destravarRecebimentoParaCorrecaoAdministrativa 
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -597,6 +631,7 @@ describe('recebimentos.service / excluirRecebimentosDefinitivamente (Supabase)',
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',

@@ -1,5 +1,6 @@
 import type { ServiceResult } from '../types/common.types';
 import { withRemoteReadTimeout } from './dataReadPolicy';
+import { captureOperationalEvent } from './errorReporting';
 import { isIsoProSnapshotConflictError } from './isoProSnapshot';
 import { isIsoProDesktop } from './pdfCloud/pdfCloudConfig';
 import { businessWriteBlockedFailure, isBusinessLocalWriteBlocked } from './writePolicy';
@@ -74,13 +75,17 @@ export async function executeWrite<T>(options: {
       };
     } catch (error) {
       const message = traduzirErroOperacionalIsoPro(getErrorMessage(error, options.fallbackMessage));
+      const snapshotConflict = isIsoProSnapshotConflictError(error);
+      if (snapshotConflict) {
+        captureOperationalEvent('snapshot_conflict', { message }, 'warning');
+      }
       return {
         success: false,
         error: message,
         meta: {
           source: 'local',
           fallbackReason: message,
-          snapshotConflict: isIsoProSnapshotConflictError(error),
+          snapshotConflict,
         },
       };
     }

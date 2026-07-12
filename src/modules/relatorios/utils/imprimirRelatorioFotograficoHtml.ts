@@ -404,7 +404,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
     }
   </style>
 </head>
-<body>
+<body class="rf-print-body">
   ${htmlBarraPreVisualizacaoImpressao()}
   <div class="rf-doc">
     <div class="inst-topbar">

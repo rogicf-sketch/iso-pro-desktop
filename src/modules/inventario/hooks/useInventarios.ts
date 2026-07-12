@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -36,6 +37,7 @@ function inventariosListaQueryKey(filters: InventarioFiltro, userLogin: string |
 }
 
 export function useInventarios() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
@@ -59,6 +61,7 @@ export function useInventarios() {
         items: result.data.items,
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
       };
     },
   });
@@ -67,6 +70,7 @@ export function useInventarios() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -137,9 +141,9 @@ export function useInventarios() {
       return;
     }
     if (
-      !window.confirm(
-        `Confirma fechar o inventario ${item.codigo}? Itens: ${item.totalItens}. Divergencias registradas: ${item.divergencias}.`,
-      )
+      !(await confirm({
+        message: `Confirma fechar o inventario ${item.codigo}? Itens: ${item.totalItens}. Divergencias registradas: ${item.divergencias}.`,
+      }))
     ) {
       return;
     }
@@ -188,6 +192,7 @@ export function useInventarios() {
     error: error || listError,
     success,
     fallbackReason,
+    listSource,
     hasCloudConfig,
     filters,
     formInitialValue,

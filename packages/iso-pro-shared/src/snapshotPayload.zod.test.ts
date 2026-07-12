@@ -40,6 +40,16 @@ describe('parseIsoSnapshotPayloadFromUnknown', () => {
     }
   });
 
+  it('aceita documentos.data null (Postgres/JSON)', () => {
+    const r = parseIsoSnapshotPayloadFromUnknown({
+      documentos: [{ id: '1', numero: 'SPDA-1', data: null, descricao: 'x' }],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.documentos?.[0]?.data).toBeUndefined();
+    }
+  });
+
   it('aceita materiais com itens válidos', () => {
     const r = parseIsoSnapshotPayloadFromUnknown({
       materiais: [{ id: '1', codigo: 'ABC', descricao: 'Teste' }],

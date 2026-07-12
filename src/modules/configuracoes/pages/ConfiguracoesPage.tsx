@@ -2,6 +2,7 @@
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { normalizarUrlAssetPublicParaAmbiente } from '../../../lib/logoInstitucional';
 import { Button } from '../../../components/ui/Button';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -14,6 +15,8 @@ import { ConfiguracaoRelatorioFinalIaPanel } from '../components/ConfiguracaoRel
 import { ConfiguracaoAlertaEstoqueEmailPanel } from '../components/ConfiguracaoAlertaEstoqueEmailPanel';
 import { ConfiguracaoAlertaOperacionalEmailPanel } from '../components/ConfiguracaoAlertaOperacionalEmailPanel';
 import { ConfiguracaoBackupOraclePanel } from '../components/ConfiguracaoBackupOraclePanel';
+import { ConfiguracaoMfaPanel } from '../components/ConfiguracaoMfaPanel';
+import { ConfiguracaoSentryPanel } from '../components/ConfiguracaoSentryPanel';
 import { ConfiguracoesSecaoIntro } from '../components/ConfiguracoesSecaoIntro';
 import { ConfiguracoesSecaoNav } from '../components/ConfiguracoesSecaoNav';
 import {
@@ -22,6 +25,7 @@ import {
   listarSecoesConfiguracaoVisiveis,
   obterSecaoConfiguracao,
 } from '../constants/configuracoesSecoes.constants';
+import { comprimirArquivoLogoInstitucionalParaArmazenamento } from '../utils/configReciboMobileSnapshot';
 import { useConfiguracoes } from '../hooks/useConfiguracoes';
 import { LIMPAR_CADASTROS_FRASE_LOCAL, LIMPAR_CADASTROS_FRASE_NUVEM } from '../constants/limparCadastros.constants';
 import {
@@ -50,6 +54,7 @@ import {
   type IsoProTenantListItem,
 } from '../../../lib/isoProTenant';
 import { getSupabase, getSupabaseConfigDiagnostics, hasSupabaseConfig } from '../../../lib/supabase';
+import { labelTemaSistema, TEMAS_SISTEMA_OPCOES } from '../../../lib/temaSistema';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 import {
   aplicarTemaEfetivoNaSessao,
@@ -58,13 +63,26 @@ import {
   readUsuarioTemaPreferido,
   salvarUsuarioTemaPreferido,
 } from '../services/configuracoes.service';
+import {
+  avaliarSaudeSnapshotNuvem,
+  consultarEstadoEscalaNuvem,
+  sincronizarDocumentosPlanejamentoTabelas,
+  sincronizarQualidadeInventarioTabelas,
+  sincronizarRecebimentosTabelas,
+  type EscalaNuvemEstado,
+  type SnapshotSaudeNuvem,
+} from '../services/snapshotSaudeNuvem.service';
 
 export function ConfiguracoesPage() {
   const { canAccessAction, user } = useAuth();
+  const { confirm } = useConfirmDialog();
   const {
     form,
     loading,
     error,
+    warning,
+    info,
+    reciboNuvemPendente,
     success,
     setSuccess,
     runtimeSupabase,
@@ -189,6 +207,32 @@ export function ConfiguracoesPage() {
   const [ambienteFormErro, setAmbienteFormErro] = useState('');
   const [tenantsNuvemCfg, setTenantsNuvemCfg] = useState<IsoProTenantListItem[]>([]);
   const [tenantCfgSelect, setTenantCfgSelect] = useState(() => getActiveTenantId());
+  const [snapshotSaudeNuvem, setSnapshotSaudeNuvem] = useState<SnapshotSaudeNuvem | null>(null);
+  const [escalaNuvemEstado, setEscalaNuvemEstado] = useState<EscalaNuvemEstado | null>(null);
+  const [escalaNuvemEstadoBusy, setEscalaNuvemEstadoBusy] = useState(false);
+  const [syncDocsTabelasBusy, setSyncDocsTabelasBusy] = useState(false);
+  const [syncDocsTabelasErro, setSyncDocsTabelasErro] = useState('');
+  const [syncDocsTabelasOk, setSyncDocsTabelasOk] = useState('');
+  const [syncRecTabelasBusy, setSyncRecTabelasBusy] = useState(false);
+  const [syncRecTabelasErro, setSyncRecTabelasErro] = useState('');
+  const [syncRecTabelasOk, setSyncRecTabelasOk] = useState('');
+  const [syncQualInvBusy, setSyncQualInvBusy] = useState(false);
+  const [syncQualInvErro, setSyncQualInvErro] = useState('');
+  const [syncQualInvOk, setSyncQualInvOk] = useState('');
+
+  async function refrescarEstadoEscalaNuvem() {
+    if (!canAdminister || !hasSupabaseConfig()) {
+      setEscalaNuvemEstado(null);
+      return;
+    }
+    setEscalaNuvemEstadoBusy(true);
+    try {
+      const r = await consultarEstadoEscalaNuvem();
+      if (r.success) setEscalaNuvemEstado(r.data ?? null);
+    } finally {
+      setEscalaNuvemEstadoBusy(false);
+    }
+  }
 
   const adminSucessoRef = useRef<HTMLDivElement | null>(null);
 
@@ -215,6 +259,24 @@ export function ConfiguracoesPage() {
       } catch {
         /* lista opcional; login já avisa se falhar */
       }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canAdminister]);
+
+  useEffect(() => {
+    if (!canAdminister || !hasSupabaseConfig()) {
+      setSnapshotSaudeNuvem(null);
+      setEscalaNuvemEstado(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const [saude, escala] = await Promise.all([avaliarSaudeSnapshotNuvem(), consultarEstadoEscalaNuvem()]);
+      if (cancelled) return;
+      if (saude.success) setSnapshotSaudeNuvem(saude.data ?? null);
+      if (escala.success) setEscalaNuvemEstado(escala.data ?? null);
     })();
     return () => {
       cancelled = true;
@@ -441,6 +503,8 @@ export function ConfiguracoesPage() {
 
         {error ? <div className="error-box">{error}</div> : null}
         {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+        {info ? <OperationalNotice tone="success">{info}</OperationalNotice> : null}
+        {warning ? <OperationalNotice tone="warning">{warning}</OperationalNotice> : null}
         <div ref={adminSucessoRef} role="status" aria-live="polite" tabIndex={-1}>
           {cadastroLocalOk || cadastroNuvemOk || nuvemSucesso ? (
             <OperationalNotice tone="success">
@@ -605,11 +669,12 @@ export function ConfiguracoesPage() {
                       <Button
                         type="button"
                         variant="danger"
-                        onClick={() => {
+                        onClick={async () => {
                           if (
-                            !window.confirm(
-                              `Remover "${a.nome}"? Isto apaga os dados locais só desta obra neste PC (não altera a nuvem).`,
-                            )
+                            !(await confirm({
+                              message: `Remover "${a.nome}"? Isto apaga os dados locais só desta obra neste PC (não altera a nuvem).`,
+                              danger: true,
+                            }))
                           ) {
                             return;
                           }
@@ -664,6 +729,228 @@ export function ConfiguracoesPage() {
                 </Button>
               </div>
             </div>
+          </div>
+        ) : null}
+
+        {canAdminister && hasSupabaseConfig() && snapshotSaudeNuvem ? (
+          <div className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="panel-kicker">Desempenho na nuvem</p>
+                <h2>Snapshot JSON (empresa activa)</h2>
+              </div>
+            </div>
+            <OperationalNotice tone={snapshotSaudeNuvem.nivel === 'ok' ? undefined : 'warning'}>
+              Tamanho actual: <strong>{snapshotSaudeNuvem.payloadLabel}</strong>
+              {snapshotSaudeNuvem.updatedAt ? (
+                <>
+                  {' '}
+                  · ultima actualizacao: {new Date(snapshotSaudeNuvem.updatedAt).toLocaleString('pt-PT')}
+                </>
+              ) : null}
+              {snapshotSaudeNuvem.mensagem ? (
+                <>
+                  <br />
+                  {snapshotSaudeNuvem.mensagem}
+                </>
+              ) : (
+                <>
+                  <br />
+                  Volume dentro do esperado. Leituras parciais e gravacao por fatias reduzem lentidao e conflitos entre PC e mobile.
+                </>
+              )}
+            </OperationalNotice>
+            <div style={{ marginTop: 12 }}>
+              <OperationalNotice tone="warning">
+                <strong>Automático:</strong> ao entrar no sistema, se as tabelas estiverem vazias, o PC sincroniza sozinho em
+                fundo (não trava o ecrã). Ao gravar desenhos/recebimentos no dia a dia, a actualização também é automática.
+                Os botões abaixo são só para <strong>reparar / forçar actualização</strong> se algo ficar desfasado.
+              </OperationalNotice>
+            </div>
+            <div
+              className="form-columns"
+              style={{ marginTop: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}
+            >
+              <div className="panel" style={{ margin: 0, padding: 14 }}>
+                <p className="panel-kicker" style={{ marginBottom: 4 }}>
+                  Desenhos
+                </p>
+                {escalaNuvemEstadoBusy && !escalaNuvemEstado ? (
+                  <p className="panel-copy">A verificar…</p>
+                ) : escalaNuvemEstado?.documentosErro ? (
+                  <p className="panel-copy" style={{ color: 'var(--danger, #b91c1c)' }}>
+                    Indisponível: {escalaNuvemEstado.documentosErro}
+                  </p>
+                ) : (escalaNuvemEstado?.documentos ?? 0) > 0 ? (
+                  <p className="panel-copy">
+                    <strong style={{ color: 'var(--success, #15803d)' }}>Com dados</strong>
+                    {' — '}
+                    {escalaNuvemEstado!.documentos.toLocaleString('pt-BR')} desenho(s) nas tabelas
+                  </p>
+                ) : (
+                  <p className="panel-copy">
+                    <strong>Ainda sem dados</strong> — clique em sincronizar
+                  </p>
+                )}
+              </div>
+              <div className="panel" style={{ margin: 0, padding: 14 }}>
+                <p className="panel-kicker" style={{ marginBottom: 4 }}>
+                  Recebimentos
+                </p>
+                {escalaNuvemEstadoBusy && !escalaNuvemEstado ? (
+                  <p className="panel-copy">A verificar…</p>
+                ) : escalaNuvemEstado?.recebimentosErro ? (
+                  <p className="panel-copy" style={{ color: 'var(--danger, #b91c1c)' }}>
+                    Indisponível: {escalaNuvemEstado.recebimentosErro}
+                  </p>
+                ) : (escalaNuvemEstado?.recebimentos ?? 0) > 0 ? (
+                  <p className="panel-copy">
+                    <strong style={{ color: 'var(--success, #15803d)' }}>Com dados</strong>
+                    {' — '}
+                    {escalaNuvemEstado!.recebimentos.toLocaleString('pt-BR')} NF(s) nas tabelas
+                  </p>
+                ) : (
+                  <p className="panel-copy">
+                    <strong>Ainda sem dados</strong> — clique em sincronizar
+                  </p>
+                )}
+              </div>
+              <div className="panel" style={{ margin: 0, padding: 14 }}>
+                <p className="panel-kicker" style={{ marginBottom: 4 }}>
+                  Inventário
+                </p>
+                {escalaNuvemEstadoBusy && !escalaNuvemEstado ? (
+                  <p className="panel-copy">A verificar…</p>
+                ) : escalaNuvemEstado?.inventariosErro ? (
+                  <p className="panel-copy" style={{ color: 'var(--danger, #b91c1c)' }}>
+                    Indisponível: {escalaNuvemEstado.inventariosErro}
+                  </p>
+                ) : (escalaNuvemEstado?.inventarios ?? 0) > 0 ? (
+                  <p className="panel-copy">
+                    <strong style={{ color: 'var(--success, #15803d)' }}>Com dados</strong>
+                    {' — '}
+                    {escalaNuvemEstado!.inventarios.toLocaleString('pt-BR')} inventário(s)
+                  </p>
+                ) : (
+                  <p className="panel-copy">
+                    <strong>Ainda sem dados</strong> — clique em sincronizar
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="form-actions" style={{ marginTop: 12 }}>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={syncDocsTabelasBusy}
+                onClick={() => {
+                  void (async () => {
+                    setSyncDocsTabelasBusy(true);
+                    setSyncDocsTabelasErro('');
+                    setSyncDocsTabelasOk('');
+                    try {
+                      const r = await sincronizarDocumentosPlanejamentoTabelas();
+                      if (!r.success || !r.data) {
+                        setSyncDocsTabelasErro(r.error ?? 'Falha ao sincronizar desenhos para tabelas.');
+                        return;
+                      }
+                      const msg = `Sincronizado: ${r.data.documentos.toLocaleString('pt-BR')} desenho(s), ${r.data.itens.toLocaleString('pt-BR')} linha(s).`;
+                      setSyncDocsTabelasOk(msg);
+                      setSuccess(msg);
+                      await refrescarEstadoEscalaNuvem();
+                    } finally {
+                      setSyncDocsTabelasBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {syncDocsTabelasBusy
+                  ? 'A sincronizar desenhos…'
+                  : (escalaNuvemEstado?.documentos ?? 0) > 0
+                    ? 'Actualizar desenhos (sincronizar de novo)'
+                    : 'Sincronizar desenhos agora'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={syncRecTabelasBusy}
+                onClick={() => {
+                  void (async () => {
+                    setSyncRecTabelasBusy(true);
+                    setSyncRecTabelasErro('');
+                    setSyncRecTabelasOk('');
+                    try {
+                      const r = await sincronizarRecebimentosTabelas();
+                      if (!r.success || !r.data) {
+                        setSyncRecTabelasErro(r.error ?? 'Falha ao sincronizar recebimentos para tabelas.');
+                        return;
+                      }
+                      const msg = `Sincronizado: ${r.data.recebimentos.toLocaleString('pt-BR')} NF(s), ${r.data.itens.toLocaleString('pt-BR')} linha(s).`;
+                      setSyncRecTabelasOk(msg);
+                      setSuccess(msg);
+                      await refrescarEstadoEscalaNuvem();
+                    } finally {
+                      setSyncRecTabelasBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {syncRecTabelasBusy
+                  ? 'A sincronizar recebimentos…'
+                  : (escalaNuvemEstado?.recebimentos ?? 0) > 0
+                    ? 'Actualizar recebimentos (sincronizar de novo)'
+                    : 'Sincronizar recebimentos agora'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={syncQualInvBusy}
+                onClick={() => {
+                  void (async () => {
+                    setSyncQualInvBusy(true);
+                    setSyncQualInvErro('');
+                    setSyncQualInvOk('');
+                    try {
+                      const r = await sincronizarQualidadeInventarioTabelas();
+                      if (!r.success || !r.data) {
+                        setSyncQualInvErro(r.error ?? 'Falha ao sincronizar inventario/RIR/RNC.');
+                        return;
+                      }
+                      const msg = `Sincronizado: ${r.data.inventarios} inventário(s), ${r.data.rir} RIR, ${r.data.rnc} RNC.`;
+                      setSyncQualInvOk(msg);
+                      setSuccess(msg);
+                      await refrescarEstadoEscalaNuvem();
+                    } finally {
+                      setSyncQualInvBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {syncQualInvBusy
+                  ? 'A sincronizar inventário/RIR/RNC…'
+                  : (escalaNuvemEstado?.inventarios ?? 0) > 0
+                    ? 'Actualizar inventário + RIR + RNC'
+                    : 'Sincronizar inventário + RIR + RNC'}
+              </Button>
+            </div>
+            {syncDocsTabelasOk ? (
+              <div style={{ marginTop: 8 }}>
+                <OperationalNotice tone="success">{syncDocsTabelasOk}</OperationalNotice>
+              </div>
+            ) : null}
+            {syncRecTabelasOk ? (
+              <div style={{ marginTop: 8 }}>
+                <OperationalNotice tone="success">{syncRecTabelasOk}</OperationalNotice>
+              </div>
+            ) : null}
+            {syncQualInvOk ? (
+              <div style={{ marginTop: 8 }}>
+                <OperationalNotice tone="success">{syncQualInvOk}</OperationalNotice>
+              </div>
+            ) : null}
+            {syncDocsTabelasErro ? <div className="error-box" style={{ marginTop: 8 }}>{syncDocsTabelasErro}</div> : null}
+            {syncRecTabelasErro ? <div className="error-box" style={{ marginTop: 8 }}>{syncRecTabelasErro}</div> : null}
+            {syncQualInvErro ? <div className="error-box" style={{ marginTop: 8 }}>{syncQualInvErro}</div> : null}
           </div>
         ) : null}
 
@@ -757,11 +1044,11 @@ export function ConfiguracoesPage() {
               }}
               value={temaEfetivoSessao}
             >
-              <option value="neon">Neon (verde iluminado) — recomendado</option>
-              <option value="padrao">Padrao escuro</option>
-              <option value="escuro">Escuro</option>
-              <option value="claro">Claro</option>
-              <option value="verde">Verde</option>
+              {TEMAS_SISTEMA_OPCOES.map((opcao) => (
+                <option key={opcao.id} value={opcao.id}>
+                  {opcao.label}
+                </option>
+              ))}
             </Select>
             <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
               <Button
@@ -785,15 +1072,15 @@ export function ConfiguracoesPage() {
                 onChange={(event) => setForm((current) => (current ? { ...current, tema: event.target.value as typeof form.tema } : current))}
                 value={form.tema}
               >
-                <option value="neon">Neon (verde iluminado) — recomendado</option>
-                <option value="padrao">Padrao escuro</option>
-                <option value="escuro">Escuro</option>
-                <option value="claro">Claro</option>
-                <option value="verde">Verde</option>
+                {TEMAS_SISTEMA_OPCOES.map((opcao) => (
+                  <option key={opcao.id} value={opcao.id}>
+                    {opcao.label}
+                  </option>
+                ))}
               </Select>
             ) : (
               <div className="panel-copy" style={{ gridColumn: '1 / -1', opacity: 0.9 }}>
-                Tema padrão da instalação (referência): <strong>{form.tema}</strong> — apenas perfis com permissão de administrar configurações
+                Tema padrão da instalação (referência): <strong>{labelTemaSistema(form.tema)}</strong> — apenas perfis com permissão de administrar configurações
                 podem alterar este valor ao gravar a ficha completa.
               </div>
             )}
@@ -826,8 +1113,14 @@ export function ConfiguracoesPage() {
             </div>
           </div>
           <p className="panel-copy">
-            Logo institucional: aparece em recibos, impressoes de RIR, RNC, etiquetas e demais relatorios gerados em HTML. Exportacoes somente em planilha (Excel/CSV) nao incluem o logo. Padrao de fabrica: chapa I.S.O PRO (mesmo modelo da sidebar); podes substituir por imagem ou URL.
+            Logo institucional: aparece em recibos, impressoes de RIR, RNC, etiquetas e demais relatorios gerados em HTML. Ao gravar configuracoes, o logo (e CNPJ do rodape) sincronizam para a nuvem — o app Campo usa o mesmo logo no recibo apos «Carregar dados da nuvem». Imagens carregadas sao comprimidas automaticamente (~120 KB) para reduzir o download no telemovel. Exportacoes somente em planilha (Excel/CSV) nao incluem o logo. Padrao de fabrica: chapa I.S.O PRO (mesmo modelo da sidebar); podes substituir por imagem ou URL.
           </p>
+          {reciboNuvemPendente ? (
+            <OperationalNotice tone="warning">
+              Logo, CNPJ ou dados do projeto neste PC ainda nao constam na nuvem (app Campo). Clique em{' '}
+              <strong>Salvar configuracoes</strong> para enviar — ou aguarde a sincronizacao automatica ao abrir o sistema.
+            </OperationalNotice>
+          ) : null}
           {logoUploadError ? <div className="error-box">{logoUploadError}</div> : null}
           <div className="form-columns">
             <Input
@@ -847,12 +1140,15 @@ export function ConfiguracoesPage() {
                   setLogoUploadError(`Imagem muito grande. Limite aproximado: ${Math.round(maxLogoBytes / 1024)} KB.`);
                   return;
                 }
-                const reader = new FileReader();
-                reader.onload = () => {
-                  const data = typeof reader.result === 'string' ? reader.result : '';
-                  setForm((current) => (current ? { ...current, logoInstitucionalUrl: data } : current));
-                };
-                reader.readAsDataURL(file);
+                void comprimirArquivoLogoInstitucionalParaArmazenamento(file).then((result) => {
+                  if (!result) {
+                    setLogoUploadError('Nao foi possivel processar a imagem do logo.');
+                    return;
+                  }
+                  setForm((current) =>
+                    current ? { ...current, logoInstitucionalUrl: result.dataUrl } : current,
+                  );
+                });
               }}
               type="file"
             />
@@ -1098,11 +1394,20 @@ export function ConfiguracoesPage() {
             <code>ISO_PRO_LINK_AUTH_SECRET</code> no Dashboard). Trate-o como credencial sensivel; veja{' '}
             <code>supabase/functions/README.md</code>.
           </OperationalNotice>
+          <OperationalNotice>
+            Checklist de activacao JWT / RLS para a equipa de TI:{' '}
+            <a href="/checklist-ativacao-jwt.html" target="_blank" rel="noopener noreferrer">
+              abrir pagina interactiva
+            </a>{' '}
+            (marcar passos e guardar PDF).
+          </OperationalNotice>
           <OperationalNotice tone="warning">
             Com o segredo <code>ISO_PRO_ADMIN_USER_SECRET</code> preenchido, gravar utilizadores na nuvem passa pela Edge Function{' '}
             <code>iso_pro_admin_user</code> (actor = sessao actual; e necessario voltar a entrar apos activar o segredo). Campo vazio mantem o fluxo anterior
             (insert/update directo com a chave anon).
           </OperationalNotice>
+          <ConfiguracaoMfaPanel canAdminister={canAdminister} />
+          <ConfiguracaoSentryPanel canAdminister={canAdminister} />
         </div>
         </div>
 

@@ -1,10 +1,10 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  commitIsoProSnapshotPatch,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
@@ -98,12 +98,11 @@ type SnapshotPayload = {
 };
 
 async function writeSnapshotEtiquetas(items: Etiqueta[]): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['etiquetas']);
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
+      patch: {
         etiquetas: items,
         dataAtualizacao: new Date().toISOString(),
       },
@@ -119,7 +118,7 @@ async function garantirMigracaoLocalParaNuvemSeNecessario(): Promise<void> {
   const local = readAll();
   if (local.length === 0) return;
 
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['etiquetas']);
   const nuvem = parseSnapshotEtiquetasRaw(payload.etiquetas);
   if (nuvem.length > 0) return;
 
@@ -128,7 +127,7 @@ async function garantirMigracaoLocalParaNuvemSeNecessario(): Promise<void> {
 
 async function readSnapshotEtiquetas(): Promise<Etiqueta[]> {
   await garantirMigracaoLocalParaNuvemSeNecessario();
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['etiquetas']);
   return parseSnapshotEtiquetasRaw(payload.etiquetas);
 }
 

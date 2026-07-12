@@ -58,6 +58,12 @@ console.log('deploy-nginx-security: a enviar snippet …');
 run('scp', [...sshCommon, headersLocal, `${sshTarget}:${remoteTmp}`]);
 
 if (fs.existsSync(siteLocal) && process.env.DEPLOY_NGINX_UPDATE_SITE === '1') {
+  console.warn(
+    'deploy-nginx-security: AVISO — DEPLOY_NGINX_UPDATE_SITE=1 substitui isopro.conf (so HTTP).',
+  );
+  console.warn(
+    'deploy-nginx-security: Apos deploy, corra: npm run restore:https-oracle',
+  );
   console.log('deploy-nginx-security: a enviar nginx-isopro.conf …');
   run('scp', [...sshCommon, siteLocal, `${sshTarget}:/tmp/nginx-isopro.conf`]);
 }

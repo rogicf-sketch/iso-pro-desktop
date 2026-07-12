@@ -25,7 +25,13 @@ function montarBlobBusca(item: Atendimento): string {
     item.recebedorColaboradorId ?? '',
     d.toLocaleDateString('pt-BR'),
     d.toLocaleString('pt-BR'),
-    ...item.itens.flatMap((i) => [i.codigoMaterial, i.descricaoMaterial, String(i.quantidadeAtendida), i.unidade]),
+    ...item.itens.flatMap((i) => [
+      i.codigoMaterial,
+      i.descricaoMaterial,
+      String(i.quantidadeAtendida),
+      i.unidade,
+      i.documentoNumero ?? '',
+    ]),
   ]
     .filter(Boolean)
     .join(' ');

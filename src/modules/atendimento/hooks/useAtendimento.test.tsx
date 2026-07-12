@@ -33,8 +33,8 @@ vi.mock('../../materiais/services/materiais.service', () => ({
 vi.mock('../services/atendimento.service', () => ({
   listarDocumentosPendentesComMeta: mocks.listarDocumentosPendentesComMeta,
   listarHistoricoAtendimentosComMeta: mocks.listarHistoricoAtendimentosComMeta,
-  montarExportacaoAtendimentosCsvItens: vi.fn(() =>
-    Promise.resolve({ success: true, data: { csv: '\uFEFFx', fileName: 't.csv' } }),
+  montarExportacaoAtendimentosPacoteZip: vi.fn(() =>
+    Promise.resolve({ success: true, data: { zipBlob: new Blob(['zip']), fileName: 't.zip' } }),
   ),
   estornarAtendimento: vi.fn(),
   registrarAtendimento: vi.fn(),

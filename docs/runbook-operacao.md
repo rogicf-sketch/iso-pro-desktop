@@ -41,3 +41,11 @@ Documento curto para equipa interna ou cliente enterprise: **o que fazer quando 
 - [ ] Build desktop assinado (se aplicável) testado em VM limpa.
 - [ ] APK/AAB mobile testado com login real; validar fila offline (gravacao sem rede e sincronizacao ao voltar).
 - [ ] Plano de backup + runbook conhecido pela equipa de suporte.
+
+## 7. Activação JWT forte (Fase 3)
+
+Roteiro completo para TI: [`CHECKLIST-ATIVACAO-JWT.md`](../CHECKLIST-ATIVACAO-JWT.md) e página interactiva [`docs/checklist-ativacao-jwt.html`](checklist-ativacao-jwt.html) (URL produção: `https://isoprogestaodemateriais.com.br/checklist-ativacao-jwt.html`).
+
+PDF local: `npm run docs:checklist-jwt-pdf` → `release/CHECKLIST-ATIVACAO-JWT.pdf`.
+
+Atalho secret JWT: `npm run jwt:abrir-secret-dashboard` (abre Dashboard + Notepad com o valor).

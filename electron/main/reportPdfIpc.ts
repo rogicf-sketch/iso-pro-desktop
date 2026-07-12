@@ -15,8 +15,8 @@ import { resolvePreloadPath } from './window';
 import {
   aguardarCarregamentoWebContents,
   aguardarIframePdfPreviewShell,
-  carregarPdfTemporarioNaJanela,
 } from './pdfWebContents';
+import { imprimirBufferPdfComDialogo } from './pdfPrintBuffer';
 
 
 
@@ -330,41 +330,9 @@ export function registerReportPdfHandlers() {
 
 
 
-    let tmp: Awaited<ReturnType<typeof escreverPdfTemporarioGenerico>> | null = null;
-
-    const win = new BrowserWindow({
-
-      show: false,
-
-      backgroundColor: '#ffffff',
-
-      webPreferences: { sandbox: true, contextIsolation: true },
-
-    });
-
-
-
     try {
 
-      tmp = await escreverPdfTemporarioGenerico(b64, 'report-print');
-
-      await carregarPdfTemporarioNaJanela(win, tmp.path);
-
-
-
-      await new Promise<void>((resolve, reject) => {
-
-        win.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
-
-          if (success) resolve();
-
-          else reject(new Error(failureReason || 'Impressão cancelada ou falhou.'));
-
-        });
-
-      });
-
-
+      await imprimirBufferPdfComDialogo(Buffer.from(b64, 'base64'));
 
       return { ok: true as const };
 
@@ -373,12 +341,6 @@ export function registerReportPdfHandlers() {
       const msg = e instanceof Error ? e.message : String(e);
 
       return { ok: false as const, error: msg };
-
-    } finally {
-
-      await tmp?.remove();
-
-      if (!win.isDestroyed()) win.destroy();
 
     }
 

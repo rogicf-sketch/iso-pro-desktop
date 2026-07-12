@@ -1,7 +1,9 @@
 /**
  * Multi-tenant (várias empresas no mesmo projeto Supabase).
- * O tenant activo escolhido no browser é enviado em todas as queries (`tenant_id`).
- * RLS forte nos dados exige migração futura para Supabase Auth + claims (ver comentários na migração SQL).
+ * O tenant activo escolhido no browser é enviado em RPCs (`p_tenant_id`) e filtros PostgREST.
+ * Com sessão JWT (`authenticated`), o PostgreSQL valida o claim `tenant_id` via
+ * `iso_pro_assert_tenant_caller` + RLS `iso_pro_rls_tenant_row_allowed` — o payload do cliente
+ * deixa de ser a fonte de confiança. Trocar de empresa limpa a sessão JWT.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -43,6 +45,7 @@ export function setActiveTenantId(id: string): void {
   localStorage.setItem(ISO_PRO_TENANT_CONTEXT_STORAGE_KEY, JSON.stringify(next));
   resetSupabaseClient();
   if (typeof window !== 'undefined') {
+    void import('./isoProJwtSession').then((m) => m.clearIsoProJwtSession());
     void import('./isoProSnapshot').then((m) => m.invalidateIsoProSnapshotCache());
   }
 }

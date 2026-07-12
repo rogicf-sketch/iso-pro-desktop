@@ -99,4 +99,5 @@ Marque **OK** só se: (1) mensagem de sucesso ao salvar; (2) registo visível no
 
 ---
 
-*Checklist operacional completo (backups, RLS, mobile):* `CHECKLIST-OPERACOES.md`
+*Checklist operacional completo (backups, RLS, mobile):* `CHECKLIST-OPERACOES.md`  
+*Checklist maturidade P0–P2 (migration RLS escala, Sentry, smoke staging):* `CHECKLIST-GO-LIVE-MATURIDADE.md`

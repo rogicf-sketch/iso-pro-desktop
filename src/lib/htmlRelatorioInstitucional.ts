@@ -1,5 +1,6 @@
 import { substituirPagedJsPorInline } from './relatorioPagedJsBundle';
 import { gerarHtmlRelatorioPdfBytes } from './pdfCloud/pdfHybridRouter';
+import { imprimirPdfBytesNoNavegador } from './pdfCloud/imprimirPdfBytesNoNavegador';
 import type { PdfJobTipo } from './pdfCloud/types';
 
 export function escapeHtmlRelatorio(s: string): string {
@@ -72,7 +73,7 @@ export function htmlBarraPreVisualizacaoImpressao(): string {
       <button type="button" data-iso-pro-action="print">Imprimir ou guardar como PDF</button>
       <button type="button" data-iso-pro-action="save-pdf" class="iso-pro-doc-preview-toolbar__secondary">Guardar PDF…</button>
     </div>
-    <span>«Imprimir» abre o diálogo de impressão (rápido, com Folha 1/N). «Guardar PDF» gera o ficheiro oficial para arquivo.</span>
+    <span>Web: «Guardar PDF» e «Imprimir» geram o PDF oficial na nuvem (Folha 1/N). Desktop: mesmo motor local + impressora.</span>
   </div>`;
 }
 
@@ -217,11 +218,39 @@ export function cssFontesNotoRelatorio(): string {
 }
 
 /** Estilos compartilhados: cabecalho com logo + titulo (impressao HTML). */
+export function cssRelatorioPreVisualizacaoClara(): string {
+  return `
+    html { color-scheme: light; }
+    @media screen {
+      body {
+        background: #cbd5e1 !important;
+        color: #0f172a !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      body.rnc-doc {
+        max-width: 210mm;
+        margin: 0 auto;
+        background: #fff !important;
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
+      }
+      body .rf-doc {
+        background: #fff;
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
+      }
+      .inst-topbar, .inst-topbar span { color: #334155 !important; }
+      .inst-topbar span:last-child { color: #0f172a !important; }
+    }
+  `;
+}
+
+/** Estilos compartilhados: cabecalho com logo + titulo (impressao HTML). */
 export function cssInstitucionalRelatorio(): string {
   return `
     ${cssFontesNotoRelatorio()}
+    ${cssRelatorioPreVisualizacaoClara()}
     * { box-sizing: border-box; }
-    body { font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 20px 24px; color: #111; font-size: 11pt; line-height: 1.4; }
+    body { font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 20px 24px; background: #fff; color: #0f172a; font-size: 11pt; line-height: 1.4; }
     .inst-topbar { display: flex; justify-content: space-between; align-items: center; font-size: 9pt; color: #444; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
     .inst-topbar span:last-child { font-weight: 600; color: #111; }
     .inst-header { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 16px; }
@@ -474,6 +503,30 @@ function imprimirIframePreVisualizacao(
   window.setTimeout(run, 9000);
 }
 
+async function imprimirPdfHtmlWeb(
+  html: string,
+  fileName: string,
+  tipoNuvem: PdfJobTipo,
+  iframe: HTMLIFrameElement,
+  onMsg: (msg: string) => void,
+): Promise<void> {
+  try {
+    onMsg('A preparar impressão…');
+    const gerado = await gerarHtmlRelatorioPdfBytes(tipoNuvem, html, fileName);
+    const res = await imprimirPdfBytesNoNavegador(gerado.bytes, gerado.fileName);
+    if (res.ok) {
+      onMsg('');
+      return;
+    }
+    onMsg(res.error ?? 'Falha na impressão.');
+  } catch {
+    imprimirIframePreVisualizacao(iframe, onMsg);
+    onMsg(
+      'PDF na nuvem indisponível — impressão HTML. No diálogo, active «Gráficos de fundo» ou use «Guardar PDF».',
+    );
+  }
+}
+
 async function guardarPdfHtmlWeb(
   html: string,
   fileName: string,
@@ -530,7 +583,7 @@ function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: s
   const hint = document.createElement('span');
   hint.style.cssText = 'color:#e2e8f0;font-size:13px;line-height:1.45;';
   hint.textContent =
-    'Pré-visualização — use os botões abaixo. No diálogo de impressão, active «Gráficos de fundo» se faltar cor.';
+    'Pré-visualização web — «Guardar PDF» e «Imprimir / PDF» geram o PDF oficial na nuvem (Folha 1/N).';
   const btnPrint = document.createElement('button');
   btnPrint.type = 'button';
   btnPrint.textContent = 'Imprimir / PDF';
@@ -543,7 +596,7 @@ function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: s
     'padding:8px 16px;cursor:pointer;font-size:14px;border-radius:8px;border:1px solid #64748b;background:#1e293b;color:#f1f5f9;font-weight:600;';
   btnPrint.addEventListener('click', () => {
     btnPrint.disabled = true;
-    btnPrint.textContent = 'A imprimir…';
+    btnPrint.textContent = 'A preparar impressão…';
     const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
     if (api?.printHtml) {
       void api.printHtml(htmlInline).then((res) => {
@@ -555,11 +608,18 @@ function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: s
       });
       return;
     }
-    imprimirIframePreVisualizacao(iframe, (msg) => {
-      hint.textContent = msg;
+    void imprimirPdfHtmlWeb(
+      htmlInline,
+      opts?.pdfFileName ?? 'relatorio.pdf',
+      opts?.pdfTipo ?? 'relatorio_fotografico',
+      iframe,
+      (msg) => {
+        hint.textContent = msg;
+      },
+    ).finally(() => {
+      btnPrint.disabled = false;
+      btnPrint.textContent = 'Imprimir / PDF';
     });
-    btnPrint.disabled = false;
-    btnPrint.textContent = 'Imprimir / PDF';
   });
   btnPdf.addEventListener('click', () => {
     const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
@@ -642,6 +702,25 @@ export async function abrirPreVisualizacaoHtmlRelatorio(
   opts?: { tituloCarregamento?: string; pdfFileName?: string; pdfTipo?: PdfJobTipo },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
+
+  /** Desktop: RFO grande — PDF gerado no main (evita ecrã branco do Paged.js). */
+  if (opts?.pdfTipo === 'relatorio_final_obra' && api?.previewReportPdfFromHtml) {
+    try {
+      const titulo = opts.tituloCarregamento ?? 'Relatório Final de Obra — Pré-visualização';
+      if (api.beginReportPdfPreviewLoading) {
+        void api.beginReportPdfPreviewLoading(titulo);
+      }
+      const res = await api.previewReportPdfFromHtml(
+        html,
+        titulo,
+        opts.pdfFileName ?? 'relatorio-final-obra.pdf',
+      );
+      if (res.ok) return res;
+      console.warn('[I.S.O PRO] Pré-visualização PDF RFO falhou; tentando HTML:', res.error);
+    } catch (e) {
+      console.warn('[I.S.O PRO] Pré-visualização PDF RFO falhou; tentando HTML:', e);
+    }
+  }
 
   /** Desktop: janela dedicada com preload — lista principal permanece visível; Imprimir/PDF fiáveis. */
   if (api?.previewHtml) {

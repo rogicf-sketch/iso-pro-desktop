@@ -5,10 +5,10 @@ import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImport
 import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotWrite,
-  readIsoProSnapshotPayload,
-  readIsoProSnapshotPayloadForWrite,
+  commitIsoProSnapshotPatch,
+  readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -131,7 +131,7 @@ type SnapshotPayload = {
 };
 
 async function readSnapshotFornecedores(): Promise<Fornecedor[]> {
-  const payload = await readIsoProSnapshotPayload<SnapshotPayload>();
+  const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['fornecedores']);
   return (payload.fornecedores ?? []).map((item, index) => ({
     id: String(item.id ?? `for-${index + 1}`),
     nome: String(item.nome ?? ''),
@@ -144,12 +144,11 @@ async function readSnapshotFornecedores(): Promise<Fornecedor[]> {
 }
 
 async function writeSnapshotFornecedores(items: Fornecedor[]): Promise<void> {
-  await commitIsoProSnapshotWrite(async () => {
-    const { payload: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotPayloadForWrite<SnapshotPayload>();
+  await commitIsoProSnapshotPatch(async () => {
+    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['fornecedores']);
     return {
       baselineUpdatedAt,
-      nextPayload: {
-        ...currentPayload,
+      patch: {
         fornecedores: items.map((item) => ({
           id: item.id,
           nome: item.nome,

@@ -9,6 +9,8 @@ import { useAuth } from '../../auth/hooks/useAuth';
 import { MobileDeviceFilters } from '../components/MobileDeviceFilters';
 import { MobileDevicesTable } from '../components/MobileDevicesTable';
 import { SupabaseMobileDiagnostics } from '../components/SupabaseMobileDiagnostics';
+import { AtendimentoIntegridadeAuditPanel } from '../../atendimento/components/AtendimentoIntegridadeAuditPanel';
+import { AtendimentoSyncAdminPanel } from '../../atendimento/components/AtendimentoSyncAdminPanel';
 import { useMobileDevices } from '../hooks/useMobileDevices';
 
 export function MobileDevicesPage() {
@@ -161,6 +163,9 @@ export function MobileDevicesPage() {
           </>
         )}
       </div>
+
+      <AtendimentoSyncAdminPanel canAdminister={canAdminister} />
+      <AtendimentoIntegridadeAuditPanel canAdminister={canAdminister} />
 
       {!canAdminister ? (
         <OperationalNotice>Seu perfil pode consultar dispositivos mobile, mas nao pode autorizar, bloquear ou revogar.</OperationalNotice>

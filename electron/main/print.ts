@@ -7,11 +7,12 @@ import { injetarBarraPreviewElectronNoHtml } from './htmlPreviewInject';
 import { lerMetadadosPdfRelatorio, montarOpcoesPrintToPdfRelatorio } from './pdfPrintOptions';
 import {
   aguardarLayoutRelatorioHtmlCondicional,
+  aguardarLayoutRelatorioHtmlPreview,
   estabilizarDomAposLoadFile,
 } from './pdfWebContents';
 import { aguardarRenderizacaoPdfAntesExport, extrairHtmlLimpoParaPdf } from './pdfHtmlExport';
 import { gerarPdfBytesFromHtml } from './gerarPdfBytesFromHtml';
-import { imprimirHtmlRelatorioWebContents } from './pdfPrintHtml';
+import { imprimirBufferPdfComDialogo } from './pdfPrintBuffer';
 
 /**
  * Impressão de HTML via janela oculta no processo principal.
@@ -115,6 +116,37 @@ export function registerPrintHandlers() {
       bundle = await escreverRelatorioHtmlTemp(htmlPreview);
       await win.webContents.loadFile(bundle.htmlPath);
       await estabilizarDomAposLoadFile(win.webContents);
+      await aguardarLayoutRelatorioHtmlPreview(win.webContents);
+      await win.webContents
+        .executeJavaScript(
+          `(function () {
+            if (!window.__relatorioUsaPagedJs) return;
+            var pages = document.querySelectorAll('.pagedjs_page');
+            function paginaTemTexto(page) {
+              var box = page.querySelector('.pagedjs_page_content');
+              if (!box) return false;
+              if (box.querySelector('table tbody tr, .rfo-sec, .rfo-capa, .rfo-body, .rfo-indice, .rir-hdr, h1, h2')) return true;
+              var txt = (box.textContent || '').replace(/\\s+/g, ' ').trim();
+              txt = txt.replace(/Folha \\d+ \\/ \\d+/gi, '').trim();
+              return txt.length > 80;
+            }
+            if (!pages.length) {
+              document.body.classList.remove('relatorio-paged-ready');
+              document.body.classList.add('relatorio-paged-falhou');
+              return;
+            }
+            var comConteudo = 0;
+            for (var i = 0; i < pages.length; i++) {
+              if (paginaTemTexto(pages[i])) comConteudo++;
+            }
+            var ok = comConteudo >= Math.max(2, Math.ceil(pages.length * 0.34)) && (pages.length === 1 || paginaTemTexto(pages[1]));
+            if (!ok) {
+              document.body.classList.remove('relatorio-paged-ready');
+              document.body.classList.add('relatorio-paged-falhou');
+            }
+          })()`,
+        )
+        .catch(() => undefined);
       fecharJanelaCarregamentoHtmlPreview(winLoading);
       if (!win.isDestroyed()) {
         win.show();
@@ -134,35 +166,15 @@ export function registerPrintHandlers() {
     }
   });
 
-  /** Impressão HTML rápida (Chromium print) + rodapé Folha X/N via CSS @page. */
+  /** Impressão via motor PDF oficial (printToPDF) — layout idêntico ao «Guardar PDF». */
   ipcMain.handle('desktop-print:html', async (_event, html: unknown) => {
     if (typeof html !== 'string' || !html.trim()) {
       return { ok: false as const, error: 'HTML inválido ou vazio.' };
     }
 
-    let bundle: Awaited<ReturnType<typeof escreverRelatorioHtmlTemp>> | null = null;
-
-    const win = new BrowserWindow({
-      show: false,
-      backgroundColor: '#ffffff',
-      webPreferences: {
-        preload: resolvePreloadPath(),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
-
-    const printTimeout = setTimeout(() => {
-      if (!win.isDestroyed()) win.destroy();
-    }, 120_000);
-
     try {
-      bundle = await escreverRelatorioHtmlTemp(html);
-      await win.webContents.loadFile(bundle.htmlPath);
-      await estabilizarDomAposLoadFile(win.webContents);
-      await imprimirHtmlRelatorioWebContents(win.webContents);
-
+      const pdfBuffer = await gerarPdfBytesFromHtml(html);
+      await imprimirBufferPdfComDialogo(pdfBuffer);
       return { ok: true as const };
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
@@ -170,12 +182,6 @@ export function registerPrintHandlers() {
         ? 'Nao foi possivel imprimir. Use «Visualizar» e «Guardar PDF», ou reinicie a aplicacao.'
         : raw;
       return { ok: false as const, error: msg };
-    } finally {
-      clearTimeout(printTimeout);
-      await bundle?.remove();
-      if (!win.isDestroyed()) {
-        win.destroy();
-      }
     }
   });
 
@@ -236,11 +242,17 @@ export function registerPrintHandlers() {
     }
   });
 
-  /** Impressão da pré-visualização: HTML directo (rápido) + Folha X/N em CSS. */
+  /** Impressão da pré-visualização: motor PDF oficial (evita layout errado com «Microsoft Print to PDF»). */
   ipcMain.handle('desktop-print:visible', async (event) => {
     const wc = event.sender;
     try {
-      await imprimirHtmlRelatorioWebContents(wc);
+      await aguardarLayoutRelatorioHtmlCondicional(wc);
+      await aguardarRenderizacaoPdfAntesExport(wc);
+
+      const htmlLimpo = await extrairHtmlLimpoParaPdf(wc);
+      const pdfBuffer = await gerarPdfBytesFromHtml(htmlLimpo);
+      await imprimirBufferPdfComDialogo(pdfBuffer);
+
       return { ok: true as const };
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);

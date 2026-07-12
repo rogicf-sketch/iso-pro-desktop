@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.goto('/#/login', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+});
+
 test('dist servido pelo preview (HTML base)', async ({ request }) => {
   const response = await request.get('/');
   expect(response.ok()).toBeTruthy();

@@ -28,6 +28,7 @@ async function entregarHtmlPdfLocal(
   fileName: string,
   acao: 'guardar' | 'imprimir' | 'preview',
   titulo?: string,
+  tipoNuvem?: HtmlRelatorioNuvemTipo,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
   const tituloStr = titulo ?? fileName;
@@ -36,6 +37,15 @@ async function entregarHtmlPdfLocal(
     const res = await api.printHtml(html);
     if (res.ok) return res;
     return { ok: false, error: traduzirErroImpressaoIsoPro(res.error ?? 'Falha na impressão.') };
+  }
+
+  if (acao === 'imprimir' && !api?.printHtml && tipoNuvem) {
+    try {
+      const gerado = await gerarHtmlRelatorioPdfBytes(tipoNuvem, html, fileName);
+      return entregarPdfBytes(gerado.bytes, gerado.fileName, 'imprimir', tituloStr);
+    } catch (e) {
+      console.warn('[I.S.O PRO] Imprimir PDF nuvem falhou:', e);
+    }
   }
 
   if (acao === 'guardar' && api?.saveHtmlAsPdf) {
@@ -50,9 +60,22 @@ async function entregarHtmlPdfLocal(
   }
 
   if (acao === 'preview') {
-    const prev = await abrirPreVisualizacaoHtmlRelatorio(html, { tituloCarregamento: tituloStr });
+    const prev = await abrirPreVisualizacaoHtmlRelatorio(html, {
+      tituloCarregamento: tituloStr,
+      pdfFileName: fileName,
+      pdfTipo: tipoNuvem,
+    });
     if (prev.ok) return prev;
     return { ok: false, error: traduzirErroImpressaoIsoPro(prev.error ?? 'Falha na pré-visualização.') };
+  }
+
+  if (acao === 'guardar' && tipoNuvem) {
+    try {
+      const gerado = await gerarHtmlRelatorioPdfBytes(tipoNuvem, html, fileName);
+      return entregarPdfBytes(gerado.bytes, gerado.fileName, 'guardar', tituloStr);
+    } catch (e) {
+      console.warn('[I.S.O PRO] Guardar PDF nuvem falhou:', e);
+    }
   }
 
   try {
@@ -71,20 +94,26 @@ async function entregarHtmlPdfLocal(
 }
 
 export async function imprimirRelatorioProfissional(opts: RelatorioProfissionalOpts): Promise<boolean> {
-  const res = await entregarHtmlPdfLocal(opts.html, opts.fileName, 'imprimir', opts.titulo ?? opts.fileName);
+  const res = await entregarHtmlPdfLocal(
+    opts.html,
+    opts.fileName,
+    'imprimir',
+    opts.titulo ?? opts.fileName,
+    opts.tipoNuvem,
+  );
   return res.ok;
 }
 
 export async function guardarRelatorioProfissional(
   opts: RelatorioProfissionalOpts,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  return entregarHtmlPdfLocal(opts.html, opts.fileName, 'guardar', opts.titulo);
+  return entregarHtmlPdfLocal(opts.html, opts.fileName, 'guardar', opts.titulo, opts.tipoNuvem);
 }
 
 export async function preVisualizarRelatorioProfissional(
   opts: RelatorioProfissionalOpts,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  return entregarHtmlPdfLocal(opts.html, opts.fileName, 'preview', opts.titulo ?? opts.fileName);
+  return entregarHtmlPdfLocal(opts.html, opts.fileName, 'preview', opts.titulo ?? opts.fileName, opts.tipoNuvem);
 }
 
 /** Gera bytes PDF sem entregar (auditoria / testes). */

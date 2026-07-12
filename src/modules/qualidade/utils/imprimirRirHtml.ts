@@ -14,8 +14,8 @@ import { rirObraDefaultsFromConfig } from './rirConfigDefaults';
 import { formatarDisciplinaExibicaoRir, resolverDisciplinaRir } from './rirDisciplina';
 import { formatarQuantidadeRir } from './rirDescricaoCompacta';
 
-/** v70 — assinatura: espaço acima da linha; sem folha em branco no fim. */
-const DOC_VERSION = '70';
+/** v73 — fluxo contínuo; rodapé na tabela para repetir cabeçalho na folha de assinaturas. */
+const DOC_VERSION = '73';
 
 export type CabecalhoRirParams = {
   logoBlock: string;
@@ -466,8 +466,8 @@ body.rir-print-body.iso-report-native-body {
   background: #fff !important;
 }
 .rir-table tbody tr.rir-footer-row {
-  break-after: avoid-page;
-  page-break-after: avoid;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 .rir-table tbody td.rir-c-item,
 .rir-table tbody td.rir-c-u { text-align: center; }
@@ -573,8 +573,6 @@ body.rir-print-body.iso-report-native-body {
   margin-top: 6px;
   padding-top: 4px;
   padding-bottom: 0;
-  break-after: avoid-page;
-  page-break-after: avoid;
 }
 @media print {
   .iso-pro-doc-preview-toolbar { display: none !important; }
@@ -600,17 +598,8 @@ body.rir-print-body.iso-report-native-body {
     padding-bottom: 0 !important;
   }
   .rir-table tbody tr.rir-footer-row {
-    break-after: avoid-page;
-    page-break-after: avoid;
-  }
-  .rir-print-tail,
-  .rir-doc-foot {
-    break-after: avoid-page;
-    page-break-after: avoid;
-  }
-  .rir-table-wrap {
-    break-after: avoid-page;
-    page-break-after: avoid;
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   .rir-table thead tr.rir-thead-cols th {
     -webkit-print-color-adjust: exact;

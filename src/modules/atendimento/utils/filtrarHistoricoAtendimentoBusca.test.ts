@@ -73,14 +73,25 @@ describe('filtrarAtendimentosPorBusca', () => {
     expect(filtrarAtendimentosPorBusca(lista, 'ATD inexistente')).toHaveLength(0);
   });
 
-  it('ignora acentos na busca', () => {
-    const comAcento = atd({
-      id: 'a3',
-      numero: 'ATD-X',
-      documentoNumero: 'D',
-      recebedor: 'José',
-      itens: [],
+  it('filtra por documento do item quando cabecalho e MULTIPLOS', () => {
+    const multi = atd({
+      id: 'a4',
+      numero: 'ATD-MULTI',
+      documentoNumero: 'MULTIPLOS',
+      itens: [
+        {
+          id: 'i4',
+          documentoItemId: 'di4',
+          documentoNumero: 'BGC-18-BT-044',
+          materialId: null,
+          codigoMaterial: 'X-001',
+          descricaoMaterial: 'Item multi',
+          unidade: 'PC',
+          quantidadeAtendida: 1,
+        },
+      ],
     });
-    expect(filtrarAtendimentosPorBusca([comAcento], 'jose')).toHaveLength(1);
+    expect(filtrarAtendimentosPorBusca([multi], 'BGC-18-BT-044')).toHaveLength(1);
+    expect(filtrarAtendimentosPorBusca([multi], 'OUTRO-DOC')).toHaveLength(0);
   });
 });

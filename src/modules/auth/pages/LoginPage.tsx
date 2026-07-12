@@ -12,7 +12,12 @@ import {
 import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { getSupabase, getSupabaseOperationalStatus, hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
-import { isLocalMockAuthSeedEnabled, readRememberLoginPreference } from '../services/auth.service';
+import {
+  isIsoProMfaRequiredError,
+  isLocalMockAuthSeedEnabled,
+  readRememberLoginPreference,
+} from '../services/auth.service';
+import type { AuthUser } from '../types/auth.types';
 import { getFirstAccessibleRoute } from '../../../routes/navigation';
 
 function IconEye() {
@@ -46,7 +51,7 @@ function IconEyeOff() {
 
 export function LoginPage() {
   const titularLinha = getTitularSistemaLinhaResumo();
-  const { isAuthenticated, login, user } = useAuth();
+  const { isAuthenticated, login, completeMfaLogin, cancelMfaLogin, user } = useAuth();
   const [form, setForm] = useState({ login: '', senha: '' });
   const [permanecerLogado, setPermanecerLogado] = useState(() => readRememberLoginPreference());
   const [error, setError] = useState('');
@@ -55,6 +60,12 @@ export function LoginPage() {
   const [tenantsNuvem, setTenantsNuvem] = useState<IsoProTenantListItem[]>([]);
   const [tenantSelectId, setTenantSelectId] = useState(() => getActiveTenantId());
   const [tenantListaErro, setTenantListaErro] = useState('');
+  const [mfaPending, setMfaPending] = useState<{
+    factorId: string;
+    pendingUser: AuthUser;
+    permanecerLogado: boolean;
+  } | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
 
   useEffect(() => {
     if (!hasSupabaseConfig()) return;
@@ -108,8 +119,28 @@ export function LoginPage() {
     setIsSubmitting(true);
 
     try {
+      if (mfaPending) {
+        await completeMfaLogin(
+          mfaPending.factorId,
+          mfaCode,
+          mfaPending.pendingUser,
+          mfaPending.permanecerLogado,
+        );
+        setMfaPending(null);
+        setMfaCode('');
+        return;
+      }
       await login({ ...form, permanecerLogado });
     } catch (err) {
+      if (isIsoProMfaRequiredError(err)) {
+        setMfaPending({
+          factorId: err.factorId,
+          pendingUser: err.pendingUser,
+          permanecerLogado: err.permanecerLogado,
+        });
+        setError('');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Não foi possível entrar.');
     } finally {
       setIsSubmitting(false);
@@ -121,20 +152,64 @@ export function LoginPage() {
     setError('');
   }
 
+  function cancelarMfa() {
+    cancelMfaLogin();
+    setMfaPending(null);
+    setMfaCode('');
+    setError('');
+  }
+
   return (
     <div className="login-page">
       <header className="login-page__head">
         <h2 className="login-page__title" data-e2e="login-title">
           Entrar
         </h2>
-        <p className="login-page__subtitle">Utilize as credenciais fornecidas pela sua organização.</p>
+        <p className="login-page__subtitle">
+          {mfaPending
+            ? 'Introduza o código de 6 dígitos da app authenticator.'
+            : 'Utilize as credenciais fornecidas pela sua organização.'}
+        </p>
       </header>
 
       <form className="login-form" onSubmit={handleSubmit}>
+        {mfaPending ? (
+          <>
+            <OperationalNotice>
+              Conta com MFA activo (<strong>{mfaPending.pendingUser.login}</strong>). Abra o authenticator e introduza o
+              código.
+            </OperationalNotice>
+            <label className="field login-field">
+              <span>Código MFA</span>
+              <input
+                autoComplete="one-time-code"
+                data-e2e="login-mfa-code"
+                inputMode="numeric"
+                maxLength={8}
+                onChange={(event) => setMfaCode(event.target.value)}
+                placeholder="000000"
+                value={mfaCode}
+              />
+            </label>
+            {error ? (
+              <div className="error-box" data-e2e="login-error">
+                {error}
+              </div>
+            ) : null}
+            <button className="btn btn-primary" data-e2e="login-submit" disabled={isSubmitting} type="submit">
+              {isSubmitting ? 'A verificar…' : 'Confirmar MFA'}
+            </button>
+            <button className="btn btn-ghost" disabled={isSubmitting} type="button" onClick={cancelarMfa}>
+              Voltar
+            </button>
+          </>
+        ) : (
+          <>
         {hasSupabaseConfig() && tenantsNuvem.length > 0 ? (
           <label className="field login-field">
             <span>Empresa / organização</span>
             <select
+              data-e2e="login-tenant"
               value={tenantSelectId}
               onChange={(event) => {
                 const next = event.target.value;
@@ -158,6 +233,7 @@ export function LoginPage() {
           <span>Login</span>
           <input
             autoComplete="username"
+            data-e2e="login-usuario"
             onChange={(event) => setForm((current) => ({ ...current, login: event.target.value }))}
             placeholder="Ex.: nome.utilizador"
             value={form.login}
@@ -169,6 +245,7 @@ export function LoginPage() {
           <div className="login-password-wrap">
             <input
               autoComplete="current-password"
+              data-e2e="login-senha"
               onChange={(event) => setForm((current) => ({ ...current, senha: event.target.value }))}
               placeholder="••••••••"
               type={showPassword ? 'text' : 'password'}
@@ -241,6 +318,8 @@ export function LoginPage() {
         <button className="primary-button login-submit" data-e2e="login-submit" disabled={isSubmitting} type="submit">
           {isSubmitting ? 'A validar…' : 'Entrar'}
         </button>
+          </>
+        )}
       </form>
 
       <footer className="login-page__footer">

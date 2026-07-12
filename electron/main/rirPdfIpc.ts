@@ -13,8 +13,8 @@ import { resolvePreloadPath } from './window.ts';
 import {
   aguardarCarregamentoWebContents,
   aguardarIframePdfPreviewShell,
-  carregarPdfTemporarioNaJanela,
 } from './pdfWebContents.ts';
+import { imprimirBufferPdfComDialogo } from './pdfPrintBuffer.ts';
 
 const RIR_PDF_MOTOR = 'html-chromium';
 
@@ -218,41 +218,9 @@ export function registerRirPdfHandlers() {
 
 
 
-    let tmp: Awaited<ReturnType<typeof escreverPdfTemporario>> | null = null;
-
-    const win = new BrowserWindow({
-
-      show: false,
-
-      backgroundColor: '#ffffff',
-
-      webPreferences: { sandbox: true, contextIsolation: true },
-
-    });
-
-
-
     try {
 
-      tmp = await escreverPdfTemporario(b64, 'rir-print');
-
-      await carregarPdfTemporarioNaJanela(win, tmp.path);
-
-
-
-      await new Promise<void>((resolve, reject) => {
-
-        win.webContents.print({ silent: false, printBackground: true }, (success, failureReason) => {
-
-          if (success) resolve();
-
-          else reject(new Error(failureReason || 'Impressão cancelada ou falhou.'));
-
-        });
-
-      });
-
-
+      await imprimirBufferPdfComDialogo(Buffer.from(b64, 'base64'));
 
       return { ok: true as const };
 
@@ -261,12 +229,6 @@ export function registerRirPdfHandlers() {
       const msg = e instanceof Error ? e.message : String(e);
 
       return { ok: false as const, error: msg };
-
-    } finally {
-
-      await tmp?.remove();
-
-      if (!win.isDestroyed()) win.destroy();
 
     }
 

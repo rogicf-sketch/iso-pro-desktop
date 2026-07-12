@@ -7,18 +7,24 @@ import {
   listarHistoricoAtendimentos,
   mergeAtendimentoHistoricoPreservingLegacy,
   montarExportacaoAtendimentosCsvItens,
+  montarExportacaoAtendimentosPacoteZip,
+  normalizarCabecalhoDocumentoAtendimentoAgrupado,
   registrarAtendimento,
   registrarAtendimentosSessao,
 } from './atendimento.service';
+import type { Atendimento } from '../types/atendimento.types';
 
 const DOCUMENTOS_KEY = 'iso-pro-desktop-documentos';
 const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
 const ATENDIMENTOS_KEY = 'iso-pro-desktop-atendimentos';
+const ESTORNO_LOG_KEY = 'iso-pro-desktop-atendimento-estorno-log';
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, mockGravarComando } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
+  mockCommitPatch: vi.fn(),
+  mockGravarComando: vi.fn(),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -27,15 +33,63 @@ vi.mock('../../../lib/supabase', () => ({
   shouldUseCloudMaterials: vi.fn(() => false),
 }));
 
+vi.mock('../../../lib/snapshotSliceRead', () => ({
+  readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
+}));
+
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../lib/isoProSnapshot')>();
   return {
     ...actual,
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
+    readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
+      const r = await mockReadForWrite();
+      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+    }),
     commitIsoProSnapshotWrite: mockCommitWrite,
+    commitIsoProSnapshotPatch: mockCommitPatch,
   };
 });
+
+vi.mock('./atendimentoComandoDesktop', () => ({
+  buildDesktopAtendimentoIdempotencyKey: vi.fn(() => 'pc-test-key'),
+  gravarAtendimentoNaNuvemComComando: (input: { prepare: () => Promise<unknown> }) => mockGravarComando(input),
+  waitForAtendimentoSyncIdle: vi.fn(async () => undefined),
+  setAtendimentoCloudBaselineCursor: vi.fn(),
+  getAtendimentoCloudBaselineCursor: vi.fn(() => null),
+}));
+
+function wireSnapshotPatchMock() {
+  mockCommitWrite.mockImplementation(async (prepare) => {
+    await prepare();
+  });
+  mockCommitPatch.mockImplementation(async (prepare) => {
+    return mockCommitWrite(async () => {
+      const plan = await prepare();
+      const base = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+      };
+    });
+  });
+  mockGravarComando.mockImplementation(async (input: { prepare: () => Promise<unknown> }) => {
+    return mockCommitPatch(async () => {
+      const prepared = (await input.prepare()) as {
+        baseline: { baselineUpdatedAt: string | null };
+        next: { slices: Record<string, unknown> };
+      };
+      return {
+        patch: prepared.next.slices,
+        baselineUpdatedAt: prepared.baseline.baselineUpdatedAt,
+      };
+    });
+  });
+}
 
 vi.mock('../../colaboradores/services/colaboradores.service', () => ({
   buscarColaboradorPorId: vi.fn(() =>
@@ -397,6 +451,54 @@ describe('atendimento.service / mergeAtendimentoHistoricoPreservingLegacy', () =
 describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
+  });
+
+  it('separa sessoes com mesmo loteNumero mas loteId distinto (colisao mobile x PC)', async () => {
+    mockReadPayload.mockResolvedValue({
+      documentos: [],
+      materiais: [],
+      atendimentos: [],
+      atendimentoHistorico: [
+        {
+          id: 1,
+          loteNumero: 'ATD-20260705-00073',
+          loteId: 1001,
+          data: '2026-07-05T19:12:00.000Z',
+          documentoId: 'd1',
+          documento: 'PL-MOB',
+          atendente: 'Campo',
+          recebedor: 'Joao',
+          codigo: 'CE-EV',
+          descricao: 'Item mobile',
+          unidade: 'UN',
+          quantidade: 1,
+          origem: 'mobile' as const,
+        },
+        {
+          id: 2,
+          loteNumero: 'ATD-20260705-00073',
+          loteId: 2002,
+          data: '2026-07-05T08:58:00.000Z',
+          documentoId: 'd2',
+          documento: 'PL-PC',
+          atendente: 'Admin',
+          recebedor: 'Maria',
+          codigo: 'X-PC',
+          descricao: 'Item PC',
+          unidade: 'UN',
+          quantidade: 70,
+          origem: 'windows' as const,
+        },
+      ],
+    });
+
+    const list = await listarHistoricoAtendimentos();
+    expect(list.length).toBe(2);
+    const numeros = list.map((a) => a.numero);
+    expect(numeros.every((n) => n === 'ATD-20260705-00073')).toBe(true);
+    const codigos = list.flatMap((a) => a.itens.map((it) => it.codigoMaterial)).sort();
+    expect(codigos).toEqual(['CE-EV', 'X-PC']);
   });
 
   it('inclui lotes so em atendimentoHistorico quando ja existe array atendimentos (mobile + PC)', async () => {
@@ -487,6 +589,132 @@ describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', (
     expect(a.recebedorMatricula).toBe('25924');
     expect(a.recebedorFuncao).toBe('Mecanico');
   });
+
+  it('prefere historico mobile com documentos distintos por item quando array atendimentos agrupa tudo num desenho', async () => {
+    mockReadPayload.mockResolvedValue({
+      documentos: [],
+      materiais: [],
+      atendimentos: [
+        {
+          id: 'a-wrong',
+          numero: 'ATD-20260610-00042',
+          documentoId: 'd-bgc',
+          documentoNumero: 'BGC-18"-BT-044-SS1-NI',
+          atendente: 'Igor',
+          recebedorTipo: 'interno',
+          recebedor: 'Jonatas',
+          origem: 'mobile',
+          status: 'concluido',
+          dataAtendimento: '2026-06-12T15:37:33.000Z',
+          itens: [
+            {
+              id: 'i1',
+              documentoItemId: 'x',
+              codigoMaterial: 'PL0001',
+              descricaoMaterial: 'Junta',
+              unidade: 'PC',
+              quantidadeAtendida: 2,
+            },
+            {
+              id: 'i2',
+              documentoItemId: 'y',
+              codigoMaterial: 'ATER0006',
+              descricaoMaterial: 'Rebite',
+              unidade: 'PC',
+              quantidadeAtendida: 1,
+            },
+          ],
+        },
+      ],
+      atendimentoHistorico: [
+        {
+          id: 1,
+          loteNumero: 'ATD-20260610-00042',
+          data: '2026-06-12T15:37:33.000Z',
+          documentoId: 'd-bgc',
+          documento: 'BGC-18"-BT-044-SS1-NI',
+          atendente: 'Igor',
+          recebedor: 'Jonatas',
+          codigo: 'PL0001',
+          descricao: 'Junta',
+          unidade: 'PC',
+          quantidade: 2,
+          origem: 'mobile' as const,
+        },
+        {
+          id: 2,
+          loteNumero: 'ATD-20260610-00042',
+          data: '2026-06-12T15:37:33.000Z',
+          documentoId: 'd-other',
+          documento: 'E.RAZN010-IE6-00002-ABOVE',
+          atendente: 'Igor',
+          recebedor: 'Jonatas',
+          codigo: 'ATER0006',
+          descricao: 'Rebite',
+          unidade: 'PC',
+          quantidade: 1,
+          origem: 'mobile' as const,
+        },
+      ],
+    });
+
+    const list = await listarHistoricoAtendimentos();
+    expect(list.length).toBe(1);
+    const a = list[0]!;
+    expect(a.documentoNumero).toBe('MULTIPLOS');
+    expect(a.itens.map((it) => it.documentoNumero)).toEqual([
+      'BGC-18"-BT-044-SS1-NI',
+      'E.RAZN010-IE6-00002-ABOVE',
+    ]);
+  });
+});
+
+describe('normalizarCabecalhoDocumentoAtendimentoAgrupado', () => {
+  it('marca MULTIPLOS quando itens pertencem a desenhos diferentes', () => {
+    const at: Atendimento = {
+      id: '1',
+      numero: 'ATD-X',
+      documentoId: 'd1',
+      documentoNumero: 'BGC-18"-BT-044-SS1-NI',
+      atendente: 'A',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: null,
+      recebedor: 'B',
+      recebedorEmpresa: '',
+      recebedorDocumento: '',
+      recebedorTelefone: '',
+      autorizadorInterno: '',
+      motivoRetirada: '',
+      origem: 'mobile',
+      status: 'concluido',
+      dataAtendimento: '2026-01-01T00:00:00.000Z',
+      itens: [
+        {
+          id: 'i1',
+          documentoItemId: '',
+          materialId: null,
+          codigoMaterial: 'A',
+          descricaoMaterial: 'A',
+          unidade: 'PC',
+          quantidadeAtendida: 1,
+          documentoNumero: 'BGC-18"-BT-044-SS1-NI',
+        },
+        {
+          id: 'i2',
+          documentoItemId: '',
+          materialId: null,
+          codigoMaterial: 'B',
+          descricaoMaterial: 'B',
+          unidade: 'PC',
+          quantidadeAtendida: 1,
+          documentoNumero: 'BGC-12"-BT-124-SS1-NI',
+        },
+      ],
+    };
+    normalizarCabecalhoDocumentoAtendimentoAgrupado(at);
+    expect(at.documentoNumero).toBe('MULTIPLOS');
+    expect(at.documentoId).toBe('');
+  });
 });
 
 describe('atendimento.service / registrarAtendimento (Supabase)', () => {
@@ -494,6 +722,7 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -638,6 +867,7 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -687,10 +917,26 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
     store[MATERIAIS_KEY] = JSON.stringify([]);
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
-    const result = await estornarAtendimento('atd-est-1');
+    const result = await estornarAtendimento('atd-est-1', undefined, {
+      nomeQuemEstorna: 'Admin',
+      nomeQuemDevolve: 'Joao',
+      motivoEstorno: 'Devolucao teste',
+    });
 
     expect(result.success).toBe(true);
     expect(result.data?.status).toBe('estornado');
+
+    const log = JSON.parse(store[ESTORNO_LOG_KEY] ?? '[]') as Array<{
+      loteNumero: string;
+      quantidadeEstornada: number;
+      nomeQuemEstorna: string;
+      motivoEstorno: string;
+    }>;
+    expect(log).toHaveLength(1);
+    expect(log[0]?.loteNumero).toBe('ATD-EST-1');
+    expect(log[0]?.quantidadeEstornada).toBe(5);
+    expect(log[0]?.nomeQuemEstorna).toBe('Admin');
+    expect(log[0]?.motivoEstorno).toBe('Devolucao teste');
 
     const documentos = JSON.parse(store[DOCUMENTOS_KEY] ?? '[]') as Array<{
       id: string;
@@ -812,6 +1058,247 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
     expect(doc?.itens.find((i) => i.id === 'doc-est-p-i1')?.quantidadeAtendida).toBe(0);
     expect(doc?.itens.find((i) => i.id === 'doc-est-p-i2')?.quantidadeAtendida).toBe(3);
   });
+
+  it('estorno total em lote MULTIPLOS reverte cada item no desenho correto', async () => {
+    mockReadForWrite.mockResolvedValue({
+      payload: {},
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    mockReadPayload.mockResolvedValue({
+      documentos: [
+        {
+          id: 'doc-a',
+          numero: 'DES-A',
+          revisao: '1',
+          descricao: 'Desenho A',
+          responsavel: 'Resp A',
+          status: 'parcial',
+          itens: [
+            {
+              id: 'doc-a-i1',
+              codigo: 'M1',
+              descricao: 'Material 1',
+              unidade: 'UN',
+              quantidade: 10,
+              quantidadeAtendida: 2,
+            },
+          ],
+        },
+        {
+          id: 'doc-b',
+          numero: 'DES-B',
+          revisao: '2',
+          descricao: 'Desenho B',
+          responsavel: 'Resp B',
+          status: 'parcial',
+          itens: [
+            {
+              id: 'doc-b-i1',
+              codigo: 'M2',
+              descricao: 'Material 2',
+              unidade: 'PC',
+              quantidade: 10,
+              quantidadeAtendida: 3,
+            },
+          ],
+        },
+      ],
+      materiais: [
+        { id: 'mat-1', codigo: 'M1', descricao: 'Material 1', unidade: 'UN', saldoAtual: 98 },
+        { id: 'mat-2', codigo: 'M2', descricao: 'Material 2', unidade: 'PC', saldoAtual: 97 },
+      ],
+      atendimentos: [
+        {
+          id: 'atd-multi',
+          numero: 'ATD-MULTI',
+          documentoId: '',
+          documentoNumero: 'MULTIPLOS',
+          atendente: 'Op',
+          recebedorTipo: 'interno',
+          recebedorColaboradorId: 'c1',
+          recebedor: 'R1',
+          recebedorEmpresa: '',
+          recebedorDocumento: '',
+          recebedorTelefone: '',
+          autorizadorInterno: '',
+          motivoRetirada: '',
+          origem: 'windows',
+          status: 'concluido',
+          dataAtendimento: '2026-04-01T12:00:00.000Z',
+          itens: [
+            {
+              id: 'lote-m-a',
+              documentoItemId: 'doc-a-i1',
+              documentoNumero: 'DES-A',
+              materialId: 'mat-1',
+              codigoMaterial: 'M1',
+              descricaoMaterial: 'Material 1',
+              unidade: 'UN',
+              quantidadeAtendida: 2,
+            },
+            {
+              id: 'lote-m-b',
+              documentoItemId: 'doc-b-i1',
+              documentoNumero: 'DES-B',
+              materialId: 'mat-2',
+              codigoMaterial: 'M2',
+              descricaoMaterial: 'Material 2',
+              unidade: 'PC',
+              quantidadeAtendida: 3,
+            },
+          ],
+        },
+      ],
+      atendimentoHistorico: [],
+    });
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await estornarAtendimento('atd-multi');
+
+    expect(result.success).toBe(true);
+    expect(result.data?.status).toBe('estornado');
+
+    const documentos = JSON.parse(store[DOCUMENTOS_KEY] ?? '[]') as Array<{
+      id: string;
+      status: string;
+      itens: Array<{ id: string; quantidadeAtendida: number }>;
+    }>;
+    expect(documentos.find((d) => d.id === 'doc-a')?.itens[0]?.quantidadeAtendida).toBe(0);
+    expect(documentos.find((d) => d.id === 'doc-a')?.status).toBe('pendente');
+    expect(documentos.find((d) => d.id === 'doc-b')?.itens[0]?.quantidadeAtendida).toBe(0);
+    expect(documentos.find((d) => d.id === 'doc-b')?.status).toBe('pendente');
+
+    const materiais = JSON.parse(store[MATERIAIS_KEY] ?? '[]') as Array<{ codigo: string; saldoAtual?: number }>;
+    expect(materiais.find((m) => m.codigo === 'M1')?.saldoAtual).toBe(100);
+    expect(materiais.find((m) => m.codigo === 'M2')?.saldoAtual).toBe(100);
+  });
+
+  it('estorno parcial em lote MULTIPLOS reverte apenas o desenho do item selecionado', async () => {
+    mockReadForWrite.mockResolvedValue({
+      payload: {},
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    mockReadPayload.mockResolvedValue({
+      documentos: [
+        {
+          id: 'doc-a',
+          numero: 'DES-A',
+          revisao: '1',
+          descricao: 'Desenho A',
+          responsavel: 'Resp A',
+          status: 'parcial',
+          itens: [
+            {
+              id: 'doc-a-i1',
+              codigo: 'M1',
+              descricao: 'Material 1',
+              unidade: 'UN',
+              quantidade: 10,
+              quantidadeAtendida: 2,
+            },
+          ],
+        },
+        {
+          id: 'doc-b',
+          numero: 'DES-B',
+          revisao: '2',
+          descricao: 'Desenho B',
+          responsavel: 'Resp B',
+          status: 'parcial',
+          itens: [
+            {
+              id: 'doc-b-i1',
+              codigo: 'M2',
+              descricao: 'Material 2',
+              unidade: 'PC',
+              quantidade: 10,
+              quantidadeAtendida: 3,
+            },
+          ],
+        },
+      ],
+      materiais: [
+        { id: 'mat-1', codigo: 'M1', descricao: 'Material 1', unidade: 'UN', saldoAtual: 98 },
+        { id: 'mat-2', codigo: 'M2', descricao: 'Material 2', unidade: 'PC', saldoAtual: 97 },
+      ],
+      atendimentos: [
+        {
+          id: 'atd-multi-p',
+          numero: 'ATD-MULTI-P',
+          documentoId: '',
+          documentoNumero: 'MULTIPLOS',
+          atendente: 'Op',
+          recebedorTipo: 'interno',
+          recebedorColaboradorId: 'c1',
+          recebedor: 'R1',
+          recebedorEmpresa: '',
+          recebedorDocumento: '',
+          recebedorTelefone: '',
+          autorizadorInterno: '',
+          motivoRetirada: '',
+          origem: 'windows',
+          status: 'concluido',
+          dataAtendimento: '2026-04-01T12:00:00.000Z',
+          itens: [
+            {
+              id: 'lote-m-a',
+              documentoItemId: 'doc-a-i1',
+              documentoNumero: 'DES-A',
+              materialId: 'mat-1',
+              codigoMaterial: 'M1',
+              descricaoMaterial: 'Material 1',
+              unidade: 'UN',
+              quantidadeAtendida: 2,
+            },
+            {
+              id: 'lote-m-b',
+              documentoItemId: 'doc-b-i1',
+              documentoNumero: 'DES-B',
+              materialId: 'mat-2',
+              codigoMaterial: 'M2',
+              descricaoMaterial: 'Material 2',
+              unidade: 'PC',
+              quantidadeAtendida: 3,
+            },
+          ],
+        },
+      ],
+      atendimentoHistorico: [],
+    });
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await estornarAtendimento('atd-multi-p', [{ atendimentoItemId: 'lote-m-a', quantidade: 2 }]);
+
+    expect(result.success).toBe(true);
+    expect(result.data?.status).toBe('concluido');
+    expect(result.data?.itens?.length).toBe(1);
+    expect(result.data?.itens?.[0].documentoNumero).toBe('DES-B');
+
+    const documentos = JSON.parse(store[DOCUMENTOS_KEY] ?? '[]') as Array<{
+      id: string;
+      itens: Array<{ id: string; quantidadeAtendida: number }>;
+    }>;
+    expect(documentos.find((d) => d.id === 'doc-a')?.itens[0]?.quantidadeAtendida).toBe(0);
+    expect(documentos.find((d) => d.id === 'doc-b')?.itens[0]?.quantidadeAtendida).toBe(3);
+
+    const materiais = JSON.parse(store[MATERIAIS_KEY] ?? '[]') as Array<{ codigo: string; saldoAtual?: number }>;
+    expect(materiais.find((m) => m.codigo === 'M1')?.saldoAtual).toBe(100);
+    expect(materiais.find((m) => m.codigo === 'M2')?.saldoAtual).toBe(97);
+  });
 });
 
 describe('atendimento.service / montarExportacaoAtendimentosCsvItens', () => {
@@ -898,6 +1385,8 @@ describe('atendimento.service / montarExportacaoAtendimentosCsvItens', () => {
     expect(result.data?.csv).toContain('atendido');
     expect(result.data?.csv).toContain('estorno_permitido');
     expect(result.data?.csv).toContain('qtd_pode_estornar');
+    expect(result.data?.csv).toContain('quantidade_retirada_original');
+    expect(result.data?.csv).toContain('quantidade_estornada_acumulada');
     expect(result.data?.csv).toContain('pode_estornar_linha');
     expect(result.data?.csv).toContain('PC (Windows)');
   });
@@ -945,5 +1434,103 @@ describe('atendimento.service / montarExportacaoAtendimentosCsvItens', () => {
     const linhaLote = result.data!.csv.split(/\r?\n/).find((l) => l.includes('ATD-20260403-0001'));
     expect(linhaLote).toBeDefined();
     expect(linhaLote).toContain('estornado');
+  });
+
+  it('exporta documento_numero por item quando lote agrupa varios desenhos', async () => {
+    vi.mocked(hasSupabaseConfig).mockReturnValue(true);
+    mockReadPayload.mockResolvedValue({
+      documentos: [
+        {
+          id: 'd-bgc',
+          numero: 'BGC-18"-BT-044-SS1-NI',
+          revisao: 'A',
+          descricao: 'Desenho BGC',
+          responsavel: 'Resp BGC',
+          status: 'parcial',
+          itens: [],
+        },
+        {
+          id: 'd-above',
+          numero: 'E.RAZN010-IE6-00002-ABOVE',
+          revisao: 'C',
+          descricao: 'Aterramento',
+          responsavel: 'Resp Above',
+          status: 'parcial',
+          itens: [],
+        },
+      ],
+      materiais: [],
+      atendimentos: [],
+      atendimentoHistorico: [
+        {
+          id: 1,
+          loteNumero: 'ATD-20260610-00042',
+          data: '2026-06-12T15:37:33.000Z',
+          documentoId: 'd-bgc',
+          documento: 'BGC-18"-BT-044-SS1-NI',
+          atendente: 'Igor',
+          recebedor: 'Jonatas',
+          codigo: 'PL0001',
+          descricao: 'Junta',
+          unidade: 'PC',
+          quantidade: 2,
+          origem: 'mobile',
+        },
+        {
+          id: 2,
+          loteNumero: 'ATD-20260610-00042',
+          data: '2026-06-12T15:37:33.000Z',
+          documentoId: 'd-above',
+          documento: 'E.RAZN010-IE6-00002-ABOVE',
+          atendente: 'Igor',
+          recebedor: 'Jonatas',
+          codigo: 'ATER0006',
+          descricao: 'Rebite',
+          unidade: 'PC',
+          quantidade: 1,
+          origem: 'mobile',
+        },
+      ],
+    });
+
+    const result = await montarExportacaoAtendimentosCsvItens();
+
+    expect(result.success).toBe(true);
+    const linhas = result.data!.csv.split(/\r?\n/).filter((l) => l.includes('ATD-20260610-00042'));
+    expect(linhas.length).toBe(2);
+    expect(linhas.some((l) => l.includes('PL0001') && l.includes('BGC-18'))).toBe(true);
+    expect(linhas.some((l) => l.includes('ATER0006') && l.includes('E.RAZN010-IE6-00002-ABOVE'))).toBe(true);
+    expect(linhas[0]).not.toEqual(linhas[1]);
+  });
+
+  it('monta ZIP com CSV de atendimentos e log de estornos', async () => {
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+    store[ESTORNO_LOG_KEY] = JSON.stringify([
+      {
+        id: 'log-1',
+        dataEstorno: '2026-06-01T10:00:00.000Z',
+        loteNumero: 'ATD-LOG-1',
+        loteId: 'atd-log-1',
+        atendimentoItemId: 'item-1',
+        documentoNumero: 'DOC-1',
+        codigoMaterial: 'M1',
+        descricaoMaterial: 'Mat',
+        unidade: 'UN',
+        quantidadeEstornada: 2,
+        quantidadeRetiradaOriginal: 5,
+        quantidadeRestanteNoLote: 3,
+        nomeQuemEstorna: 'Admin',
+        nomeQuemDevolve: 'Op',
+        motivoEstorno: 'Erro',
+        estornoParcialLote: true,
+      },
+    ]);
+
+    const result = await montarExportacaoAtendimentosPacoteZip();
+
+    expect(result.success).toBe(true);
+    expect(result.data?.fileName).toMatch(/^iso-pro-atendimentos-export-/);
+    expect(result.data?.zipBlob).toBeInstanceOf(Blob);
   });
 });

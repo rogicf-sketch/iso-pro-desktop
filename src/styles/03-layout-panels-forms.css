@@ -1,4 +1,4 @@
-Ôªø.app-shell {
+.app-shell {
   display: grid;
   grid-template-columns: 260px 1fr;
   min-height: 100vh;
@@ -44,7 +44,7 @@
   flex-shrink: 0;
 }
 
-/* Marca lateral ‚Äî placa estruturada I.S.O | PRO */
+/* Marca lateral ó placa estruturada I.S.O | PRO */
 .sidebar-brand-plate {
   position: relative;
   border-radius: 14px;
@@ -142,6 +142,26 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.sidebar-link__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-link__icon {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  opacity: 0.88;
+}
+
+.sidebar-link.active .sidebar-link__icon,
+.sidebar-link:hover .sidebar-link__icon {
+  opacity: 1;
 }
 
 .sidebar-link__label {
@@ -268,7 +288,7 @@ body.theme-neon .sidebar-link__badge {
 }
 
 /**
- * Desktop: shell tipo app nativo (cf. NVIDIA App / CEF) ‚Äî
+ * Desktop: shell tipo app nativo (cf. NVIDIA App / CEF) ó
  * coluna esquerda + barra superior estaveis; so a area central faz scroll.
  */
 @media (min-width: 981px) {
@@ -518,7 +538,7 @@ body.theme-neon .sidebar-link__badge {
   margin-top: 24px;
 }
 
-/* Usuarios ‚Äî permissoes por modulo (cartoes refinados; evita reutilizar .metric-card aqui) */
+/* Usuarios ó permissoes por modulo (cartoes refinados; evita reutilizar .metric-card aqui) */
 .usuario-perm-section {
   padding-top: 4px;
 }
@@ -602,7 +622,7 @@ body.theme-neon .sidebar-link__badge {
   }
 }
 
-/* Nome do modulo em linha propria; pastilha na linha seguinte √† direita ‚Äî evita sobreposicao */
+/* Nome do modulo em linha propria; pastilha na linha seguinte ‡ direita ó evita sobreposicao */
 .usuario-perm-card__head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -717,14 +737,14 @@ body.theme-neon .sidebar-link__badge {
   margin-top: 4px;
 }
 
-/* Tema claro ‚Äî cartoes e chips legiveis */
-body.theme-claro .usuario-perm-card {
+/* Tema claro ó cartoes e chips legiveis */
+body.theme-hibrido .usuario-perm-card {
   background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
   border: 1px solid rgba(15, 23, 42, 0.1);
   box-shadow: var(--claro-shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.92);
 }
 
-body.theme-claro .usuario-perm-card--ativo {
+body.theme-hibrido .usuario-perm-card--ativo {
   border-color: rgba(234, 88, 12, 0.38);
   box-shadow:
     0 0 0 1px rgba(234, 88, 12, 0.1),
@@ -732,44 +752,44 @@ body.theme-claro .usuario-perm-card--ativo {
     inset 0 1px 0 rgba(255, 255, 255, 0.85);
 }
 
-body.theme-claro .usuario-perm-card--ativo::after {
+body.theme-hibrido .usuario-perm-card--ativo::after {
   background: linear-gradient(125deg, rgba(249, 115, 22, 0.12) 0%, transparent 55%);
 }
 
-body.theme-claro .usuario-perm-card__modulo {
+body.theme-hibrido .usuario-perm-card__modulo {
   color: #64748b;
 }
 
-body.theme-claro .usuario-perm-status--on {
+body.theme-hibrido .usuario-perm-status--on {
   background: linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%);
   border: 1px solid #34d399;
   color: #065f46;
 }
 
-body.theme-claro .usuario-perm-status--off {
+body.theme-hibrido .usuario-perm-status--off {
   background: #f4f4f5;
   border: 1px solid #d4d4d8;
   color: #52525b;
 }
 
-body.theme-claro .usuario-perm-chip--on {
+body.theme-hibrido .usuario-perm-chip--on {
   background: linear-gradient(180deg, #ecfdf5 0%, #d1fae5 100%);
   border: 1px solid #34d399;
   color: #065f46;
 }
 
-body.theme-claro .usuario-perm-chip--off {
+body.theme-hibrido .usuario-perm-chip--off {
   background: linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
   border: 1px solid #a1a1aa;
   color: #3f3f46;
 }
 
-body.theme-claro .usuario-perm-chip--off:hover:not(:disabled) {
+body.theme-hibrido .usuario-perm-chip--off:hover:not(:disabled) {
   border-color: var(--claro-neon);
   color: #9a3412;
 }
 
-/* Tema neon ‚Äî status sem texto gigante ‚Äúglow‚Äù; contido e legivel */
+/* Tema neon ó status sem texto gigante ìglowî; contido e legivel */
 body.theme-neon .usuario-perm-heading {
   color: var(--neon-fg);
   text-shadow: var(--neon-glow-text);
@@ -881,14 +901,14 @@ input[type='datetime-local'].input-control::-webkit-calendar-picker-indicator {
   filter: invert(1) brightness(1.15) drop-shadow(0 0 2px rgba(255, 255, 255, 0.45));
 }
 
-body.theme-claro input[type='date'].input-control::-webkit-calendar-picker-indicator,
-body.theme-claro input[type='datetime-local'].input-control::-webkit-calendar-picker-indicator {
+body.theme-hibrido input[type='date'].input-control::-webkit-calendar-picker-indicator,
+body.theme-hibrido input[type='datetime-local'].input-control::-webkit-calendar-picker-indicator {
   filter: none;
   opacity: 1;
 }
 
-body.theme-claro input[type='date'].input-control,
-body.theme-claro input[type='datetime-local'].input-control {
+body.theme-hibrido input[type='date'].input-control,
+body.theme-hibrido input[type='datetime-local'].input-control {
   color-scheme: light;
 }
 
@@ -1025,7 +1045,7 @@ body.theme-claro input[type='datetime-local'].input-control {
   color: #f87171;
 }
 
-body.theme-claro .recebimento-badge-divergencia {
+body.theme-hibrido .recebimento-badge-divergencia {
   color: #b91c1c;
 }
 
@@ -1181,12 +1201,12 @@ body.theme-claro .recebimento-badge-divergencia {
   box-shadow: 0 -1px 0 rgba(96, 165, 250, 0.35) inset;
 }
 
-body.theme-claro .panel-tab--active {
+body.theme-hibrido .panel-tab--active {
   background: rgba(37, 99, 235, 0.08);
   color: var(--claro-texto-fosco);
 }
 
-/* Materiais ‚Äî consulta por codigo */
+/* Materiais ó consulta por codigo */
 .materiais-consulta__search {
   display: grid;
   grid-template-columns: 1fr auto;

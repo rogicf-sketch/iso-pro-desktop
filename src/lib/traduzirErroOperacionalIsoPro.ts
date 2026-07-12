@@ -44,10 +44,13 @@ export function traduzirErroOperacionalIsoPro(message: string): string {
     lower.includes('networkerror') ||
     lower.includes('network request failed') ||
     lower.includes('fetch failed') ||
-    lower.includes('timeout') ||
     lower.includes('econnrefused')
   ) {
     return MSG_ERRO_LEITURA_NUVEM;
+  }
+
+  if (lower.includes('timeout')) {
+    return 'A consulta a nuvem demorou demais; a usar dados em cache. Clique Recarregar da nuvem ou tente de novo.';
   }
 
   if (lower.includes('jwt') || lower.includes('invalid api key') || lower.includes('unauthorized')) {

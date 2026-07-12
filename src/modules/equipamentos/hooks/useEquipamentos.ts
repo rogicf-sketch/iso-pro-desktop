@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -46,6 +47,7 @@ function equipamentosIndicadoresQueryKey(userLogin: string | undefined) {
 }
 
 export function useEquipamentos() {
+  const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
   const hasCloudConfig = hasSupabaseConfig();
@@ -171,7 +173,7 @@ export function useEquipamentos() {
         setError('Seu perfil não possui permissão para excluir equipamentos.');
         return;
       }
-      if (!window.confirm('Excluir este equipamento? Esta ação não pode ser desfeita.')) {
+      if (!(await confirm({ message: 'Excluir este equipamento? Esta ação não pode ser desfeita.', danger: true }))) {
         return;
       }
       const result = await excluirEquipamento(id);
@@ -182,7 +184,7 @@ export function useEquipamentos() {
       await invalidateLista();
       setSuccess('Equipamento excluído.');
     },
-    [canAccessAction, invalidateLista],
+    [canAccessAction, confirm, invalidateLista],
   );
 
   const openCreateModal = useCallback(() => {

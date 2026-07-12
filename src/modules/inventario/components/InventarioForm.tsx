@@ -1,12 +1,20 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
+import { AutocompleteField } from '../../../components/ui/AutocompleteField';
 import { Button } from '../../../components/ui/Button';
 import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
+import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import type { ServiceWriteResult } from '../../../types/common.types';
+import { buildSaldoMap } from '../../estoque/saldoFromSnapshot';
+import { listarColaboradores } from '../../colaboradores/services/colaboradores.service';
+import { carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
 import type { InventarioFormData, InventarioItem } from '../types/inventario.types';
+import { montarItensInventarioDoCadastro } from '../services/inventarioCadastroItens';
+import { InventarioItensResumoTable } from './InventarioItensResumoTable';
 
 type Props = {
   initialValue: InventarioFormData;
@@ -22,21 +30,86 @@ const emptyItem: InventarioItem = {
   unidade: 'UN',
   saldoSistema: 0,
   quantidadeContada: 0,
+  localizacaoContada: '',
 };
 
 export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfterConflict }: Props) {
   const [form, setForm] = useState<InventarioFormData>(initialValue);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
+  const [saldoPorCodigo, setSaldoPorCodigo] = useState<Map<string, number>>(() => new Map());
+  const [carregandoItensCadastro, setCarregandoItensCadastro] = useState(false);
   const guardedCancel = useModalGuardedClose(onCancel);
   useModalFormDirty(isPlainFormDirty(initialValue, form));
   const hasDivergence = form.itens.some((item) => item.quantidadeContada !== item.saldoSistema);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const payload = await readSnapshotRemoteSliceOrFull(SNAPSHOT_SALDO_SLICE_KEYS);
+        if (!cancelled) {
+          setSaldoPorCodigo(buildSaldoMap(payload));
+        }
+      } catch {
+        if (!cancelled) {
+          setSaldoPorCodigo(new Map());
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const fetchResponsavelOptions = useCallback(async (query: string) => {
+    const result = await listarColaboradores({
+      busca: query,
+      tipo: 'todos',
+      status: 'ativos',
+      page: 1,
+      pageSize: 50,
+    });
+    if (!result.success || !result.data) return [];
+    return result.data.items.map((colaborador) => colaborador.nome);
+  }, []);
 
   function updateItem(index: number, patch: Partial<InventarioItem>) {
     setForm((current) => ({
       ...current,
       itens: current.itens.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
     }));
+  }
+
+  async function carregarItensDoCadastro(incluirSaldoZero: boolean) {
+    setCarregandoItensCadastro(true);
+    setError('');
+    try {
+      const materiais = await carregarMateriaisDoCadastro();
+      const novos = montarItensInventarioDoCadastro({
+        materiais: materiais.map((m) => ({
+          codigo: m.codigo,
+          descricao: m.descricao,
+          unidade: m.unidade,
+        })),
+        saldoPorCodigo,
+        itensExistentes: form.itens,
+        incluirSaldoZero,
+      });
+      if (!novos.length) {
+        setError(
+          incluirSaldoZero
+            ? 'Nenhum material novo para incluir (cadastro vazio ou todos ja estao na lista).'
+            : 'Nenhum material com saldo > 0 para incluir (ou todos ja estao na lista). Marque «incluir saldo zero» se precisar.',
+        );
+        return;
+      }
+      setForm((current) => ({ ...current, itens: [...current.itens, ...novos] }));
+    } catch {
+      setError('Nao foi possivel carregar materiais do cadastro.');
+    } finally {
+      setCarregandoItensCadastro(false);
+    }
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -68,9 +141,12 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
           onChange={(event) => setForm((current) => ({ ...current, codigo: event.target.value }))}
           value={form.codigo}
         />
-        <Input
+        <AutocompleteField
+          emptySuggestionsMessage="Nenhum colaborador ativo encontrado. Cadastre em Colaboradores ou digite o nome manualmente."
+          fetchOptions={fetchResponsavelOptions}
           label="Responsavel"
-          onChange={(event) => setForm((current) => ({ ...current, responsavel: event.target.value }))}
+          onChange={(responsavel) => setForm((current) => ({ ...current, responsavel }))}
+          placeholder="Digite para buscar no cadastro"
           value={form.responsavel}
         />
         <Input
@@ -96,12 +172,43 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
         <span>Permitir contagem pelo app mobile (inventario criado no PC aparece no telemovel)</span>
       </label>
 
+      {form.contagemMobileHabilitada ? (
+        <OperationalNotice>
+          No telemovel pode escanear ou pesquisar materiais do cadastro: cada contagem inclui o item automaticamente e
+          sincroniza com a nuvem (aparece aqui ao atualizar a lista). No PC pode carregar todos os materiais com saldo
+          num clique ou ir incluindo manualmente.
+        </OperationalNotice>
+      ) : null}
+
+      {form.contagemMobileHabilitada && form.itens.length === 0 ? (
+        <OperationalNotice>
+          Pode salvar só com o cabecalho e contar no telemovel (scan/pesquisa inclui materiais do cadastro). Ou use os
+          botoes abaixo para preencher a lista no PC antes de ir ao armazem.
+        </OperationalNotice>
+      ) : null}
+
+      <InventarioItensResumoTable itens={form.itens} saldoPorCodigo={saldoPorCodigo} />
+
       <div className="editor-block">
         <div className="editor-header">
           <div>
             <p className="panel-kicker">Itens</p>
             <strong>Contagem do inventario</strong>
           </div>
+          <Button
+            disabled={carregandoItensCadastro}
+            onClick={() => void carregarItensDoCadastro(false)}
+            variant="ghost"
+          >
+            {carregandoItensCadastro ? 'A carregar…' : 'Carregar todos com saldo'}
+          </Button>
+          <Button
+            disabled={carregandoItensCadastro}
+            onClick={() => void carregarItensDoCadastro(true)}
+            variant="ghost"
+          >
+            Incluir cadastro (com saldo zero)
+          </Button>
           <Button
             onClick={() =>
               setForm((current) => ({
@@ -148,7 +255,12 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
                   type="number"
                   value={String(item.quantidadeContada)}
                 />
-                <div />
+                <Input
+                  label="Local da contagem"
+                  onChange={(event) => updateItem(index, { localizacaoContada: event.target.value })}
+                  placeholder="Ex.: A-12, Container 3"
+                  value={item.localizacaoContada ?? ''}
+                />
                 <div className="inline-actions">
                   <Button
                     onClick={() =>

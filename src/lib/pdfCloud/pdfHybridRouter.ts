@@ -2,6 +2,8 @@ import { pdfNuvemAtivo, pdfNuvemHabilitado, pdfNuvemTimeoutMs, isIsoProDesktop }
 
 import { gerarPdfViaNuvem } from './pdfCloudClient';
 
+import { imprimirPdfBytesNoNavegador } from './imprimirPdfBytesNoNavegador';
+
 import type { PdfGerado, PdfJobTipo } from './types';
 
 import {
@@ -329,7 +331,7 @@ export async function entregarPdfBytes(
 
     }
 
-    return entregarPdfBytes(bytes, fileName, 'guardar', tituloPreview, opts);
+    return imprimirPdfBytesNoNavegador(bytes, fileName);
 
   }
 

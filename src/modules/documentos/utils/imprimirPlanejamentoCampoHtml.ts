@@ -18,6 +18,7 @@ import {
   type MetricasPorCodigoMaterial,
 } from '../services/documentoPlanejamento';
 import type { Documento } from '../types/documento.types';
+import { formatarDataDocumentoPtBr } from './formatarDataDocumento';
 
 function fmtQty(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toLocaleString('pt-BR', { maximumFractionDigits: 4 });
@@ -76,7 +77,7 @@ function badgeLinhaHtml(st: ReturnType<typeof resolverStatusLinhaDocumento>): st
   return `<span class="${cls}" role="status"><span class="fc-pill-ic" aria-hidden="true">${ic}</span>${escapeHtmlRelatorio(label)}</span>`;
 }
 
-function cssFolhaCampoV2(): string {
+export function cssFolhaCampoV2(): string {
   return `
     body.folha-campo-v2 {
       font-size: 9.5pt;
@@ -196,12 +197,12 @@ function cssFolhaCampoV2(): string {
     .fc-pill-doc--ok { background: #d1fae5; border: 1px solid #6ee7b7; color: #065f46; }
     .fc-pill-doc--info { background: #dbeafe; border: 1px solid #93c5fd; color: #1e40af; }
     .fc-pill-doc--warn { background: #ffedd5; border: 1px solid #fdba74; color: #9a3412; }
-    .fc-pill-doc--pend { background: #f1f5f9; border: 1px solid #cbd5e1; color: #475569; }
+    .fc-pill-doc--pend { background: #fee2e2; border: 1px solid #f87171; color: #b91c1c; }
     .fc-pill-doc--muted { background: #e2e8f0; border: 1px solid #94a3b8; color: #334155; }
     .fc-pill-linha--ok { background: #d1fae5; border: 1px solid #34d399; color: #065f46; }
     .fc-pill-linha--info { background: #dbeafe; border: 1px solid #60a5fa; color: #1e3a8a; }
     .fc-pill-linha--warn { background: #ffedd5; border: 1px solid #fb923c; color: #9a3412; }
-    .fc-pill-linha--pend { background: #f1f5f9; border: 1px solid #cbd5e1; color: #475569; }
+    .fc-pill-linha--pend { background: #fee2e2; border: 1px solid #f87171; color: #b91c1c; }
     .fc-section-title {
       margin: 4px 0 4px 0;
       font-size: 8.65pt;
@@ -391,7 +392,7 @@ export function montarHtmlPlanejamentoCampo(
       </div>
       <div class="fc-meta-card">
         <span class="fc-meta-k">Data do documento</span>
-        <span class="fc-meta-v">${escapeHtmlRelatorio(doc.dataDocumento)}</span>
+        <span class="fc-meta-v">${escapeHtmlRelatorio(formatarDataDocumentoPtBr(doc.dataDocumento))}</span>
       </div>
       <div class="fc-meta-card">
         <span class="fc-meta-k">Total de itens</span>

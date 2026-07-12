@@ -5,6 +5,8 @@ export type InventarioItem = {
   unidade: string;
   saldoSistema: number;
   quantidadeContada: number;
+  /** Local físico registado na contagem (mobile ou PC). */
+  localizacaoContada: string;
 };
 
 export type Inventario = {

@@ -380,7 +380,7 @@ function htmlRfDestaques(dados: RelatorioFinalObraDados): string {
           <header class="rfo-rf-head">
             <h4>${esc(r.numeroRelatorio)} — ${esc(r.titulo)}</h4>
             <p class="rfo-rf-motivos"><ul>${motivos}</ul></p>
-            <p class="rfo-nota" style="color:#cbd5e1;margin-top:8px">${esc(r.fornecedor || '—')} · NF ${esc(r.notaFiscal || '—')} · ${esc(formatarDataRelatorioFinal(r.salvoEm))}</p>
+            <p class="rfo-nota" style="margin-top:8px">${esc(r.fornecedor || '—')} · NF ${esc(r.notaFiscal || '—')} · ${esc(formatarDataRelatorioFinal(r.salvoEm))}</p>
           </header>
           ${fotosHtml}
         </article>`;
@@ -643,7 +643,9 @@ export function montarHtmlRelatorioFinalObra(dados: RelatorioFinalObraDados, opt
     runningHeaderHtml: runningHeader,
     runningHeaderCss: runningCss,
     includeToolbar,
-    pagedAtPage: { runningHeaderName: runningName, marginTopMm: 18, marginRightMm: 16, marginBottomMm: 14, marginLeftMm: 16 },
+    /** Sem Paged.js — documentos grandes (milhares de linhas) geravam folhas vazias na pré-visualização. */
+    usePagedJs: false,
+    pagedAtPage: { marginTopMm: 18, marginRightMm: 16, marginBottomMm: 14, marginLeftMm: 16 },
   });
 }
 

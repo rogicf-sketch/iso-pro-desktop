@@ -12,6 +12,7 @@ import {
   destravarRirParaCorrecaoAdministrativa,
   excluirRir,
   listarRir,
+  listarTodosRirRegistros,
   montarExportacaoRirCsvCompleto,
   rirNaoCanceladosPorRecebimentoId,
   salvarRir,
@@ -127,10 +128,10 @@ export function useRir() {
             if (!r.success || !r.data) return { data: undefined };
             return { data: r.data };
           }),
-          listarRir({ busca: '', status: 'todos', page: 1, pageSize: 500_000 }),
+          listarTodosRirRegistros({ busca: '', status: 'todos' }),
         ]);
         if (cancelled) return;
-        const rirItems = rirRes.success && rirRes.data ? rirRes.data.items : [];
+        const rirItems = rirRes.success && rirRes.data ? rirRes.data : [];
         const map = rirNaoCanceladosPorRecebimentoId(rirItems);
         setRecebimentoChoices(
           recItems.map((it) => {
