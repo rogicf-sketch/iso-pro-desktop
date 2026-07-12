@@ -56,7 +56,9 @@ Nota: isto protege fluxos **Supabase Auth** (JWT). Login legado via RPC `iso_pro
 3. **P0 (2026-07-12):** drop policies legadas `*_insert/update/delete/select_anon` com `true` que OR-bypassavam `*_tenant_rls` + revogar EXECUTE anon em PDF/prune/trigger/link-admin — migration `20260712010000` — **feito em prod**
    - Advisor: `rls_policy_always_true` **30 → 1** (resta `mobile_logs_acesso_insert_anon`, sem `tenant_id`)
    - Advisor: `anon_security_definer_*` **23 → 13** (só auth legado + outbox + audit)
-4. Staging curto se fores apertar outbox/`mobile_logs` ou login JWT-only
+4. **P1 (2026-07-12):** `mobile_logs` INSERT com WITH CHECK real + SELECT só service_role; revogar claim/complete/fail/process_one da outbox para anon — migration `20260712020000` — **feito em prod**
+   - Advisor: `rls_policy_always_true` **1 → 0**
+   - Advisor: `anon_security_definer_*` **13 → 9** (auth + enqueue + flush + audit)
 5. Onda JWT-only: revogar auth RPC anon quando 100% login Supabase Auth
 
 ---
