@@ -36,6 +36,7 @@ import {
 import {
   atendimentoTemVariosDocumentos,
   encontrarLinhaDocumentoParaItemEstorno,
+  numerosDocumentosDistintosItens,
   resolverIndiceDocumentoParaItemEstorno,
 } from '../utils/estornoDocumento.utils';
 import { resolverColaboradorPorTextoAtendente } from '../utils/resolverColaboradorPorTextoAtendente';
@@ -418,13 +419,18 @@ function documentosSinteticosDeAtendidoPorCodigo(
   ];
 }
 
-async function carregarDocumentoStoredDaNuvem(documentoId: string): Promise<DocumentoStored | null> {
+async function carregarDocumentoStoredDaNuvem(
+  documentoId: string,
+  numero?: string | null,
+): Promise<DocumentoStored | null> {
   const supabase = getSupabase();
-  if (!supabase || !documentoId.trim()) return null;
+  const id = String(documentoId ?? '').trim();
+  const num = String(numero ?? '').trim();
+  if (!supabase || (!id && !num)) return null;
   const { data, error } = await supabase.rpc('iso_pro_read_documento_planejamento', {
     p_tenant_id: getActiveTenantId(),
-    p_documento_id: documentoId,
-    p_numero: null,
+    p_documento_id: id || null,
+    p_numero: id ? null : num || null,
     p_revisao: null,
   });
   if (error) return null;
@@ -433,8 +439,8 @@ async function carregarDocumentoStoredDaNuvem(documentoId: string): Promise<Docu
   const doc = row.documento;
   const itensRaw = Array.isArray(doc.itens) ? doc.itens : [];
   return {
-    id: String(doc.id ?? documentoId),
-    numero: String(doc.numero ?? ''),
+    id: String(doc.id ?? id),
+    numero: String(doc.numero ?? num),
     revisao: String(doc.revisao ?? 'A'),
     descricao: String(doc.descricao ?? ''),
     responsavel: String(doc.responsavel ?? ''),
@@ -452,6 +458,73 @@ async function carregarDocumentoStoredDaNuvem(documentoId: string): Promise<Docu
       };
     }),
   };
+}
+
+/** Carrega so os desenhos do lote — RPC por numero/id; evita documentos[] completo. */
+async function carregarDocumentosParaEstorno(atendimento: Atendimento): Promise<DocumentoStored[]> {
+  const nums = numerosDocumentosDistintosItens(atendimento.itens);
+  const headerId = String(atendimento.documentoId ?? '').trim();
+  const headerNum = String(atendimento.documentoNumero ?? '').trim();
+  const docs: DocumentoStored[] = [];
+  const seen = new Set<string>();
+
+  const push = (doc: DocumentoStored | null) => {
+    if (!doc?.id || seen.has(doc.id)) return;
+    seen.add(doc.id);
+    docs.push(doc);
+  };
+
+  await Promise.all(
+    nums.map(async (num) => {
+      push(await carregarDocumentoStoredDaNuvem('', num));
+    }),
+  );
+
+  if (docs.length === 0 && headerId && headerNum.toUpperCase() !== 'MULTIPLOS') {
+    push(await carregarDocumentoStoredDaNuvem(headerId));
+  }
+
+  if (docs.length > 0) return docs;
+
+  // Fallback (testes / RPC ausente): filtra do payload so os numeros do lote.
+  // Timeout curto — em obra grande o caminho principal e o RPC acima.
+  try {
+    const payload = await withRemoteReadTimeout(() => readSnapshotPayload(), 8_000);
+    const wanted = new Set(nums.map((n) => n.toLowerCase()));
+    if (headerId) wanted.add(headerId.toLowerCase());
+    for (const raw of payload.documentos ?? []) {
+      const id = String(raw.id ?? '').trim();
+      const numero = String(raw.numero ?? '').trim();
+      if (!id) continue;
+      if (
+        wanted.has(id.toLowerCase()) ||
+        wanted.has(numero.toLowerCase()) ||
+        (nums.length === 0 && id === headerId)
+      ) {
+        push({
+          id,
+          numero,
+          revisao: String(raw.revisao ?? 'A'),
+          descricao: String(raw.descricao ?? ''),
+          responsavel: String(raw.responsavel ?? ''),
+          status: (String(raw.status ?? 'pendente') as DocumentoStored['status']) || 'pendente',
+          itens: (raw.itens ?? []).map((item, index) => ({
+            id: String(item.id ?? `${id}-item-${index + 1}`),
+            codigoMaterial: String(item.codigo ?? item.codigoMaterial ?? ''),
+            descricaoMaterial: String(item.descricao ?? item.descricaoMaterial ?? ''),
+            unidade: String(item.unidade ?? 'UN'),
+            quantidadeProjeto: Number(item.quantidade ?? item.quantidadeProjeto ?? 0) || 0,
+            quantidadeAtendida: Number(item.quantidadeAtendida ?? 0) || 0,
+            localizacao: String((item as { localizacao?: string }).localizacao ?? ''),
+          })),
+        });
+      }
+    }
+  } catch {
+    /* sem fallback */
+  }
+
+  return docs;
 }
 
 type SnapshotDocumentoRecord = NonNullable<SnapshotPayload['documentos']>[number];
@@ -566,22 +639,23 @@ async function writeSnapshotAtendimentoPatch(patch: {
 }): Promise<void> {
   await gravarAtendimentoNaNuvemComComando({
     prepare: async () => {
+      // Sem documentos[] completo: o RPC no servidor faz merge por id no snapshot.
+      // Pedir a fatia inteira em obras grandes (~40k linhas) estourava timeout no estorno.
       const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite([
-        'documentos',
         'atendimentos',
         'atendimentoHistorico',
         'atendimentoEstornoLog',
         'configuracoesSistema',
       ]);
-      const currentDocumentos = (currentPayload.documentos ?? []) as SnapshotDocumentoRecord[];
+      const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
       const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
       const existingEstornoLog = mapEstornoLogFromSnapshot(
         currentPayload.atendimentoEstornoLog as SnapshotPayload['atendimentoEstornoLog'],
       );
 
-      const documentos = patch.documentos?.length
-        ? mergeSnapshotRowsById(currentDocumentos, patch.documentos.map(documentoStoredToSnapshotRecord))
-        : currentDocumentos;
+      // Baseline documentos vazio + next = patch → o delta inclui todos os docs do comando.
+      // O servidor faz merge por id no snapshot completo (GREATEST na baixa / regressao no estorno).
+      const documentos = patchDocumentos;
 
       const atendimentosSnapshot = patch.atendimentos?.length
         ? mergeSnapshotRowsById(currentAtendimentos, patch.atendimentos.map(atendimentoToSnapshotRecord))
@@ -608,7 +682,7 @@ async function writeSnapshotAtendimentoPatch(patch: {
       };
 
       const baselineSlices: SnapshotSlice = {
-        documentos: currentDocumentos,
+        documentos: [],
         atendimentos: currentAtendimentos,
         atendimentoHistorico: existingHistorico,
         atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
@@ -2009,16 +2083,23 @@ export async function estornarAtendimento(
   let remoteState: Awaited<ReturnType<typeof readRemoteState>> | null = null;
   if (shouldTryRemoteRead()) {
     try {
+      // Preferir fatia light + RPC por desenho. Snapshot documentos[] completo so como
+      // ultimo recurso (timeout em obras grandes / lotes MULTIPLOS).
       const light = await readRemoteStateForWrite([]);
-      const atPreview = light.atendimentos.find((item) => item.id === id);
-      const headerDocId = String(atPreview?.documentoId ?? '').trim();
-      const precisaPlanejamentoCompleto =
-        !headerDocId ||
-        String(atPreview?.documentoNumero ?? '').toUpperCase() === 'MULTIPLOS' ||
-        (atPreview != null && atendimentoTemVariosDocumentos(atPreview));
-      remoteState = precisaPlanejamentoCompleto
-        ? await readRemoteState()
-        : await readRemoteStateForWrite([headerDocId]);
+      let atPreview = light.atendimentos.find((item) => item.id === id);
+      if (!atPreview) {
+        const full = await readRemoteState();
+        atPreview = full.atendimentos.find((item) => item.id === id);
+        if (!atPreview) {
+          remoteState = full;
+        } else {
+          const docs = await carregarDocumentosParaEstorno(atPreview);
+          remoteState = { ...full, documentos: docs.length > 0 ? docs : full.documentos };
+        }
+      } else {
+        const docs = await carregarDocumentosParaEstorno(atPreview);
+        remoteState = { ...light, documentos: docs };
+      }
     } catch {
       remoteState = await readRemoteState().catch(() => null);
     }

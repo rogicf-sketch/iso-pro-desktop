@@ -1408,12 +1408,21 @@ export function useAtendimento() {
     setSnapshotConflict(false);
     const numero = estornoAlvo.numero;
     let result: Awaited<ReturnType<typeof estornarAtendimento>>;
+    const ESTORNO_TIMEOUT_MS = 45_000;
     try {
-      result = await estornarAtendimento(estornoAlvo.id, linhas, {
-        nomeQuemEstorna: estornoNomeQuemEstorna,
-        nomeQuemDevolve: estornoNomeQuemDevolve,
-        motivoEstorno: estornoMotivo,
-      });
+      result = await Promise.race([
+        estornarAtendimento(estornoAlvo.id, linhas, {
+          nomeQuemEstorna: estornoNomeQuemEstorna,
+          nomeQuemDevolve: estornoNomeQuemDevolve,
+          motivoEstorno: estornoMotivo,
+        }),
+        new Promise<Awaited<ReturnType<typeof estornarAtendimento>>>((_, reject) => {
+          setTimeout(
+            () => reject(new Error('O estorno demorou demais na nuvem. Feche o modal, Ctrl+F5 e tente de novo.')),
+            ESTORNO_TIMEOUT_MS,
+          );
+        }),
+      ]);
     } catch (err) {
       // Falha inesperada (fora do ServiceResult): sem isto o botao parecia "sem acao".
       result = {
