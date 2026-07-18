@@ -224,29 +224,6 @@ function somarHistoricoPorDocumentoItemId(
   return m;
 }
 
-/**
- * Soma dos estornos por (documentoId, codigo). As linhas do historico do lote estornado ficam na
- * nuvem (RPC append-only); sem este abatimento a reconciliacao devolvia a quantidade estornada
- * ao planejamento (visto em 18/07/2026 apos estorno do lote ATD-20260711-00080).
- */
-function somarEstornosPorDocumentoECodigo(
-  documentos: DocumentoPlanejamentoStored[],
-  payload: PayloadPlanejamentoReconcile,
-): Map<string, number> {
-  const numeroParaId = indiceNumeroDocumentoParaId(documentos);
-  const m = new Map<string, number>();
-  for (const raw of payload.atendimentoEstornoLog ?? []) {
-    const rot = normalizeRotuloDocumento(String(raw.documentoNumero ?? ''));
-    const docId = rot ? (numeroParaId.get(rot) ?? '') : '';
-    const cod = codigoMaterialKey(String(raw.codigoMaterial ?? ''));
-    const q = Number(raw.quantidadeEstornada ?? 0);
-    if (!docId || !cod || !Number.isFinite(q) || q <= 0) continue;
-    const k = `${docId}###${cod}`;
-    m.set(k, (m.get(k) ?? 0) + q);
-  }
-  return m;
-}
-
 export function reconciliarDocumentosComRegistrosDeAtendimento(
   documentos: DocumentoPlanejamentoStored[],
   payload: PayloadPlanejamentoReconcile,
