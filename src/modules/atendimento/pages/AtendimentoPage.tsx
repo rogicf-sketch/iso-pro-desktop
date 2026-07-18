@@ -309,7 +309,13 @@ export function AtendimentoPage() {
               ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
               : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
         </OperationalNotice>
-        {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
+        {fallbackReason ? (
+          fallbackReason.includes('segundo plano') ? (
+            <OperationalNotice>Desenhos pendentes a carregar em segundo plano… a lista completa aparece em instantes.</OperationalNotice>
+          ) : (
+            <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice>
+          )
+        ) : null}
 
         <SnapshotConflictHint show={snapshotConflict} onReload={() => void load()} />
         {error ? <div className="error-box">{error}</div> : null}

@@ -361,7 +361,8 @@ export function useAtendimento() {
                 ? {
                     ...prev,
                     documentos: late.data ?? [],
-                    fallbackReason: late.meta?.fallbackReason ?? prev.fallbackReason,
+                    // Carregamento em fundo concluido: limpa o aviso (nao herdar "segundo plano").
+                    fallbackReason: late.meta?.fallbackReason ?? '',
                   }
                 : prev,
             );
