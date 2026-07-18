@@ -34,7 +34,6 @@ import {
   registrarRetiranteExterno,
 } from '../../colaboradores/services/colaboradores.service';
 import {
-  atendimentoTemVariosDocumentos,
   encontrarLinhaDocumentoParaItemEstorno,
   numerosDocumentosDistintosItens,
   resolverIndiceDocumentoParaItemEstorno,
@@ -508,15 +507,18 @@ async function carregarDocumentosParaEstorno(atendimento: Atendimento): Promise<
           descricao: String(raw.descricao ?? ''),
           responsavel: String(raw.responsavel ?? ''),
           status: (String(raw.status ?? 'pendente') as DocumentoStored['status']) || 'pendente',
-          itens: (raw.itens ?? []).map((item, index) => ({
-            id: String(item.id ?? `${id}-item-${index + 1}`),
-            codigoMaterial: String(item.codigo ?? item.codigoMaterial ?? ''),
-            descricaoMaterial: String(item.descricao ?? item.descricaoMaterial ?? ''),
-            unidade: String(item.unidade ?? 'UN'),
-            quantidadeProjeto: Number(item.quantidade ?? item.quantidadeProjeto ?? 0) || 0,
-            quantidadeAtendida: Number(item.quantidadeAtendida ?? 0) || 0,
-            localizacao: String((item as { localizacao?: string }).localizacao ?? ''),
-          })),
+          itens: (raw.itens ?? []).map((rawItem, index) => {
+            const item = rawItem as Record<string, unknown>;
+            return {
+              id: String(item.id ?? `${id}-item-${index + 1}`),
+              codigoMaterial: String(item.codigo ?? item.codigoMaterial ?? ''),
+              descricaoMaterial: String(item.descricao ?? item.descricaoMaterial ?? ''),
+              unidade: String(item.unidade ?? 'UN'),
+              quantidadeProjeto: Number(item.quantidade ?? item.quantidadeProjeto ?? 0) || 0,
+              quantidadeAtendida: Number(item.quantidadeAtendida ?? 0) || 0,
+              localizacao: String(item.localizacao ?? ''),
+            };
+          }),
         });
       }
     }
