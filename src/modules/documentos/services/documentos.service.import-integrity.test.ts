@@ -175,4 +175,51 @@ describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', ()
     expect(result.data?.criados).toBe(1);
     expect(mockCommitWrite).toHaveBeenCalled();
   });
+
+  /** Regressao incidente 12/07/2026: baseline errado no cliente nao pode apagar desenhos da nuvem. */
+  it('bloqueia gravacao que removeria desenhos existentes na nuvem (baseline incompleto no cliente)', async () => {
+    const docNuvem = {
+      id: 'doc-nuvem-1',
+      numero: 'ANTIGO-001',
+      revisao: 'A',
+      data: '2026-05-01',
+      descricao: 'Desenho real ja na nuvem',
+      responsavel: 'R',
+      itens: [],
+    };
+    // Baseline lido pela importacao: nuvem devolve vazio (ex.: sessao com leitura falhada).
+    mockReadPayload.mockResolvedValue({ documentos: [] });
+    // Mas na hora de gravar, o snapshot da nuvem TEM desenhos que nao estao na lista a gravar.
+    mockReadForWrite.mockResolvedValue({
+      payload: { documentos: [docNuvem], atendimentoHistorico: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const json = JSON.stringify({
+      documentos: [
+        {
+          numero: 'NOVO-002',
+          revisao: 'A',
+          descricao: 'Teste',
+          responsavel: 'R',
+          dataDocumento: '2026-05-01',
+          itens: [
+            {
+              codigoMaterial: 'MAT-1',
+              descricaoMaterial: 'M',
+              unidade: 'UN',
+              quantidadeProjeto: 1,
+              quantidadeAtendida: 0,
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await importarDocumentosDoArquivoJson(json);
+
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toMatch(/Gravacao bloqueada por seguranca/i);
+    expect(String(result.error)).toMatch(/ANTIGO-001/);
+  });
 });

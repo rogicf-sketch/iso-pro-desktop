@@ -26,6 +26,7 @@ type AuthAuditEventType =
   | 'planejamento_limpeza_codigos_persistida'
   | 'planejamento_limpeza_codigos_bloqueada'
   | 'planejamento_substituicao_limpou_historico'
+  | 'planejamento_gravacao_bloqueada_remocao_nuvem'
   | 'fabrica_backup_pacote_descarregado'
   | 'fabrica_limpeza_local_executada'
   | 'purga_nuvem_operacional_executada'

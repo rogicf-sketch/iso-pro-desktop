@@ -319,6 +319,24 @@ async function loadDocumentos(): Promise<Documento[]> {
   return persistirLimpezaItensSemCadastroMaterial(base);
 }
 
+/**
+ * Baseline da importacao: com nuvem configurada, le SEMPRE o snapshot remoto — sem fallback local.
+ * Usar a copia local como base (ex.: seed demo num posto novo, ou sessao com leitura falhada) faria a
+ * gravacao substituir o planejamento da nuvem pela copia errada e apagar os desenhos existentes
+ * (incidente de 12/07/2026). Falha de leitura => importacao cancelada, nada e alterado.
+ */
+async function carregarDocumentosBaselineParaImportacao(): Promise<Documento[]> {
+  if (!hasSupabaseConfig()) return readAll();
+  try {
+    return await readSnapshotDocumentos();
+  } catch (error) {
+    throw new Error(
+      'Nao foi possivel ler o planejamento atual da nuvem — importacao cancelada por seguranca (nenhum dado foi alterado). ' +
+        `Verifique a ligacao e a sessao, recarregue a pagina e tente novamente. Detalhe: ${getErrorMessage(error, 'erro de leitura da nuvem')}`,
+    );
+  }
+}
+
 async function carregarDocumentosBase(): Promise<{
   data: Documento[];
   meta: NonNullable<ServiceResult<Documento[]>['meta']>;
@@ -490,7 +508,7 @@ export async function sincronizarPlanejamentoLocalComNuvem(): Promise<ServiceRes
   const items = readAll();
   const localIds = new Set(items.map((d) => d.id));
   try {
-    await writeSnapshotDocumentos(items);
+    await writeSnapshotDocumentos(items, { substituicaoExplicitaDaNuvem: true });
   } catch (error) {
     return {
       success: false,
@@ -524,12 +542,47 @@ export async function sincronizarPlanejamentoLocalComNuvem(): Promise<ServiceRes
   }
 }
 
+/**
+ * Guarda anti-perda: nenhuma gravacao de planejamento pode remover da nuvem mais desenhos
+ * do que o fluxo declarou (`remocoesEsperadas`). Protege contra baseline errado no cliente
+ * (fallback local/seed demo, sessao expirada) a substituir o planejamento real — incidente 12/07/2026.
+ */
+function mensagemSeGravacaoRemoveriaDesenhosDaNuvem(
+  docsNuvem: Array<{ id?: unknown; numero?: unknown; revisao?: unknown }>,
+  itens: Documento[],
+  remocoesEsperadas: number,
+): string | null {
+  if (!docsNuvem.length) return null;
+  const idsNext = new Set(itens.map((d) => String(d.id)));
+  const chavesNext = new Set(itens.map((d) => `${d.numero.trim().toLowerCase()}|${d.revisao.trim().toLowerCase()}`));
+  const emFalta = docsNuvem.filter((d) => {
+    if (d.id !== undefined && idsNext.has(String(d.id))) return false;
+    const chave = `${String(d.numero ?? '').trim().toLowerCase()}|${String(d.revisao ?? '').trim().toLowerCase()}`;
+    return !chavesNext.has(chave);
+  });
+  if (emFalta.length <= remocoesEsperadas) return null;
+  const exemplos = emFalta
+    .slice(0, 5)
+    .map((d) => `${String(d.numero ?? '?')} rev. ${String(d.revisao ?? '?')}`)
+    .join(', ');
+  return (
+    `Gravacao bloqueada por seguranca: iria remover ${emFalta.length} desenho(s) que existem na nuvem e nao estao na lista a gravar` +
+    (remocoesEsperadas > 0 ? ` (esperado no maximo ${remocoesEsperadas})` : '') +
+    `. Ex.: ${exemplos}. Isto normalmente indica que este posto nao conseguiu ler o planejamento da nuvem antes de gravar. ` +
+    'Recarregue a pagina (F5) e tente novamente. Nenhum dado foi alterado.'
+  );
+}
+
 async function writeSnapshotDocumentos(
   items: Documento[],
   opcoes?: {
     dispensarValidacaoRefsAtendimento?: boolean;
     limparHistoricoIncompativel?: boolean;
     actorLogin?: string;
+    /** Numero maximo de desenhos que este fluxo pode legitimamente remover da nuvem (ex.: exclusao explicita). */
+    remocoesEsperadas?: number;
+    /** Apenas para «Enviar planejamento deste PC para a nuvem» — substituicao explicita e consciente. */
+    substituicaoExplicitaDaNuvem?: boolean;
   },
 ): Promise<void> {
   await commitIsoProSnapshotPatch(async () => {
@@ -539,6 +592,21 @@ async function writeSnapshotDocumentos(
     let payloadTrabalho = currentPayload as PayloadComRefsAtendimento;
     let removidosHistorico = 0;
     let removidosAtendimentos = 0;
+
+    if (!opcoes?.substituicaoExplicitaDaNuvem) {
+      const docsNuvem = Array.isArray((currentPayload as { documentos?: unknown }).documentos)
+        ? ((currentPayload as { documentos: Array<{ id?: unknown; numero?: unknown; revisao?: unknown }> }).documentos)
+        : [];
+      const bloqueio = mensagemSeGravacaoRemoveriaDesenhosDaNuvem(docsNuvem, items, opcoes?.remocoesEsperadas ?? 0);
+      if (bloqueio) {
+        appendAuthAuditEvent({
+          type: 'planejamento_gravacao_bloqueada_remocao_nuvem',
+          actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
+          detail: bloqueio,
+        });
+        throw new Error(bloqueio);
+      }
+    }
 
     const nextDocsMin = items.map((d) => ({ id: d.id, numero: d.numero }));
 
@@ -1031,7 +1099,11 @@ export async function excluirDocumentosDefinitivamente(
 
       const writeResult = await executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotDocumentos(next, { dispensarValidacaoRefsAtendimento: true }),
+        writeRemote: () =>
+          writeSnapshotDocumentos(next, {
+            dispensarValidacaoRefsAtendimento: true,
+            remocoesEsperadas: removidos.length,
+          }),
         writeLocal: () => writeAll(next),
         successData: { removidos: removidos.length },
         fallbackMessage: 'Falha ao excluir documentos no Supabase.',
@@ -1649,7 +1721,7 @@ export async function importarDocumentosDoArquivoJson(
   let working: Documento[];
   let recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>>;
   try {
-    working = [...(await loadDocumentos())];
+    working = [...(await carregarDocumentosBaselineParaImportacao())];
     recebimentos = await carregarRecebimentosCompletos();
     working = aplicarStatusPlanejamentoEmDocumentos(working, recebimentos);
   } catch (error) {
