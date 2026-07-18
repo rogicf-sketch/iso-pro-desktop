@@ -53,6 +53,7 @@ export type PayloadPlanejamentoReconcile = {
     }>;
   }>;
   atendimentos?: Array<{
+    numero?: string;
     status?: string;
     itens?: Array<{
       documentoItemId?: string | number;
@@ -60,11 +61,25 @@ export type PayloadPlanejamentoReconcile = {
     }>;
   }>;
   atendimentoHistorico?: Array<{
+    id?: string | number;
+    loteNumero?: string;
     documentoId?: string | number | null;
     documento?: string;
     documentoItemId?: string | number | null;
     codigo?: string;
     quantidade?: number | string;
+  }>;
+  /**
+   * Log auditavel de estornos (PC/web). O estorno reduz `quantidadeAtendida` nos documentos,
+   * mas as linhas antigas de `atendimentoHistorico` ficam na nuvem (o RPC so faz append).
+   * Sem abater este log, a reconciliacao "ressuscitava" quantidades estornadas.
+   */
+  atendimentoEstornoLog?: Array<{
+    loteNumero?: string;
+    atendimentoItemId?: string | number;
+    documentoNumero?: string;
+    codigoMaterial?: string;
+    quantidadeEstornada?: number | string;
   }>;
 };
 
@@ -124,9 +139,20 @@ function indiceNumeroDocumentoParaId(documentos: DocumentoPlanejamentoStored[]):
 /**
  * Soma por (documentoId, codigo) a partir do histórico, resolvendo `documentoId` pelo número do desenho quando vier vazio.
  */
+function lotesEstornadosDoPayload(payload: PayloadPlanejamentoReconcile): Set<string> {
+  const s = new Set<string>();
+  for (const at of payload.atendimentos ?? []) {
+    if (String(at.status) !== 'estornado') continue;
+    const numero = String((at as { numero?: unknown }).numero ?? '').trim();
+    if (numero) s.add(numero);
+  }
+  return s;
+}
+
 function somarHistoricoPorDocumentoECodigo(
   documentos: DocumentoPlanejamentoStored[],
   payload: PayloadPlanejamentoReconcile,
+  lotesEstornados: Set<string>,
 ): Map<string, number> {
   const numeroParaId = indiceNumeroDocumentoParaId(documentos);
   const histByDocCod = new Map<string, number>();
@@ -135,6 +161,8 @@ function somarHistoricoPorDocumentoECodigo(
     if (String((raw as { documentoItemId?: unknown }).documentoItemId ?? '').trim()) {
       continue;
     }
+    // Lote totalmente estornado: as linhas antigas ficam na nuvem (RPC append-only) mas nao contam.
+    if (lotesEstornados.has(String(raw.loteNumero ?? '').trim())) continue;
     let docId = String(raw.documentoId ?? '').trim();
     if (!docId) {
       const rot = normalizeRotuloDocumento(String(raw.documento ?? ''));
@@ -146,17 +174,75 @@ function somarHistoricoPorDocumentoECodigo(
     const k = `${docId}###${cod}`;
     histByDocCod.set(k, (histByDocCod.get(k) ?? 0) + q);
   }
+
+  // Estornos parciais (lote continua 'concluido'): abate a quantidade estornada por doc+codigo.
+  for (const raw of payload.atendimentoEstornoLog ?? []) {
+    const lote = String(raw.loteNumero ?? '').trim();
+    if (lote && lotesEstornados.has(lote)) continue; // linhas do lote ja foram ignoradas acima
+    const rot = normalizeRotuloDocumento(String(raw.documentoNumero ?? ''));
+    const docId = rot ? (numeroParaId.get(rot) ?? '') : '';
+    const cod = codigoMaterialKey(String(raw.codigoMaterial ?? ''));
+    const q = Number(raw.quantidadeEstornada ?? 0);
+    if (!docId || !cod || !Number.isFinite(q) || q <= 0) continue;
+    const k = `${docId}###${cod}`;
+    const atual = histByDocCod.get(k);
+    if (atual === undefined) continue;
+    histByDocCod.set(k, Math.max(0, atual - q));
+  }
   return histByDocCod;
 }
 
-function somarHistoricoPorDocumentoItemId(payload: PayloadPlanejamentoReconcile): Map<string, number> {
+function somarHistoricoPorDocumentoItemId(
+  payload: PayloadPlanejamentoReconcile,
+  lotesEstornados: Set<string>,
+): Map<string, number> {
   const m = new Map<string, number>();
+  /** rowId → documentoItemId, para abater estornos parciais (o log guarda o id do item do lote). */
+  const rowParaDocItem = new Map<string, string>();
   for (const raw of payload.atendimentoHistorico ?? []) {
     const iid = String((raw as { documentoItemId?: unknown }).documentoItemId ?? '').trim();
     if (!iid) continue;
+    if (lotesEstornados.has(String(raw.loteNumero ?? '').trim())) continue;
     const q = Number(raw.quantidade ?? 0);
     if (!Number.isFinite(q) || q <= 0) continue;
     m.set(iid, (m.get(iid) ?? 0) + q);
+    const rowId = String(raw.id ?? '').trim();
+    if (rowId) rowParaDocItem.set(rowId, iid);
+  }
+  for (const raw of payload.atendimentoEstornoLog ?? []) {
+    const lote = String(raw.loteNumero ?? '').trim();
+    if (lote && lotesEstornados.has(lote)) continue;
+    const rowId = String(raw.atendimentoItemId ?? '').trim();
+    const iid = rowId ? rowParaDocItem.get(rowId) : undefined;
+    if (!iid) continue;
+    const q = Number(raw.quantidadeEstornada ?? 0);
+    if (!Number.isFinite(q) || q <= 0) continue;
+    const atual = m.get(iid);
+    if (atual === undefined) continue;
+    m.set(iid, Math.max(0, atual - q));
+  }
+  return m;
+}
+
+/**
+ * Soma dos estornos por (documentoId, codigo). As linhas do historico do lote estornado ficam na
+ * nuvem (RPC append-only); sem este abatimento a reconciliacao devolvia a quantidade estornada
+ * ao planejamento (visto em 18/07/2026 apos estorno do lote ATD-20260711-00080).
+ */
+function somarEstornosPorDocumentoECodigo(
+  documentos: DocumentoPlanejamentoStored[],
+  payload: PayloadPlanejamentoReconcile,
+): Map<string, number> {
+  const numeroParaId = indiceNumeroDocumentoParaId(documentos);
+  const m = new Map<string, number>();
+  for (const raw of payload.atendimentoEstornoLog ?? []) {
+    const rot = normalizeRotuloDocumento(String(raw.documentoNumero ?? ''));
+    const docId = rot ? (numeroParaId.get(rot) ?? '') : '';
+    const cod = codigoMaterialKey(String(raw.codigoMaterial ?? ''));
+    const q = Number(raw.quantidadeEstornada ?? 0);
+    if (!docId || !cod || !Number.isFinite(q) || q <= 0) continue;
+    const k = `${docId}###${cod}`;
+    m.set(k, (m.get(k) ?? 0) + q);
   }
   return m;
 }
@@ -177,8 +263,9 @@ export function reconciliarDocumentosComRegistrosDeAtendimento(
     }
   }
 
-  const histByDocCod = somarHistoricoPorDocumentoECodigo(documentos, payload);
-  const histPorItemId = somarHistoricoPorDocumentoItemId(payload);
+  const lotesEstornados = lotesEstornadosDoPayload(payload);
+  const histByDocCod = somarHistoricoPorDocumentoECodigo(documentos, payload, lotesEstornados);
+  const histPorItemId = somarHistoricoPorDocumentoItemId(payload, lotesEstornados);
 
   return documentos.map((doc) => {
     const did = String(doc.id);

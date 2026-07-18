@@ -36,21 +36,23 @@ export const SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS = [
   'atendimentoEstornoLog',
 ] as const;
 
-/** Subconjunto minimo para `buildSaldoMap`. */
+/** Subconjunto minimo para `buildSaldoMap`. Inclui o log de estornos: a reconciliacao abate estornos do historico. */
 export const SNAPSHOT_SALDO_SLICE_KEYS = [
   'recebimentos',
   'documentos',
   'atendimentos',
   'atendimentoHistorico',
+  'atendimentoEstornoLog',
   'estoqueAjustes',
   'materiais',
 ] as const;
 
-/** Planejamento (documentos) + refs de atendimento para reconciliacao. */
+/** Planejamento (documentos) + refs de atendimento para reconciliacao (estornos abatem o historico). */
 export const SNAPSHOT_PLANEJAMENTO_SLICE_KEYS = [
   'documentos',
   'atendimentos',
   'atendimentoHistorico',
+  'atendimentoEstornoLog',
 ] as const;
 
 export type SnapshotSliceKey =

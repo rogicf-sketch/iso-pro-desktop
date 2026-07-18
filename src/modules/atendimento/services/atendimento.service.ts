@@ -1017,7 +1017,16 @@ function contarDocumentosDistintosItens(at: Atendimento): number {
 }
 
 /** Quando o mesmo lote existe em `atendimentos` e `atendimentoHistorico`, prefere o historico se tiver documentos por item mais fieis (mobile). */
-function devePreferirHistoricoAgrupado(fromArray: Atendimento, fromHistorico: Atendimento): boolean {
+function devePreferirHistoricoAgrupado(
+  fromArray: Atendimento,
+  fromHistorico: Atendimento,
+  lotesComEstorno: Set<string>,
+): boolean {
+  // Lote estornado (total ou parcial): o array e a verdade. As linhas antigas do historico ficam
+  // na nuvem (RPC append-only) e "ressuscitavam" o lote como concluido com os itens pre-estorno.
+  if (fromArray.status === 'estornado' || lotesComEstorno.has(String(fromArray.numero ?? '').trim())) {
+    return false;
+  }
   if (fromHistorico.itens.length > fromArray.itens.length) return true;
   const docsHist = contarDocumentosDistintosItens(fromHistorico);
   const docsArr = contarDocumentosDistintosItens(fromArray);
@@ -1048,6 +1057,11 @@ function chaveListaAtendimentoUnificada(a: Atendimento): string {
  */
 function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
   const porChave = new Map<string, Atendimento>();
+  const lotesComEstorno = new Set(
+    (payload.atendimentoEstornoLog ?? [])
+      .map((e) => String(e.loteNumero ?? '').trim())
+      .filter(Boolean),
+  );
   for (const a of mapAtendimentosFromSnapshotArray(payload)) {
     porChave.set(chaveListaAtendimentoUnificada(a), a);
   }
@@ -1056,7 +1070,7 @@ function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
     const existing = porChave.get(key);
     if (!existing) {
       porChave.set(key, a);
-    } else if (devePreferirHistoricoAgrupado(existing, a)) {
+    } else if (devePreferirHistoricoAgrupado(existing, a, lotesComEstorno)) {
       porChave.set(key, a);
     }
   }
