@@ -1408,7 +1408,7 @@ export function useAtendimento() {
     setSnapshotConflict(false);
     const numero = estornoAlvo.numero;
     let result: Awaited<ReturnType<typeof estornarAtendimento>>;
-    const ESTORNO_TIMEOUT_MS = 45_000;
+    const ESTORNO_TIMEOUT_MS = 90_000;
     try {
       result = await Promise.race([
         estornarAtendimento(estornoAlvo.id, linhas, {
@@ -1418,7 +1418,12 @@ export function useAtendimento() {
         }),
         new Promise<Awaited<ReturnType<typeof estornarAtendimento>>>((_, reject) => {
           setTimeout(
-            () => reject(new Error('O estorno demorou demais na nuvem. Feche o modal, Ctrl+F5 e tente de novo.')),
+            () =>
+              reject(
+                new Error(
+                  'O estorno demorou demais na nuvem. Feche o modal, aplique a migration de merge rapido no Supabase se ainda nao aplicou, Ctrl+F5 e tente de novo.',
+                ),
+              ),
             ESTORNO_TIMEOUT_MS,
           );
         }),
