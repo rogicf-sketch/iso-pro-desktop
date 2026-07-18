@@ -1,5 +1,8 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
-import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import {
+  avisarPreservacaoLocalStorageCorrupto,
+  notificarReparacaoLocalStorage,
+} from '../../../lib/localStoragePreservacao';
 import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { parseDocumentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
@@ -308,6 +311,7 @@ function readAll(): Documento[] {
 
 function writeAll(items: Documento[]) {
   localStorage.setItem(documentosStorageKey(), JSON.stringify(items));
+  notificarReparacaoLocalStorage(documentosStorageKey());
   invalidatePlanejamentoDocumentosBundle();
 }
 

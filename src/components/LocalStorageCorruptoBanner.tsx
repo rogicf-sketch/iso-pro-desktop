@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useState } from 'react';
 import {
   ISO_PRO_LOCAL_STORAGE_INVALIDO_EVENT,
   ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT,
+  repararLocalStorageCorrupto,
   type LocalStorageInvalidoDetail,
   type LocalStorageReparadoDetail,
 } from '@/lib/localStoragePreservacao';
@@ -11,6 +12,7 @@ type Item = LocalStorageInvalidoDetail & { id: string };
 
 export function LocalStorageCorruptoBanner() {
   const [items, setItems] = useState<Item[]>([]);
+  const [reparando, setReparando] = useState(false);
 
   const append = useCallback((detail: LocalStorageInvalidoDetail) => {
     if (!detail.storageKey?.trim()) return;
@@ -47,6 +49,24 @@ export function LocalStorageCorruptoBanner() {
     setItems([]);
   };
 
+  const repararERecarregar = (storageKey: string) => {
+    setReparando(true);
+    const ok = repararLocalStorageCorrupto(storageKey);
+    if (ok) {
+      window.location.reload();
+      return;
+    }
+    setReparando(false);
+  };
+
+  const repararTodosERecarregar = () => {
+    setReparando(true);
+    for (const item of items) {
+      repararLocalStorageCorrupto(item.storageKey);
+    }
+    window.location.reload();
+  };
+
   if (!items.length) return null;
 
   return (
@@ -57,14 +77,21 @@ export function LocalStorageCorruptoBanner() {
             <strong>Armazenamento local com problema</strong> — {item.modulo}
           </p>
           <p className="local-storage-invalid-banner-body">
-            A chave <code>{item.storageKey}</code> no navegador tem JSON ilegivel ou invalido. O valor bruto{' '}
-            <strong>nao foi substituido</strong> por dados de exemplo; este modulo pode mostrar lista vazia ou
-            valores por omissao ate recuperar backup ou corrigir os dados. Em caso de duvida, use Ferramentas de
-            programador (F12) → Application → Local Storage para inspecionar ou exportar a chave antes de alterar.
+            A chave <code>{item.storageKey}</code> no navegador tem JSON ilegivel ou invalido (cache local
+            corrompido — a nuvem continua intacta). O Planejamento pode mostrar lista vazia ou quantidades
+            antigas ate limpar esta chave e voltar a carregar da nuvem.
             {item.detalhe ? ` ${item.detalhe}` : ''}
           </p>
           <div className="local-storage-invalid-banner-actions">
-            <button type="button" className="ghost-button" onClick={() => dispensar(item.id)}>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={reparando}
+              onClick={() => repararERecarregar(item.storageKey)}
+            >
+              {reparando ? 'A reparar…' : 'Reparar com a nuvem'}
+            </button>
+            <button type="button" className="ghost-button" disabled={reparando} onClick={() => dispensar(item.id)}>
               Dispensar este aviso
             </button>
           </div>
@@ -72,8 +99,11 @@ export function LocalStorageCorruptoBanner() {
       ))}
       {items.length > 1 ? (
         <div className="local-storage-invalid-banner-actions">
-          <button type="button" className="ghost-button" onClick={dispensarTodos}>
-            Dispensar todos ({items.length})
+          <button type="button" className="primary-button" disabled={reparando} onClick={repararTodosERecarregar}>
+            Reparar todos e recarregar ({items.length})
+          </button>
+          <button type="button" className="ghost-button" disabled={reparando} onClick={dispensarTodos}>
+            Dispensar todos
           </button>
         </div>
       ) : null}

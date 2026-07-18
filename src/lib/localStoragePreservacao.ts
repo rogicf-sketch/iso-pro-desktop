@@ -36,3 +36,18 @@ export function notificarReparacaoLocalStorage(storageKey: string) {
   const detail: LocalStorageReparadoDetail = { storageKey };
   window.dispatchEvent(new CustomEvent(ISO_PRO_LOCAL_STORAGE_REPARADO_EVENT, { detail }));
 }
+
+/**
+ * Remove a chave local corrompida para o modulo voltar a hidratar a partir da nuvem.
+ * Nao inventa dados de exemplo — so apaga o JSON invalido.
+ */
+export function repararLocalStorageCorrupto(storageKey: string): boolean {
+  if (typeof window === 'undefined' || !storageKey.trim()) return false;
+  try {
+    localStorage.removeItem(storageKey);
+    notificarReparacaoLocalStorage(storageKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
