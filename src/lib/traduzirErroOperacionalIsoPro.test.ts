@@ -24,4 +24,11 @@ describe('traduzirErroOperacionalIsoPro', () => {
   it('traduz falhas de rede', () => {
     expect(traduzirErroOperacionalIsoPro('TypeError: Failed to fetch')).toBe(MSG_ERRO_LEITURA_NUVEM);
   });
+
+  it('traduz ISO_PRO_ATENDIMENTO_SEM_PROGRESSO de baixa e estorno', () => {
+    expect(traduzirErroOperacionalIsoPro('ISO_PRO_ATENDIMENTO_SEM_PROGRESSO')).toContain('baixa duplicada');
+    expect(
+      traduzirErroOperacionalIsoPro('ISO_PRO_ATENDIMENTO_SEM_PROGRESSO Estorno sem diminuicao'),
+    ).toContain('estornar');
+  });
 });

@@ -57,5 +57,20 @@ export function traduzirErroOperacionalIsoPro(message: string): string {
     return 'Acesso negado na nuvem. Verifique URL/chave Supabase em Configuracoes e permissoes da empresa.';
   }
 
+  if (lower.includes('iso_pro_atendimento_sem_progresso')) {
+    if (lower.includes('estorno') || lower.includes('diminuicao')) {
+      return 'Nao foi possivel estornar: o planejamento nao refletiu a devolucao. Recarregue a pagina e tente de novo.';
+    }
+    return 'Este atendimento nao alterou o planejamento (possivel baixa duplicada). Recarregue e confira as quantidades.';
+  }
+
+  if (lower.includes('iso_pro_atendimento_excede_planejado')) {
+    return 'Quantidade atendida maior que a prevista no desenho. Confira o planejamento e tente de novo.';
+  }
+
+  if (lower.includes('iso_pro_atendimento_excede_pendente')) {
+    return 'Quantidade maior que o saldo pendente deste material no desenho.';
+  }
+
   return m;
 }
