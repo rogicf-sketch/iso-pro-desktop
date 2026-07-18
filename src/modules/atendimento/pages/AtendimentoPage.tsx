@@ -18,7 +18,8 @@ import { AtendimentoSessaoRetiradaPanel } from '../components/AtendimentoSessaoR
 import { totalizarLinhas, useAtendimento } from '../hooks/useAtendimento';
 import type { Atendimento } from '../types/atendimento.types';
 import { montarHtmlRecibo, montarHtmlReciboConsolidado } from '../utils/imprimirReciboAtendimento';
-import { montarDadosReciboParaAtendimento } from '../utils/montarDadosReciboParaAtendimento';
+import { montarHtmlReciboEstorno } from '../utils/imprimirReciboEstorno';
+import { montarReciboVisualizarHistorico } from '../utils/montarReciboVisualizarHistorico';
 import { atendimentoTemVariosDocumentos } from '../utils/estornoDocumento.utils';
 
 export function AtendimentoPage() {
@@ -241,8 +242,26 @@ export function AtendimentoPage() {
   async function handleVerReciboHistorico(item: Atendimento) {
     setReciboHistoricoLoadingId(item.id);
     try {
-      const dados = await montarDadosReciboParaAtendimento(item);
-      const html = montarHtmlRecibo(dados);
+      const recibo = await montarReciboVisualizarHistorico(item);
+      if (recibo.tipo === 'estorno') {
+        const html = montarHtmlReciboEstorno(recibo.dados);
+        const res = await preVisualizarRelatorioProfissional({
+          html,
+          fileName: nomeArquivoRelatorioPdf(item.numero, 'recibo-estorno'),
+          titulo: `Recibo de estorno ${item.numero}`,
+          tipoNuvem: 'recibo_estorno',
+        });
+        if (!res.ok) {
+          setReciboAviso(
+            traduzirErroImpressaoIsoPro(
+              res.error ??
+                'Não foi possível abrir a pré-visualização do recibo de estorno.',
+            ),
+          );
+        }
+        return;
+      }
+      const html = montarHtmlRecibo(recibo.dados);
       const res = await preVisualizarRelatorioProfissional({
         html,
         fileName: nomeArquivoRelatorioPdf(item.numero, 'recibo'),

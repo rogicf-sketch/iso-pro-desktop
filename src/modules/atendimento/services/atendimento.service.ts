@@ -317,6 +317,35 @@ async function carregarEstornoLog(): Promise<EstornoLogRegistro[]> {
   return readJson<EstornoLogRegistro>(estornoLogStorageKey());
 }
 
+/** Linhas do log de estorno de um lote (recibo / Total na lista apos estorno total). */
+export async function listarEstornoLogDoLote(loteNumero: string): Promise<EstornoLogRegistro[]> {
+  const n = String(loteNumero ?? '').trim();
+  if (!n) return [];
+  const all = await carregarEstornoLog();
+  return all.filter((e) => String(e.loteNumero ?? '').trim() === n);
+}
+
+function itensFromEstornoLogEntries(
+  entries: NonNullable<SnapshotPayload['atendimentoEstornoLog']>,
+  loteNumero: string,
+): AtendimentoItem[] {
+  const n = String(loteNumero ?? '').trim();
+  return entries
+    .filter((e) => String(e.loteNumero ?? '').trim() === n)
+    .map((e, index) => ({
+      id: String(e.atendimentoItemId ?? e.id ?? `est-item-${index}`),
+      documentoItemId: '',
+      materialId: null,
+      codigoMaterial: String(e.codigoMaterial ?? ''),
+      descricaoMaterial: String(e.descricaoMaterial ?? ''),
+      unidade: String(e.unidade ?? 'UN'),
+      quantidadeAtendida: Number(e.quantidadeEstornada ?? 0) || 0,
+      quantidadeRetiradaOriginal:
+        Number(e.quantidadeRetiradaOriginal ?? e.quantidadeEstornada ?? 0) || 0,
+      documentoNumero: String(e.documentoNumero ?? ''),
+    }));
+}
+
 /** Mescla lotes do snapshot remoto (mobile/web) com o cache local do desktop. */
 function mergeAtendimentosHistorico(local: Atendimento[], remote: Atendimento[]): Atendimento[] {
   const porNumero = new Map<string, Atendimento>();
@@ -1057,10 +1086,9 @@ function chaveListaAtendimentoUnificada(a: Atendimento): string {
  */
 function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
   const porChave = new Map<string, Atendimento>();
+  const estornoLog = payload.atendimentoEstornoLog ?? [];
   const lotesComEstorno = new Set(
-    (payload.atendimentoEstornoLog ?? [])
-      .map((e) => String(e.loteNumero ?? '').trim())
-      .filter(Boolean),
+    estornoLog.map((e) => String(e.loteNumero ?? '').trim()).filter(Boolean),
   );
   for (const a of mapAtendimentosFromSnapshotArray(payload)) {
     porChave.set(chaveListaAtendimentoUnificada(a), a);
@@ -1073,6 +1101,13 @@ function mapSnapshotAtendimentos(payload: SnapshotPayload): Atendimento[] {
     } else if (devePreferirHistoricoAgrupado(existing, a, lotesComEstorno)) {
       porChave.set(key, a);
     }
+  }
+  // Estorno total limpa itens[]; o log guarda o que foi devolvido — restaura so para lista/recibo.
+  for (const a of porChave.values()) {
+    if (a.itens.length > 0) continue;
+    if (a.status !== 'estornado' && !lotesComEstorno.has(String(a.numero ?? '').trim())) continue;
+    const fromLog = itensFromEstornoLogEntries(estornoLog, a.numero);
+    if (fromLog.length) a.itens = fromLog;
   }
   return Array.from(porChave.values()).sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
