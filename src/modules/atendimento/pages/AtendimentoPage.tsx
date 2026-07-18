@@ -80,6 +80,7 @@ export function AtendimentoPage() {
     fecharModalEstorno,
     executarImpressaoReciboEstorno,
     confirmarEstornoFinal,
+    estornoConfirmando,
     iniciarEstorno,
     estornoLinhas,
     setEstornoLinhas,
@@ -762,20 +763,30 @@ export function AtendimentoPage() {
                   </div>
                 </div>
 
+                {error ? <div className="error-box">{error}</div> : null}
+                {estornoConfirmando ? (
+                  <OperationalNotice>A gravar o estorno na nuvem… aguarde, pode levar alguns segundos.</OperationalNotice>
+                ) : null}
                 <div className="form-actions" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
-                  <Button onClick={fecharModalEstorno} type="button" variant="ghost">
+                  <Button disabled={estornoConfirmando} onClick={fecharModalEstorno} type="button" variant="ghost">
                     Cancelar
                   </Button>
                   <Button
-                    disabled={reciboImprimindo}
+                    disabled={reciboImprimindo || estornoConfirmando}
                     onClick={() => void executarImpressaoReciboEstorno()}
                     type="button"
                     variant="ghost"
                   >
                     {reciboImprimindo ? 'A gerar PDF…' : 'Imprimir recibo de estorno'}
                   </Button>
-                  <Button onClick={() => void confirmarEstornoFinal()} ref={estornoConfirmarRef} type="button" variant="danger">
-                    Confirmar estorno
+                  <Button
+                    disabled={estornoConfirmando}
+                    onClick={() => void confirmarEstornoFinal()}
+                    ref={estornoConfirmarRef}
+                    type="button"
+                    variant="danger"
+                  >
+                    {estornoConfirmando ? 'A estornar…' : 'Confirmar estorno'}
                   </Button>
                 </div>
               </>

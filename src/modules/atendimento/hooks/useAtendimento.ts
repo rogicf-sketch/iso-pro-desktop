@@ -297,6 +297,8 @@ export function useAtendimento() {
   const [estornoMotivo, setEstornoMotivo] = useState('');
   /** Por item do lote: incluido no estorno e quantidade a devolver (<= ao registrado no lote). */
   const [estornoLinhas, setEstornoLinhas] = useState<Record<string, { marcado: boolean; quantidade: number }>>({});
+  /** Estorno em gravacao na nuvem (desativa o botao Confirmar e mostra progresso). */
+  const [estornoConfirmando, setEstornoConfirmando] = useState(false);
   const [estornoDuplicadosAviso, setEstornoDuplicadosAviso] = useState<AvisoLoteDuplicadoMaterial[]>([]);
 
   /**
@@ -1379,11 +1381,12 @@ export function useAtendimento() {
   }
 
   async function confirmarEstornoFinal() {
-    if (!estornoAlvo) return;
+    if (!estornoAlvo || estornoConfirmando) return;
     setError('');
     if (!validarCamposEstorno()) return;
     const linhas = montarLinhasEstornoRequest();
     let dadosRecibo: DadosReciboEstorno;
+    setEstornoConfirmando(true);
     try {
       dadosRecibo = await montarDadosReciboEstorno(
         estornoAlvo,
@@ -1396,17 +1399,29 @@ export function useAtendimento() {
         indicarEstornoParcial(linhas),
       );
     } catch {
+      setEstornoConfirmando(false);
       setError('Nao foi possivel montar o recibo de estorno.');
       return;
     }
 
     setSnapshotConflict(false);
     const numero = estornoAlvo.numero;
-    const result = await estornarAtendimento(estornoAlvo.id, linhas, {
-      nomeQuemEstorna: estornoNomeQuemEstorna,
-      nomeQuemDevolve: estornoNomeQuemDevolve,
-      motivoEstorno: estornoMotivo,
-    });
+    let result: Awaited<ReturnType<typeof estornarAtendimento>>;
+    try {
+      result = await estornarAtendimento(estornoAlvo.id, linhas, {
+        nomeQuemEstorna: estornoNomeQuemEstorna,
+        nomeQuemDevolve: estornoNomeQuemDevolve,
+        motivoEstorno: estornoMotivo,
+      });
+    } catch (err) {
+      // Falha inesperada (fora do ServiceResult): sem isto o botao parecia "sem acao".
+      result = {
+        success: false,
+        error: err instanceof Error && err.message ? err.message : 'Nao foi possivel estornar o atendimento.',
+      };
+    } finally {
+      setEstornoConfirmando(false);
+    }
     if (!result.success) {
       setError(result.error ?? 'Nao foi possivel estornar o atendimento.');
       setSnapshotConflict(result.meta?.snapshotConflict === true);
@@ -1486,6 +1501,7 @@ export function useAtendimento() {
     fecharModalEstorno,
     executarImpressaoReciboEstorno,
     confirmarEstornoFinal,
+    estornoConfirmando,
     iniciarEstorno,
     estornoLinhas,
     setEstornoLinhas,
