@@ -69,15 +69,16 @@ Validação no SQL Editor: abrir e executar `supabase/snippets/validar_rls_escal
 
 Sem DSN o app **não quebra** — só deixa de enviar alertas externos.
 
-**Decisão 2026-07-11:** release actual **sem DSN** (`VITE_SENTRY_DSN` / `EXPO_PUBLIC_SENTRY_DSN` ausentes no `.env` local e `deploy-web.env`). Código + eventos `iso.*` prontos; activar quando houver projecto Sentry.
+**Decisão 2026-07-11:** release sem DSN no momento.  
+**Actualização 2026-07-18:** projecto Sentry `iso-pro-desktop` a receber eventos (`iso.auth_path`, `iso.mfa_challenge`, `iso.sentry_smoke_test`). DSN activo no build em produção.
 
 | # | Passo | OK? | Data |
 |---|-------|-----|------|
-| 2.1 | Criar projecto Sentry (ou reutilizar) para I.S.O PRO | [ ] | adiado |
-| 2.2 | Desktop/web: definir `VITE_SENTRY_DSN` no `.env` de build / EAS secrets / hosting | [ ] | adiado |
-| 2.3 | Mobile: definir `EXPO_PUBLIC_SENTRY_DSN` no `.env` / EAS | [ ] | adiado |
-| 2.4 | Rebuild PC/web + APK/IPA com o DSN | [ ] | adiado |
-| 2.5 | Smoke: forçar um erro de teste **só em staging** e ver evento no Sentry | [ ] | adiado |
+| 2.1 | Criar projecto Sentry (ou reutilizar) para I.S.O PRO | [x] | 2026-07 (~iso-pro-desktop) |
+| 2.2 | Desktop/web: definir `VITE_SENTRY_DSN` no `.env` de build / hosting | [x] | eventos a chegar |
+| 2.3 | Mobile: definir `EXPO_PUBLIC_SENTRY_DSN` no `.env` / EAS | [x] | `iso.auth_path` com client mobile |
+| 2.4 | Rebuild PC/web + APK/IPA com o DSN | [x] | 0.1.9x / 1.0.61+ |
+| 2.5 | Smoke: evento de teste / operacional no Sentry | [x] | `iso.sentry_smoke_test` + auth/MFA |
 | 2.6 | Alertas Sentry: filtrar por mensagem `iso.snapshot_conflict`, `iso.dual_write_failure`, `iso.offline_flush` | [ ] | adiado |
 
 Eventos esperados (quando DSN activo):

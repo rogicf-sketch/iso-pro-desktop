@@ -1,6 +1,6 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
-import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { readRemoteOrLocal, REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
@@ -379,6 +379,10 @@ async function carregarRecebimentosBaseParaLeitura(): Promise<{
       return dedupeRecebimentosPorChaveNegocio(await readSnapshotRecebimentos());
     },
     loadLocal: () => dedupeRecebimentosPorChaveNegocio(readAll()),
+    // Sem corrida de 450ms: esta leitura alimenta metricas/localizacoes do planejamento e
+    // conciliacoes. Num browser novo a copia local esta vazia — servir local "por rapidez"
+    // fazia a folha de campo mostrar "—" nas localizacoes (18/07/2026).
+    preferMs: REMOTE_READ_TIMEOUT_MS,
     fallbackMessage: 'Falha ao consultar recebimentos no Supabase.',
   });
   return { data: fallback.data, meta: fallback.meta };

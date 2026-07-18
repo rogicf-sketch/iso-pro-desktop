@@ -3,7 +3,7 @@ import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStorage
 import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { parseDocumentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { readRemoteOrLocal, REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   contarRegistosArrayLocalStorage,
@@ -315,6 +315,10 @@ async function loadDocumentos(): Promise<Documento[]> {
   const base = await readRemoteOrLocal({
     readRemote: readSnapshotDocumentos,
     readLocal: readAll,
+    // Sem corrida de 450ms aqui: este caminho alimenta baselines de gravacao e o bundle de
+    // visualizacao/folha de campo. Num browser novo a copia local esta vazia e "ganhar a corrida"
+    // esconderia desenhos/localizacoes reais da nuvem (regressao vista em 18/07/2026).
+    preferMs: REMOTE_READ_TIMEOUT_MS,
   });
   return persistirLimpezaItensSemCadastroMaterial(base);
 }
