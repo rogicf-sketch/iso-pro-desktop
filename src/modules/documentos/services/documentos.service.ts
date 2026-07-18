@@ -674,14 +674,18 @@ async function writeSnapshotDocumentos(
   });
 
   // Dual-write Fase B: tabelas dedicadas em lotes (falha visível no painel se persistir).
+  // Inclui status derivado (prevista global por codigo) — a lista paginada le a coluna status.
   await runDualWriteBestEffort('documentos', async () => {
-    const documentosWire = items.map((item) => ({
+    const recebimentos = await carregarRecebimentosCompletos();
+    const comStatus = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
+    const documentosWire = comStatus.map((item) => ({
       id: item.id,
       numero: item.numero,
       revisao: item.revisao,
       data: item.dataDocumento,
       descricao: item.descricao,
       responsavel: item.responsavel,
+      status: item.status,
       itens: item.itens.map((docItem) => ({
         id: docItem.id,
         codigo: docItem.codigoMaterial,
