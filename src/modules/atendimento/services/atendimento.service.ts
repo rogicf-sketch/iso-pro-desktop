@@ -2328,7 +2328,29 @@ export async function estornarAtendimento(
   for (const entry of estornoLogAppend) {
     entry.estornoParcialLote = novoStatus === 'concluido';
   }
-  atendimentos[atendimentoIndex] = { ...atendimento, itens: workingItems, status: novoStatus };
+  const atendimentoAtualizado: Atendimento = {
+    ...atendimento,
+    itens: workingItems,
+    status: novoStatus,
+  };
+  atendimentos[atendimentoIndex] = atendimentoAtualizado;
+
+  // Nunca substituir a lista local pela fatia da nuvem (ex.: 16 na nuvem vs 40 no PC).
+  // O comando remoto ja e patch por id; o local so atualiza o lote + docs alterados.
+  const atendimentosParaLocal = (() => {
+    const base = [...localState.atendimentos];
+    let idx = base.findIndex((item) => item.id === atendimentoAtualizado.id);
+    if (idx === -1) {
+      idx = base.findIndex(
+        (item) => String(item.numero ?? '') === String(atendimentoAtualizado.numero ?? ''),
+      );
+    }
+    if (idx === -1) base.push(atendimentoAtualizado);
+    else base[idx] = atendimentoAtualizado;
+    return base;
+  })();
+  // Overlay dos desenhos do lote (com qAt ja revertida) sobre a lista local completa.
+  const documentosParaLocal = mesclarDocumentosLocaisComRemotos(localState.documentos, documentos);
 
   const appendEstornoLogLocal = () => {
     if (!estornoLogAppend.length) return;
@@ -2338,9 +2360,9 @@ export async function estornarAtendimento(
 
   if (remoteState) {
     const bloqueioEstorno = bloqueioLocalChavesAtendimento({
-      documentosLength: documentos.length,
+      documentosLength: documentosParaLocal.length,
       materiaisLength: materiais.length,
-      atendimentosLength: atendimentos.length,
+      atendimentosLength: atendimentosParaLocal.length,
     });
     if (bloqueioEstorno) return { success: false, error: bloqueioEstorno };
     return executeWrite({
@@ -2348,24 +2370,24 @@ export async function estornarAtendimento(
       writeRemote: () =>
         writeSnapshotAtendimentoPatch({
           documentos: documentosPatch,
-          atendimentos: [atendimentos[atendimentoIndex]],
+          atendimentos: [atendimentoAtualizado],
           estornoLogAppend,
         }),
       writeLocal: () => {
-        writeJson(documentosKeyAtendimento(), documentos);
+        writeJson(documentosKeyAtendimento(), documentosParaLocal);
         writeJson(materiaisKeyAtendimento(), materiais);
-        writeJson(atendimentosStorageKey(), atendimentos);
+        writeJson(atendimentosStorageKey(), atendimentosParaLocal);
         appendEstornoLogLocal();
       },
-      successData: atendimentos[atendimentoIndex],
+      successData: atendimentoAtualizado,
       fallbackMessage: 'Falha ao estornar atendimento no Supabase.',
     });
   }
   const blockedEstorno = whenBusinessWriteBlockedResult<Atendimento>();
   if (blockedEstorno) return blockedEstorno;
-  writeJson(documentosKeyAtendimento(), documentos);
+  writeJson(documentosKeyAtendimento(), documentosParaLocal);
   writeJson(materiaisKeyAtendimento(), materiais);
-  writeJson(atendimentosStorageKey(), atendimentos);
+  writeJson(atendimentosStorageKey(), atendimentosParaLocal);
   appendEstornoLogLocal();
-  return { success: true, data: atendimentos[atendimentoIndex], meta: { source: 'local' } };
+  return { success: true, data: atendimentoAtualizado, meta: { source: 'local' } };
 }

@@ -979,6 +979,106 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
     expect(atendimentos.find((a) => a.id === 'atd-est-1')?.status).toBe('estornado');
   });
 
+  it('estorno com mais atendimentos no PC do que na nuvem nao bloqueia nem apaga a lista local', async () => {
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    const extras = Array.from({ length: 39 }, (_, i) => ({
+      id: `atd-local-${i}`,
+      numero: `ATD-LOCAL-${i}`,
+      documentoId: 'doc-x',
+      documentoNumero: 'DX',
+      atendente: 'X',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: 'Local',
+      recebedorEmpresa: '',
+      recebedorDocumento: '',
+      recebedorTelefone: '',
+      autorizadorInterno: '',
+      motivoRetirada: '',
+      origem: 'windows',
+      status: 'concluido',
+      dataAtendimento: '2026-04-01T10:00:00.000Z',
+      itens: [],
+    }));
+    const alvo = {
+      id: 'atd-est-1',
+      numero: 'ATD-EST-1',
+      documentoId: 'doc-est',
+      documentoNumero: 'DE1',
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: 'Joao Interno',
+      recebedorEmpresa: 'Empresa X',
+      recebedorDocumento: '123',
+      recebedorTelefone: '11987654321',
+      autorizadorInterno: '',
+      motivoRetirada: '',
+      origem: 'windows',
+      status: 'concluido',
+      dataAtendimento: '2026-04-01T12:00:00.000Z',
+      itens: [
+        {
+          id: 'lote-item-1',
+          documentoItemId: 'doc-est-item-1',
+          materialId: 'mat-1',
+          codigoMaterial: 'M1',
+          descricaoMaterial: 'Material 1',
+          unidade: 'UN',
+          quantidadeAtendida: 5,
+        },
+      ],
+    };
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([
+      {
+        id: 'doc-est',
+        numero: 'DE1',
+        revisao: 'A',
+        descricao: 'Doc estorno',
+        responsavel: 'Resp',
+        status: 'parcial',
+        itens: [
+          {
+            id: 'doc-est-item-1',
+            codigoMaterial: 'M1',
+            descricaoMaterial: 'Material 1',
+            unidade: 'UN',
+            quantidadeProjeto: 10,
+            quantidadeAtendida: 5,
+          },
+        ],
+      },
+      { id: 'doc-local-only', numero: 'LOCAL-ONLY', itens: [] },
+    ]);
+    store[MATERIAIS_KEY] = JSON.stringify([
+      { id: 'mat-1', codigo: 'M1', descricao: 'Material 1', unidade: 'UN', saldoAtual: 95 },
+    ]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([...extras, alvo]);
+
+    const result = await estornarAtendimento('atd-est-1', undefined, {
+      nomeQuemEstorna: 'Admin',
+      nomeQuemDevolve: 'Joao',
+      motivoEstorno: 'PC tem mais lotes que a fatia da nuvem',
+      atendimentoSnapshot: alvo as Atendimento,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(String(result.error ?? '')).not.toMatch(/armazenamento deste navegador/i);
+
+    const atendimentos = JSON.parse(store[ATENDIMENTOS_KEY] ?? '[]') as Array<{ id: string; status: string }>;
+    expect(atendimentos).toHaveLength(40);
+    expect(atendimentos.filter((a) => a.id.startsWith('atd-local-'))).toHaveLength(39);
+    expect(atendimentos.find((a) => a.id === 'atd-est-1')?.status).toBe('estornado');
+
+    const documentos = JSON.parse(store[DOCUMENTOS_KEY] ?? '[]') as Array<{ id: string }>;
+    expect(documentos.some((d) => d.id === 'doc-local-only')).toBe(true);
+  });
+
   it('estorno parcial mantem lote concluido e ajusta apenas itens selecionados', async () => {
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
