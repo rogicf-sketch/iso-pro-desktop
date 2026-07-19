@@ -249,6 +249,7 @@ export function DocumentoItensEditor({ items, onChange, metricasPorCodigo }: Pro
               onQueryChange={aoDigitarCodigo}
               options={materiaisOpcoes}
               placeholder="Digite codigo ou cole do cadastro"
+              selectedShowsValueOnly
               value={rascunho.codigoMaterial}
             />
             <Input

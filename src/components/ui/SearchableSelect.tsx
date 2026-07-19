@@ -12,22 +12,38 @@ type Props = {
   onQueryChange?: (query: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  /**
+   * Quando `true`, após escolher uma opção o campo mostra apenas o `value` (ex.: código),
+   * mas a lista suspensa continua a mostrar o `label` completo (código + descrição) para pesquisa.
+   */
+  selectedShowsValueOnly?: boolean;
 };
 
-export function SearchableSelect({ label, value, options, onChange, onQueryChange, placeholder, disabled }: Props) {
+export function SearchableSelect({
+  label,
+  value,
+  options,
+  onChange,
+  onQueryChange,
+  placeholder,
+  disabled,
+  selectedShowsValueOnly = false,
+}: Props) {
   const reactId = useId();
   const listId = `${reactId}-list`;
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const selected = options.find((o) => o.value === value);
   const selectedLabel = selected?.label ?? '';
+  const displayFor = (o: SearchableSelectOption) => (selectedShowsValueOnly ? o.value : o.label);
+  const selectedDisplay = selected ? displayFor(selected) : '';
 
-  const [query, setQuery] = useState(selected?.label ?? '');
+  const [query, setQuery] = useState(selectedDisplay);
   const syncKey = `${value}\u0001${selectedLabel}`;
   const [prevSyncKey, setPrevSyncKey] = useState(syncKey);
   if (syncKey !== prevSyncKey) {
     setPrevSyncKey(syncKey);
-    setQuery(selectedLabel);
+    setQuery(selectedDisplay);
   }
 
   const [open, setOpen] = useState(false);
@@ -75,7 +91,7 @@ export function SearchableSelect({ label, value, options, onChange, onQueryChang
 
   function pick(o: SearchableSelectOption) {
     onChange(o.value);
-    setQuery(o.label);
+    setQuery(displayFor(o));
     setOpen(false);
     setHighlight(-1);
   }
@@ -92,13 +108,15 @@ export function SearchableSelect({ label, value, options, onChange, onQueryChang
     window.setTimeout(() => {
       setOpen(false);
       const t = query.trim().toLowerCase();
-      const exact = options.find((o) => o.label.trim().toLowerCase() === t);
+      const exact = options.find(
+        (o) => o.label.trim().toLowerCase() === t || o.value.trim().toLowerCase() === t,
+      );
       if (exact) {
         if (value !== exact.value) onChange(exact.value);
-        setQuery(exact.label);
+        setQuery(displayFor(exact));
         return;
       }
-      if (value && selected) setQuery(selected.label);
+      if (value && selected) setQuery(displayFor(selected));
     }, 160);
   }
 
