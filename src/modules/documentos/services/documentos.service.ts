@@ -290,9 +290,12 @@ function deriveStatusSnapshot(doc: DocumentoFormData): Documento['status'] {
 }
 
 function readAll(): Documento[] {
-  const raw = localStorage.getItem(documentosStorageKey());
+  const key = documentosStorageKey();
+  const raw = localStorage.getItem(key);
   if (!raw) {
-    localStorage.setItem(documentosStorageKey(), JSON.stringify(seedData));
+    // Com nuvem: lista vazia local — a hidratação vem do snapshot (evita seed de demo na obra).
+    if (hasSupabaseConfig()) return [];
+    localStorage.setItem(key, JSON.stringify(seedData));
     return seedData;
   }
 
@@ -300,19 +303,61 @@ function readAll(): Documento[] {
     const parsed: unknown = JSON.parse(raw);
     const validated = parseDocumentosPersistidos(parsed);
     if (!validated) {
-      avisarPreservacaoLocalStorageCorrupto('Documentos (planejamento)', documentosStorageKey());
+      // Auto-limpa a chave inválida para o aviso não voltar em loop a cada F5.
+      try {
+        localStorage.removeItem(key);
+        notificarReparacaoLocalStorage(key);
+        console.warn(
+          `[I.S.O PRO] Documentos (planejamento) — cache local inválido em "${key}" foi limpo automaticamente. A lista volta da nuvem.`,
+        );
+      } catch {
+        avisarPreservacaoLocalStorageCorrupto(
+          'Documentos (planejamento)',
+          key,
+          'Não foi possível limpar o cache local automaticamente.',
+        );
+      }
       return [];
     }
     return validated;
   } catch {
-    avisarPreservacaoLocalStorageCorrupto('Documentos (planejamento)', documentosStorageKey());
+    try {
+      localStorage.removeItem(key);
+      notificarReparacaoLocalStorage(key);
+      console.warn(
+        `[I.S.O PRO] Documentos (planejamento) — JSON ilegível em "${key}" foi limpo automaticamente.`,
+      );
+    } catch {
+      avisarPreservacaoLocalStorageCorrupto('Documentos (planejamento)', key);
+    }
     return [];
   }
 }
 
 function writeAll(items: Documento[]) {
-  localStorage.setItem(documentosStorageKey(), JSON.stringify(items));
-  notificarReparacaoLocalStorage(documentosStorageKey());
+  const key = documentosStorageKey();
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+    notificarReparacaoLocalStorage(key);
+  } catch (err) {
+    // Obra com milhares de desenhos: quota ~5 MB do browser. Não deixar lixo — SoT é a nuvem.
+    const isQuota =
+      err instanceof DOMException &&
+      (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+    notificarReparacaoLocalStorage(key);
+    if (!isQuota) {
+      console.warn('[I.S.O PRO] Falha ao gravar documentos no localStorage:', err);
+    } else {
+      console.warn(
+        '[I.S.O PRO] Cache local de documentos demasiado grande (quota). A operar só com a nuvem neste browser.',
+      );
+    }
+  }
   invalidatePlanejamentoDocumentosBundle();
 }
 
