@@ -2359,12 +2359,9 @@ export async function estornarAtendimento(
   };
 
   if (remoteState) {
-    const bloqueioEstorno = bloqueioLocalChavesAtendimento({
-      documentosLength: documentosParaLocal.length,
-      materiaisLength: materiais.length,
-      atendimentosLength: atendimentosParaLocal.length,
-    });
-    if (bloqueioEstorno) return { success: false, error: bloqueioEstorno };
+    // Estorno e patch delta (1 lote + docs alterados + log). Nao aplicar o guarda de
+    // "substituicao de lista completa" — ele compara localStorage com a fatia da nuvem
+    // e bloqueava estornos validos (ex.: 40 no PC vs 15 em atendimentos[]).
     return executeWrite({
       shouldWriteRemote: true,
       writeRemote: () =>
