@@ -66,6 +66,9 @@ export async function readRemoteOrLocal<T>(options: {
   const preferMs = options.preferMs ?? REMOTE_READ_PREFER_MS;
   const timeoutMs = options.timeoutMs ?? REMOTE_READ_TIMEOUT_MS;
   const localPromise = Promise.resolve().then(() => options.readLocal());
+  // Se o remoto vencer a corrida, a promise local pode rejeitar mais tarde sem ninguem
+  // a aguardar — marca como tratada para nao gerar unhandled rejection.
+  localPromise.catch(() => undefined);
   const remotePromise = withRemoteReadTimeout(options.readRemote, timeoutMs)
     .then((data): RemoteRaceOk<T> => ({ kind: 'ok', data }))
     .catch((error: unknown): RemoteRaceErr => ({ kind: 'err', error }));
