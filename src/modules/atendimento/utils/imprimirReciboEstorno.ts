@@ -20,10 +20,10 @@ function totalQuantidadeEstorno(dados: DadosReciboEstorno): number {
 function cssReciboEstornoExtra(): string {
   return `
     .recibo-estorno-badge {
-      margin: 0 0 16px;
-      padding: 10px 14px;
-      font-size: 10pt;
-      line-height: 1.45;
+      margin: 0 0 10px;
+      padding: 7px 12px;
+      font-size: 9.5pt;
+      line-height: 1.35;
       color: #334155;
       background: linear-gradient(90deg, #fff7ed 0%, #f8fafc 100%);
       border: 1px solid #fed7aa;
@@ -32,23 +32,36 @@ function cssReciboEstornoExtra(): string {
     }
     .recibo-estorno-badge strong { color: #c2410c; font-weight: 700; }
     .recibo-estorno-motivo {
-      margin: 0 0 16px;
-      padding: 12px 14px;
-      font-size: 10pt;
-      line-height: 1.45;
+      margin: 0 0 10px;
+      padding: 8px 12px;
+      font-size: 9.5pt;
+      line-height: 1.4;
       color: #334155;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
-      border-radius: 10px;
+      border-left: 4px solid #94a3b8;
+      border-radius: 8px;
       white-space: pre-wrap;
     }
-    .recibo-estorno-motivo strong { display: block; margin-bottom: 6px; color: #475569; }
+    .recibo-estorno-motivo strong { color: #475569; font-weight: 700; }
     .recibo-tabela-itens .col-doc { width: 14%; font-size: 9pt; }
     @media print {
       .recibo-estorno-badge,
       .recibo-estorno-motivo {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
+      }
+      /* Estorno compacto: cabe em 1 folha para lotes pequenos. */
+      .recibo-estorno-motivo {
+        margin: 0 0 6px !important;
+        padding: 6px 10px !important;
+        font-size: 9pt !important;
+        border-radius: 6px !important;
+      }
+      .recibo-estorno-badge {
+        margin: 0 0 6px !important;
+        padding: 5px 10px !important;
+        font-size: 8.5pt !important;
       }
     }
   `;
@@ -127,35 +140,22 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
     <div class="grid2">
       <p><strong>Documento:</strong> ${docTitulo}</p>
       <p><strong>Responsavel (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel || '—')}</p>
-    </div>
-    <div class="recibo-doc-desc">
-      <strong>Descricao do documento</strong>
-      <p style="margin: 6px 0 0">${escapeHtmlRelatorio(dados.documentoDescricao || '—')}</p>
-    </div>
-  </section>
-
-  <section class="bloco recibo-bloco-info">
-    <h2>Atendimento original (referencia)</h2>
-    <div class="grid2">
       <p><strong>Lote / atendimento:</strong> ${escapeHtmlRelatorio(at.numero)}</p>
       <p><strong>Data da retirada:</strong> ${escapeHtmlRelatorio(dataAtendFmt)}</p>
       <p><strong>Atendente (retirada):</strong> ${escapeHtmlRelatorio(at.atendente)}</p>
       <p><strong>Recebedor (retirada):</strong> ${escapeHtmlRelatorio(at.recebedor)}${at.recebedorTipo === 'externo' && at.recebedorEmpresa ? ` — ${escapeHtmlRelatorio(at.recebedorEmpresa)}` : ''}</p>
+      <p><strong>Quem registrou o estorno:</strong> ${escapeHtmlRelatorio(dados.nomeQuemEstorna || '—')}</p>
+      <p><strong>Quem devolve o material:</strong> ${escapeHtmlRelatorio(dados.nomeQuemDevolve || '—')}</p>
+    </div>
+    <div class="recibo-doc-desc">
+      <strong>Descricao do documento</strong>
+      <p style="margin: 4px 0 0">${escapeHtmlRelatorio(dados.documentoDescricao || '—')}</p>
     </div>
   </section>
 
   <div class="recibo-estorno-motivo">
-    <strong>Motivo do estorno</strong>
-    ${escapeHtmlRelatorio(dados.motivoEstorno)}
+    <strong>Motivo do estorno:</strong> ${escapeHtmlRelatorio(dados.motivoEstorno || '—')}
   </div>
-
-  <section class="bloco recibo-bloco-info">
-    <h2>Registro do estorno</h2>
-    <div class="grid2">
-      <p><strong>Quem registrou o estorno:</strong> ${escapeHtmlRelatorio(dados.nomeQuemEstorna)}</p>
-      <p><strong>Quem devolve o material:</strong> ${escapeHtmlRelatorio(dados.nomeQuemDevolve)}</p>
-    </div>
-  </section>
 
   ${avisoParcial}
 
