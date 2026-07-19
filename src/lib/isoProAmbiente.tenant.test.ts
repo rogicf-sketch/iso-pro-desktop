@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getScopedIsoProStorageKey,
   getScopedIsoProStorageKeyForAmbienteIdAndTenant,
@@ -52,11 +52,14 @@ describe('isoProAmbiente / isolamento por tenant', () => {
     expect(isStorageKeyForAmbienteAtivo(keyDefault)).toBe(false);
   });
 
-  it('setActiveTenantId grava tenant activo para chaves scoped', () => {
+  it('setActiveTenantId grava tenant activo para chaves scoped', async () => {
     setActiveTenantId(UUID_B);
     expect(
       JSON.parse(localStorage.getItem(ISO_PRO_TENANT_CONTEXT_STORAGE_KEY)!).activeTenantId,
     ).toBe(UUID_B);
     expect(getScopedIsoProStorageKey(BASE)).toBe(`${BASE}::tenant:${UUID_B}`);
+    // setActiveTenantId dispara imports dinamicos (jwt session / snapshot cache);
+    // aguardar evita EnvironmentTeardownError no CI (import apos teardown do jsdom).
+    await vi.dynamicImportSettled();
   });
 });

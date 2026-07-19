@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ISO_PRO_DEFAULT_TENANT_ID,
   ISO_PRO_TENANT_CONTEXT_STORAGE_KEY,
@@ -47,10 +47,13 @@ describe('isoProTenant', () => {
     expect(getActiveTenantId()).toBe(ISO_PRO_DEFAULT_TENANT_ID);
   });
 
-  it('grava tenant valido', () => {
+  it('grava tenant valido', async () => {
     setActiveTenantId(UUID_B);
     expect(getActiveTenantId()).toBe(UUID_B);
     const raw = JSON.parse(localStorage.getItem(ISO_PRO_TENANT_CONTEXT_STORAGE_KEY)!);
     expect(raw).toEqual({ version: 1, activeTenantId: UUID_B });
+    // setActiveTenantId dispara imports dinamicos; aguardar evita
+    // EnvironmentTeardownError no CI (import apos teardown do jsdom).
+    await vi.dynamicImportSettled();
   });
 });
