@@ -5,7 +5,11 @@ import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { formatDecimalExcelPtBr } from '../../../lib/csv';
-import { listarMateriaisCriticosEstoque, type MaterialEstoqueCritico } from '../services/materiaisEstoqueCritico.service';
+import {
+  listarMateriaisCriticosEstoque,
+  montarExportacaoMateriaisCriticosCsv,
+  type MaterialEstoqueCritico,
+} from '../services/materiaisEstoqueCritico.service';
 
 export function MaterialEstoqueCriticoPanel() {
   const [loading, setLoading] = useState(true);
@@ -31,6 +35,16 @@ export function MaterialEstoqueCriticoPanel() {
 
   const criticos = items.filter((i) => i.severidade === 'critical').length;
 
+  const exportarExcel = useCallback(() => {
+    const { csv, fileName } = montarExportacaoMateriaisCriticosCsv(items);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [items]);
+
   return (
     <div className="materiais-criticos">
       <ModuleHelp>
@@ -45,6 +59,15 @@ export function MaterialEstoqueCriticoPanel() {
       <div className="materiais-consulta__search-actions" style={{ marginBottom: 16 }}>
         <Button disabled={loading} onClick={() => void load()} type="button" variant="ghost">
           {loading ? 'Atualizando...' : 'Atualizar lista'}
+        </Button>
+        <Button
+          disabled={loading || items.length === 0}
+          onClick={exportarExcel}
+          title={`Exportar os ${items.length} materiais do alerta geral`}
+          type="button"
+          variant="ghost"
+        >
+          Exportar Excel
         </Button>
       </div>
 

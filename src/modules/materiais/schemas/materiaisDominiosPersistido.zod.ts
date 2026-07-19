@@ -5,6 +5,8 @@ export const materiaisDominiosPersistidoSchema = z
   .object({
     disciplinas: z.array(z.unknown()).optional(),
     unidades: z.array(z.unknown()).optional(),
+    /** Rótulos amigáveis só no modal Unidades (formulários continuam com a sigla). */
+    unidadeDescricoes: z.record(z.string(), z.string()).optional(),
   })
   .passthrough();
 

@@ -1168,10 +1168,17 @@ export function salvarDominiosDisciplinasMateriais(disciplinas: string[]): void 
   writeMateriaisDominiosListas({ ...cur, disciplinas });
 }
 
-export function salvarDominiosUnidadesMateriais(unidades: string[]): void {
+export function salvarDominiosUnidadesMateriais(
+  unidades: string[],
+  unidadeDescricoes?: Record<string, string>,
+): void {
   if (whenBusinessWriteBlockedResult<void>()) return;
   const cur = readMateriaisDominiosListas();
-  writeMateriaisDominiosListas({ ...cur, unidades });
+  writeMateriaisDominiosListas({
+    ...cur,
+    unidades,
+    unidadeDescricoes: unidadeDescricoes ?? cur.unidadeDescricoes,
+  });
 }
 
 export async function buscarMaterialPorId(id: string): Promise<ServiceResult<Material>> {

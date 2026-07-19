@@ -3,6 +3,7 @@ import {
   calcularLimiteAlertaEstoque,
   materialEmAlertaEstoquePlanejamento,
   montarMaterialEstoqueCritico,
+  montarExportacaoMateriaisCriticosCsv,
   severidadeAlertaEstoque,
 } from './materiaisEstoqueCritico.service';
 
@@ -42,5 +43,29 @@ describe('materiaisEstoqueCritico.service', () => {
     expect(severidadeAlertaEstoque(0, 100)).toBe('critical');
     expect(severidadeAlertaEstoque(40, 100)).toBe('critical');
     expect(severidadeAlertaEstoque(80, 100)).toBe('warning');
+  });
+
+  it('exporta o alerta geral em CSV compativel com Excel', () => {
+    const result = montarExportacaoMateriaisCriticosCsv(
+      [
+        {
+          materialId: '1',
+          codigo: 'ABC',
+          descricao: 'Válvula; teste',
+          unidade: 'PC',
+          saldoAtual: 1.5,
+          quantidadePlanejada: 10,
+          percentualAlerta: 20,
+          limiteAlerta: 2,
+          percentualSaldoVsPlanejado: 15,
+          severidade: 'critical',
+        },
+      ],
+      new Date('2026-07-19T12:00:00.000Z'),
+    );
+
+    expect(result.fileName).toBe('materiais-estoque-critico-2026-07-19.csv');
+    expect(result.csv.startsWith('\uFEFFCódigo;Descrição;Unidade;')).toBe(true);
+    expect(result.csv).toContain('ABC;"Válvula; teste";PC;"1,5";10;2;20;15;Crítico');
   });
 });

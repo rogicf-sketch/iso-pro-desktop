@@ -8,6 +8,7 @@ import { buildSaldoMap, type SaldoSnapshotPayload } from '../../estoque/saldoFro
 import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { hasSupabaseConfig } from '../../../lib/supabase';
+import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import type { Material } from '../types/material.types';
 import { carregarMateriaisDoCadastro } from './materiais.service';
 
@@ -23,6 +24,39 @@ export type MaterialEstoqueCritico = {
   percentualSaldoVsPlanejado: number;
   severidade: 'critical' | 'warning';
 };
+
+export function montarExportacaoMateriaisCriticosCsv(
+  items: MaterialEstoqueCritico[],
+  now = new Date(),
+): { csv: string; fileName: string } {
+  const headers = [
+    'Código',
+    'Descrição',
+    'Unidade',
+    'Saldo',
+    'Planejado',
+    'Limite de alerta',
+    'Limite (%)',
+    '% saldo/planejado',
+    'Gravidade',
+  ];
+  const rows = items.map((item) => [
+    item.codigo,
+    item.descricao,
+    item.unidade,
+    formatDecimalExcelPtBr(item.saldoAtual),
+    formatDecimalExcelPtBr(item.quantidadePlanejada),
+    formatDecimalExcelPtBr(item.limiteAlerta),
+    formatDecimalExcelPtBr(item.percentualAlerta),
+    formatDecimalExcelPtBr(item.percentualSaldoVsPlanejado),
+    item.severidade === 'critical' ? 'Crítico' : 'Atenção',
+  ]);
+  const csv = `\uFEFF${[headers, ...rows]
+    .map((row) => row.map((cell) => escapeCsvCellSemicolon(String(cell))).join(';'))
+    .join('\r\n')}\r\n`;
+  const stamp = now.toISOString().slice(0, 10);
+  return { csv, fileName: `materiais-estoque-critico-${stamp}.csv` };
+}
 
 export function calcularLimiteAlertaEstoque(quantidadePlanejada: number, percentualAlerta: number): number {
   if (!(percentualAlerta > 0 && quantidadePlanejada > 0)) return 0;
