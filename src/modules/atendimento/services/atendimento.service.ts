@@ -2224,7 +2224,7 @@ export async function registrarAtendimentosSessao(
   const dataAtendimento = new Date().toISOString();
 
   for (const grupo of gruposValidados) {
-    let documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
+    const documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
     if (documentoIndex === -1) {
       return { success: false, error: 'Documento nao encontrado. Recarregue a pagina e tente de novo.' };
     }
