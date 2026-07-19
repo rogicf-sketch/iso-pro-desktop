@@ -70,9 +70,7 @@ function htmlBlocoTipoRetirada(
     </section>`;
   }
   return `
-    <p class="recibo-tipo-badge" role="note">
-      <strong>Retirada interna</strong> — material entregue a colaborador cadastrado; identificacao vinculada ao registro deste atendimento (arquivo e auditoria).
-    </p>`;
+    <p class="recibo-tipo-badge" role="note"><strong>Retirada interna</strong></p>`;
 }
 
 export function htmlAssinaturasRecibo(
@@ -197,7 +195,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   </div>
 
   <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
+    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl, true)}</div>
     <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de retirada de material</h1>
     </div>
@@ -836,6 +834,67 @@ export function cssReciboAtendimentoBase(): string {
       line-height: 1.45;
       text-align: center;
     }
+    /* DEVE ficar no fim: compactacao de impressao (ganha aos estilos de ecran acima). */
+    @media print {
+      @page { size: A4 portrait; margin: 5mm 7mm 6mm; }
+      body.recibo-body, body.recibo-body--denso {
+        padding: 0 !important;
+        margin: 0 !important;
+        font-size: 8pt !important;
+      }
+      .recibo-topbar { display: none !important; }
+      .recibo-tipo-badge {
+        margin: 0 0 3px !important;
+        padding: 2px 6px !important;
+        font-size: 7pt !important;
+      }
+      .recibo-header-main, .recibo-header-main--titulo-centro {
+        margin: 0 0 4px !important;
+        padding: 0 0 4px !important;
+        min-height: 28px !important;
+        gap: 4px !important;
+      }
+      .inst-logo-col, .inst-logo-col--pequeno {
+        flex-basis: 72px !important;
+        min-height: 28px !important;
+      }
+      .inst-logo-img, .recibo-logo-wrap .inst-logo-img {
+        max-height: 28px !important;
+        max-width: 72px !important;
+        padding: 0 !important;
+        border: none !important;
+        background: transparent !important;
+      }
+      .recibo-titulo-centro h1, .recibo-header-main h1 {
+        font-size: 11pt !important;
+      }
+      .recibo-titulo-centro h1::after, .recibo-header-main h1::after {
+        margin-top: 3px !important;
+        height: 2px !important;
+        width: 36px !important;
+      }
+      .recibo-bloco-info {
+        padding: 4px 6px !important;
+        margin-bottom: 3px !important;
+      }
+      .recibo-doc-desc { display: none !important; }
+      .recibo-secao-doc .recibo-doc-desc { display: none !important; }
+      .recibo-secao-doc {
+        margin-top: 4px !important;
+        padding-top: 4px !important;
+      }
+      .recibo-tabela-itens { font-size: 7.5pt !important; }
+      .recibo-tabela-itens th, .recibo-tabela-itens td { padding: 2px 4px !important; }
+      .espaco-assinatura { min-height: 8px !important; }
+      .assinaturas { margin-top: 4px !important; gap: 8px !important; }
+      .recibo-fechamento, .recibo-rodape-fin, .assinaturas {
+        page-break-inside: auto !important;
+        break-inside: auto !important;
+      }
+      .recibo-doc-foot { margin-top: 3px !important; padding-top: 2px !important; font-size: 6pt !important; }
+      .recibo-tabela-itens tr { page-break-inside: auto !important; }
+      .recibo-bloco-itens thead { display: table-header-group; }
+    }
   `;
 }
 
@@ -916,7 +975,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
   </div>
 
   <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
+    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl, true)}</div>
     <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de retirada de material</h1>
       <p class="recibo-subtitulo-consolidado">Retirada em ${dados.secoes.length} documento(s) · ${escapeHtmlRelatorio(String(dados.secoes.length))} lote(s) no sistema</p>

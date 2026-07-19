@@ -83,7 +83,7 @@ vi.mock('./atendimentoComandoDesktop', () => ({
   gravarAtendimentoNaNuvemComComando: (input: { prepare: () => Promise<unknown> }) => mockGravarComando(input),
   waitForAtendimentoSyncIdle: vi.fn(async () => undefined),
   setAtendimentoCloudBaselineCursor: vi.fn(),
-  getAtendimentoCloudBaselineCursor: vi.fn(() => null),
+  getAtendimentoCloudBaselineCursor: vi.fn(() => '2026-01-01T00:00:00.000Z'),
 }));
 
 /** Testes legados exercitam o caminho snapshot; V2 devolve rpcMissing para cair no fallback. */
@@ -855,8 +855,17 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
       await fn();
     });
 
+    const snap = snapshotDoisDocumentosAtendimento();
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(
+      (snap.materiais ?? []).map((m) => ({
+        id: m.id,
+        codigo: m.codigo,
+        descricao: m.descricao,
+        unidade: m.unidade,
+        saldoAtual: m.saldoAtual,
+      })),
+    );
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await registrarAtendimentosSessao({
@@ -878,7 +887,7 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
     expect(atendimentos).toHaveLength(2);
   });
 
-  it('com recebido agregado no servidor, a sessao nao baixa a fatia recebimentos', async () => {
+  it('sessao local-first nao baixa historico no confirmar', async () => {
     const { fetchQuantidadeRecebidaPorCodigo } = await import('../../../lib/operacaoEscalaContagens');
     vi.mocked(fetchQuantidadeRecebidaPorCodigo).mockResolvedValue(
       new Map([
@@ -895,8 +904,17 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
       await fn();
     });
 
+    const snap = snapshotDoisDocumentosAtendimento();
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(
+      (snap.materiais ?? []).map((m) => ({
+        id: m.id,
+        codigo: m.codigo,
+        descricao: m.descricao,
+        unidade: m.unidade,
+        saldoAtual: m.saldoAtual,
+      })),
+    );
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await registrarAtendimentosSessao({
@@ -911,10 +929,11 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
     });
 
     expect(result.success).toBe(true);
-    const pedidosComRecebimentos = mockReadPayload.mock.calls.filter(
-      ([keys]) => Array.isArray(keys) && (keys as string[]).includes('recebimentos'),
+    // Local-first: confirmacao nao precisa da fatia atendimentoHistorico.
+    const pedidosHistorico = mockReadPayload.mock.calls.filter(
+      ([keys]) => Array.isArray(keys) && (keys as string[]).includes('atendimentoHistorico'),
     );
-    expect(pedidosComRecebimentos).toHaveLength(0);
+    expect(pedidosHistorico).toHaveLength(0);
   });
 
   it('nao registra atendimento quando nao ha quantidade pendente nas linhas do documento', async () => {

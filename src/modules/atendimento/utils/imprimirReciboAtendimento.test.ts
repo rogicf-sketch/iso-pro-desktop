@@ -65,8 +65,9 @@ describe('imprimirReciboAtendimento / recibo consolidado', () => {
     expect(html).not.toContain('>Retirada interna</h2>');
     // Impressao: fechamento pode partir (evita 2.a folha so com assinaturas).
     expect(html).toMatch(/\.recibo-fechamento\s*\{[^}]*page-break-inside:\s*auto/s);
-    expect(html).toMatch(/\.espaco-assinatura\s*\{[^}]*min-height:\s*12px/s);
+    expect(html).toMatch(/\.espaco-assinatura\s*\{[^}]*min-height:\s*8px/s);
     expect(html).toContain('recibo-body--denso');
+    expect(html).toContain('inst-logo-col--pequeno');
   });
 
   it('recibo simples com varios desenhos inclui coluna Documento por item', () => {

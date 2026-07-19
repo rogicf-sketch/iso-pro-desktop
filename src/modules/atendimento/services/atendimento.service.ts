@@ -44,6 +44,7 @@ import {
 import { resolverColaboradorPorTextoAtendente } from '../utils/resolverColaboradorPorTextoAtendente';
 import {
   buildDesktopAtendimentoIdempotencyKey,
+  getAtendimentoCloudBaselineCursor,
   gravarAtendimentoNaNuvemComComando,
 } from './atendimentoComandoDesktop';
 import type { SnapshotSlice } from './atendimentoSnapshotPatch';
@@ -719,33 +720,34 @@ async function writeSnapshotAtendimentoPatch(patch: {
   await gravarAtendimentoNaNuvemComComando({
     prepare: async () => {
       const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
-      // Baixa E estorno: NAO baixar atendimentoHistorico nem a lista completa de atendimentos
-      // (obra grande = dezenas de MB). Novas linhas vao so no delta (append por id).
-      const sliceKeys = ehEstorno
-        ? (['atendimentoEstornoLog', 'configuracoesSistema'] as const)
-        : (['configuracoesSistema'] as const);
-      // Sem timeout esta leitura pode pendurar a gravacao indefinidamente (modal «A gravar…» sem fim).
-      const { slices: currentPayload, baselineUpdatedAt } = await withRemoteReadTimeout(
-        () => readIsoProSnapshotSlicesForWrite(sliceKeys),
-        REMOTE_READ_TIMEOUT_HEAVY_MS,
-      );
+      const cursor = getAtendimentoCloudBaselineCursor();
+      // Baixa com cursor: zero leitura de fatia (igual mobile). So re-le em estorno ou sem cursor.
+      let currentPayload: Record<string, unknown> = {};
+      let baselineUpdatedAt: string | null = cursor;
+      if (ehEstorno || !cursor) {
+        const sliceKeys = ehEstorno
+          ? (['atendimentoEstornoLog', 'configuracoesSistema'] as const)
+          : (['configuracoesSistema'] as const);
+        const lido = await withRemoteReadTimeout(
+          () => readIsoProSnapshotSlicesForWrite(sliceKeys),
+          REMOTE_READ_TIMEOUT_HEAVY_MS,
+        );
+        currentPayload = lido.slices as Record<string, unknown>;
+        baselineUpdatedAt = lido.baselineUpdatedAt;
+      }
+
       const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
       const existingEstornoLog = mapEstornoLogFromSnapshot(
         currentPayload.atendimentoEstornoLog as SnapshotPayload['atendimentoEstornoLog'],
       );
 
-      // Baseline documentos vazio + next = patch → o delta inclui todos os docs do comando.
-      // O servidor faz merge por id no snapshot completo (GREATEST na baixa / regressao no estorno).
       const documentos = patchDocumentos;
-
-      // Append-only: so os lotes novos deste patch (nao fundir com a lista completa da nuvem).
       const atendimentosNovos = (patch.atendimentos ?? []).map(atendimentoToSnapshotRecord);
 
       const atendimentoEstornoLog = patch.estornoLogAppend?.length
         ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
         : (currentPayload.atendimentoEstornoLog ?? existingEstornoLog.map(estornoLogToSnapshotRecord));
 
-      // So as linhas novas deste patch (nao reconstruir o historico completo a partir de todos os lotes).
       const atendimentoHistoricoNovos =
         !ehEstorno && patch.atendimentos?.length
           ? buildAtendimentoHistoricoFromAtendimentos(patch.atendimentos)
@@ -772,7 +774,6 @@ async function writeSnapshotAtendimentoPatch(patch: {
 
       const baselineSlices: SnapshotSlice = {
         documentos: [],
-        // Baseline vazio → delta trata lotes/historico novos como append (merge por id no servidor).
         atendimentos: [],
         ...(ehEstorno ? {} : { atendimentoHistorico: [] }),
         atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
@@ -858,8 +859,26 @@ async function enrichMateriaisSaldoFromLocalMovement(
   documentos: DocumentoStored[],
 ): Promise<MaterialStored[]> {
   const recebimentos = await carregarRecebimentosCompletos();
+  let base = materiais;
+  if (base.length === 0 && documentos.length > 0) {
+    const byCode = new Map<string, MaterialStored>();
+    for (const doc of documentos) {
+      for (const item of doc.itens) {
+        const k = codigoMaterialKey(item.codigoMaterial);
+        if (!k || byCode.has(k)) continue;
+        byCode.set(k, {
+          id: `mat-${k}`,
+          codigo: item.codigoMaterial,
+          descricao: item.descricaoMaterial,
+          unidade: item.unidade,
+          saldoAtual: 0,
+        });
+      }
+    }
+    base = [...byCode.values()];
+  }
   const payload: SnapshotPayload = {
-    materiais: materiais.map((m) => ({
+    materiais: base.map((m) => ({
       id: m.id,
       codigo: m.codigo,
       saldoAtual: m.saldoAtual,
@@ -875,9 +894,9 @@ async function enrichMateriaisSaldoFromLocalMovement(
     recebimentos: recebimentos.filter((r) => r.status !== 'cancelado').map(recebimentoParaSnapshotSaldo),
   };
   const saldoMap = buildSaldoMap(payload);
-  return materiais.map((m) => ({
+  return base.map((m) => ({
     ...m,
-    saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? 0,
+    saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual ?? 0,
   }));
 }
 
@@ -2151,33 +2170,47 @@ export async function registrarAtendimentosSessao(
   }
 
   const docIds = gruposValidados.map((g) => g.documentoId);
-  const [colaboradoresAtivos, remoteState] = await Promise.all([
-    listarColaboradoresAtivos(),
-    shouldTryRemoteRead()
-      ? readRemoteStateForWrite(docIds).catch(() => null)
-      : Promise.resolve(null),
-  ]);
-  const colabAtendente = resolverColaboradorPorTextoAtendente(payload.atendente, colaboradoresAtivos);
-  const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
-  const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
-
+  // Local-first (igual mobile): sem agregados/fatias pesadas no Confirmar.
+  // So busca na nuvem documentos que ainda nao estao no PC (1 RPC cada, sem retry duplo).
   const localState = loadLocalState();
-  const documentos = mesclarDocumentosLocaisComRemotos(
-    localState.documentos,
-    remoteState?.documentos ?? [],
-  );
+  const documentos = [...localState.documentos];
+  if (shouldTryRemoteRead()) {
+    const emFalta = docIds.filter((id) => !documentos.some((d) => d.id === id));
+    if (emFalta.length) {
+      const docsLidos = await Promise.all(emFalta.map((id) => carregarDocumentoStoredDaNuvem(id)));
+      for (const doc of docsLidos) {
+        if (doc) documentos.push(doc);
+      }
+    }
+  }
   const materiais =
-    remoteState != null && remoteState.materiais.length > 0
-      ? remoteState.materiais
-      : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
-  // Sem lista remota de lotes no pre-write (latencia): usa o historico ja no PC.
+    localState.materiais.length > 0
+      ? [...localState.materiais]
+      : (() => {
+          const byCode = new Map<string, MaterialStored>();
+          for (const doc of documentos) {
+            for (const item of doc.itens) {
+              const k = codigoMaterialKey(item.codigoMaterial);
+              if (!k || byCode.has(k)) continue;
+              byCode.set(k, {
+                id: `mat-${k}`,
+                codigo: item.codigoMaterial,
+                descricao: item.descricaoMaterial,
+                unidade: item.unidade,
+                // Sem recalculo remoto no Confirmar (latencia). UI ja validou saldo no leitor.
+                saldoAtual: 999999,
+              });
+            }
+          }
+          return [...byCode.values()];
+        })();
+  // Sem listarColaboradoresAtivos / agregados / recebimentos no Confirmar (modelo mobile).
+  const atendenteMatricula = '';
+  const atendenteFuncao = '';
+
   const atendimentos = [...localState.atendimentos];
   const payloadSequencia: SnapshotPayload = {
-    ...(remoteState?.payload ?? {}),
     atendimentos: atendimentos as SnapshotPayload['atendimentos'],
-    configuracoesSistema:
-      (remoteState?.payload?.configuracoesSistema as Record<string, unknown> | undefined) ??
-      undefined,
   };
 
   const materialByCode = new Map(materiais.map((material, index) => [codigoMaterialKey(material.codigo), { material, index }]));
@@ -2192,14 +2225,6 @@ export async function registrarAtendimentosSessao(
 
   for (const grupo of gruposValidados) {
     let documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
-    if (documentoIndex === -1 && shouldTryRemoteRead()) {
-      // Documento veio do leitor/busca remota e pode nao estar na copia local: ultima tentativa direta.
-      const docNuvem = await carregarDocumentoStoredDaNuvem(grupo.documentoId);
-      if (docNuvem) {
-        documentos.push(docNuvem);
-        documentoIndex = documentos.length - 1;
-      }
-    }
     if (documentoIndex === -1) {
       return { success: false, error: 'Documento nao encontrado. Recarregue a pagina e tente de novo.' };
     }
@@ -2296,7 +2321,7 @@ export async function registrarAtendimentosSessao(
 
   const documentosPatch = [...documentosMutados.values()];
 
-  if (remoteState) {
+  if (shouldTryRemoteRead()) {
     const bloqueioAtendimento = bloqueioLocalChavesAtendimento({
       documentosLength: documentos.length,
       materiaisLength: materiais.length,
