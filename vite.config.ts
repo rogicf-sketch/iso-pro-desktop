@@ -27,7 +27,10 @@ export default defineConfig(({ mode }) => {
     alias: {
       '@': path.resolve(__dirname, './src'),
       ...(process.env.VITEST === 'true'
-        ? { '@sentry/react': path.resolve(__dirname, './src/test/sentry-react.mock.ts') }
+        ? {
+            '@sentry/react': path.resolve(__dirname, './src/test/sentry-react.mock.ts'),
+            electron: path.resolve(__dirname, './src/test/electron.mock.ts'),
+          }
         : {}),
     },
   },
@@ -53,7 +56,7 @@ export default defineConfig(({ mode }) => {
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'electron/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', 'src/**/*.integration.test.ts'],
     reporters: process.env.GITHUB_ACTIONS ? ['default', 'github-actions'] : ['default'],
   },

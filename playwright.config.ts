@@ -11,7 +11,12 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   timeout: 90_000,
-  reporter: process.env.CI ? 'github' : 'list',
+  reporter:
+    process.env.ISO_PRO_E2E_PREVIEW === '1'
+      ? [['github'], ['html', { open: 'never' }]]
+      : process.env.CI
+        ? 'github'
+        : 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
     trace: 'on-first-retry',
@@ -19,7 +24,12 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'npx vite --mode e2e --host 127.0.0.1 --port 4173 --strictPort',
+    // Nightly com secrets: ISO_PRO_E2E_PREVIEW=1 serve o build de produção (DEV=false,
+    // sem mock auth) para exercer o login real contra o Supabase. Caso contrário usa o
+    // servidor de dev em modo `e2e` (mock auth) para os smokes de PR/push.
+    command: process.env.ISO_PRO_E2E_PREVIEW === '1'
+      ? 'npx vite preview --host 127.0.0.1 --port 4173 --strictPort'
+      : 'npx vite --mode e2e --host 127.0.0.1 --port 4173 --strictPort',
     url: 'http://127.0.0.1:4173/',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

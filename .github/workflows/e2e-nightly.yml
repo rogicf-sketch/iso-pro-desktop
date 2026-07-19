@@ -1,0 +1,60 @@
+# E2E nightly contra backend real (Supabase) — valida login e fluxo crítico com secrets.
+# Secrets: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, ISO_PRO_E2E_LOGIN, ISO_PRO_E2E_SENHA
+# Opcional: ISO_PRO_E2E_TENANT_ID
+# O teste de login real faz test.skip() automaticamente se as credenciais não existirem.
+
+name: E2E nightly
+
+on:
+  schedule:
+    # 06:30 UTC ≈ 03:30 BRT (antes do smoke diário das 07:00)
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-nightly
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright (Chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build web (produção, sem mock auth)
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: npm run build:web
+
+      - name: E2E (login real via preview)
+        env:
+          ISO_PRO_E2E_PREVIEW: '1'
+          ISO_PRO_E2E_LOGIN: ${{ secrets.ISO_PRO_E2E_LOGIN }}
+          ISO_PRO_E2E_SENHA: ${{ secrets.ISO_PRO_E2E_SENHA }}
+          ISO_PRO_E2E_TENANT_ID: ${{ secrets.ISO_PRO_E2E_TENANT_ID }}
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-nightly-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14

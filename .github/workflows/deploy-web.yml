@@ -18,7 +18,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: uma tag web-v* só publica se typecheck + testes + build passarem.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build (Vite + Electron main/preload)
+        run: npm run build:app
+
   deploy:
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment: production

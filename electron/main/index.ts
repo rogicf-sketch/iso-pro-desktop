@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron';
+import { initMainProcessCrashReporter, logMainProcessEvent } from './crashReporter';
 import { registerBackupContextHandlers } from './backupContext';
 import { registerConfigSecretsHandlers } from './configSecrets';
 import { initBackupOracleAuto, registerBackupOracleAutoHandlers } from './backupOracleAuto';
@@ -13,6 +14,9 @@ import { registerSupabaseFetchHandlers } from './supabaseFetchIpc';
 import { destruirGeradorPdf, preaquecerGeradorPdf } from './gerarPdfBytesFromHtml';
 import { destruirJanelaImpressaoPdf } from './pdfPrintBuffer';
 import { createMainWindow } from './window';
+
+// Antes de tudo: capturar crashes do processo principal (log rotativo em userData/logs).
+initMainProcessCrashReporter();
 
 /** Deve coincidir com `appId` em `electron-builder.yml` — ícone na barra de tarefas / notificações no Windows. */
 if (process.platform === 'win32') {
@@ -48,7 +52,7 @@ function bootstrap() {
       preaquecerGeradorPdf();
     }, 2500);
   } catch (e) {
-    console.error('[I.S.O PRO] Falha ao iniciar:', e);
+    logMainProcessEvent('fatal', 'bootstrap', e);
     app.quit();
   }
 
