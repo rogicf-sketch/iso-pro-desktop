@@ -5,6 +5,7 @@ import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacio
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import {
   readIsoProSnapshotSlicesForWrite,
+  readIsoProSnapshotStats,
   SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS,
@@ -32,8 +33,7 @@ import { executeWrite } from '../../../lib/service-result';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { ServiceResult } from '../../../types/common.types';
 import {
-  buscarColaboradorPorId,
-  listarColaboradoresAtivos,
+  buscarColaboradorPorIdLocal,
   registrarRetiranteExterno,
 } from '../../colaboradores/services/colaboradores.service';
 import {
@@ -41,11 +41,12 @@ import {
   numerosDocumentosDistintosItens,
   resolverIndiceDocumentoParaItemEstorno,
 } from '../utils/estornoDocumento.utils';
-import { resolverColaboradorPorTextoAtendente } from '../utils/resolverColaboradorPorTextoAtendente';
 import {
   buildDesktopAtendimentoIdempotencyKey,
   getAtendimentoCloudBaselineCursor,
   gravarAtendimentoNaNuvemComComando,
+  setAtendimentoCloudBaselineCursor,
+  warmAtendimentoCloudBaselineCursor,
 } from './atendimentoComandoDesktop';
 import type { SnapshotSlice } from './atendimentoSnapshotPatch';
 import { consumirSequenciaAtendimento } from '../../configuracoes/services/configuracoes.service';
@@ -721,19 +722,32 @@ async function writeSnapshotAtendimentoPatch(patch: {
     prepare: async () => {
       const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
       const cursor = getAtendimentoCloudBaselineCursor();
-      // Baixa com cursor: zero leitura de fatia (igual mobile). So re-le em estorno ou sem cursor.
+      // Baixa com cursor: zero leitura de fatia (igual mobile).
+      // Sem cursor: so updatedAt via stats (leve). Estorno ainda le fatia do log.
       let currentPayload: Record<string, unknown> = {};
       let baselineUpdatedAt: string | null = cursor;
-      if (ehEstorno || !cursor) {
-        const sliceKeys = ehEstorno
-          ? (['atendimentoEstornoLog', 'configuracoesSistema'] as const)
-          : (['configuracoesSistema'] as const);
+      if (ehEstorno) {
         const lido = await withRemoteReadTimeout(
-          () => readIsoProSnapshotSlicesForWrite(sliceKeys),
+          () => readIsoProSnapshotSlicesForWrite(['atendimentoEstornoLog', 'configuracoesSistema']),
           REMOTE_READ_TIMEOUT_HEAVY_MS,
         );
         currentPayload = lido.slices as Record<string, unknown>;
         baselineUpdatedAt = lido.baselineUpdatedAt;
+      } else if (!cursor) {
+        const stats = await withRemoteReadTimeout(
+          () => readIsoProSnapshotStats(),
+          REMOTE_READ_TIMEOUT_HEAVY_MS,
+        ).catch(() => null);
+        baselineUpdatedAt = stats?.updatedAt ?? null;
+        if (!baselineUpdatedAt) {
+          const lido = await withRemoteReadTimeout(
+            () => readIsoProSnapshotSlicesForWrite(['configuracoesSistema']),
+            REMOTE_READ_TIMEOUT_HEAVY_MS,
+          );
+          currentPayload = lido.slices as Record<string, unknown>;
+          baselineUpdatedAt = lido.baselineUpdatedAt;
+        }
+        if (baselineUpdatedAt) setAtendimentoCloudBaselineCursor(baselineUpdatedAt);
       }
 
       const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
@@ -854,7 +868,8 @@ function recebimentoParaSnapshotSaldo(rec: Recebimento): NonNullable<SnapshotPay
 }
 
 /** Modo local: saldo do JSON de materiais nao inclui recebimentos; recalcula como no snapshot nuvem. */
-async function enrichMateriaisSaldoFromLocalMovement(
+/** Recalculo local de saldo (recebimentos). Mantido exportado para testes/admin; Confirmar nao usa. */
+export async function enrichMateriaisSaldoFromLocalMovement(
   materiais: MaterialStored[],
   documentos: DocumentoStored[],
 ): Promise<MaterialStored[]> {
@@ -1245,12 +1260,11 @@ async function readRemoteState() {
 /**
  * Leitura operacional sem documentos[] completo — carrega só os IDs pedidos nas tabelas.
  * Nunca cai no snapshot completo (4k+ documentos): em obra grande isso levava 30-60s e a
- * gravacao da sessao parecia «congelada» ate falhar por timeout. Falha aqui = caller decide
- * (registrar* usa `.catch(() => null)` e segue com o estado local).
+ * gravacao da sessao parecia «congelada» ate falhar por timeout.
  *
- * Tambem NAO baixa atendimentoHistorico / atendimentos[] (mesma latencia 40–60s).
+ * Confirmar (registrar*) e local-first e nao chama isto; mantido para caminhos admin/diagnostico.
  */
-async function readRemoteStateForWrite(documentoIds: string[]) {
+export async function readRemoteStateForWrite(documentoIds: string[]) {
   const uniqueIds = [...new Set(documentoIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
   const [payloadLight, atendidoPorCodigo] = await withRemoteReadTimeout(
     () =>
@@ -1818,6 +1832,12 @@ export async function montarExportacaoAtendimentosPacoteZip(): Promise<
   return { success: true, data: { zipBlob, fileName: nomeArquivoExportAtendimentosZip(stamp) } };
 }
 
+/** Pre-aquece cursor OCC ao abrir Atendimento (Confirmar sem leitura de fatia). */
+export async function aquecerBaselineAtendimentoNuvem(): Promise<void> {
+  if (!shouldTryRemoteRead()) return;
+  await warmAtendimentoCloudBaselineCursor(() => readIsoProSnapshotStats());
+}
+
 export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResult<Atendimento[]>> {
   let source: 'supabase' | 'local' = 'local';
   let fallbackReason = '';
@@ -1879,203 +1899,24 @@ export async function registrarAtendimento(payload: {
   }
   const requestItems = validatedItems.items ?? [];
 
-  let recebedorNome = payload.recebedor.trim();
-  let recebedorColaboradorId: string | null = payload.recebedorColaboradorId?.trim() || null;
-  let recebedorEmpresa = payload.recebedorEmpresa?.trim() ?? '';
-  let recebedorDocumento = payload.recebedorDocumento?.trim() ?? '';
-  let recebedorTelefone = payload.recebedorTelefone?.trim() ?? '';
-  let recebedorMatricula = '';
-  let recebedorFuncao = '';
-  const autorizadorInterno = payload.autorizadorInterno?.trim() ?? '';
-  const motivoRetirada = payload.motivoRetirada?.trim() ?? '';
-
-  if (payload.recebedorTipo === 'interno') {
-    if (!recebedorColaboradorId) return { success: false, error: 'Selecione um colaborador interno cadastrado.' };
-    const colaboradorResult = await buscarColaboradorPorId(recebedorColaboradorId);
-    if (!colaboradorResult.success || !colaboradorResult.data || !colaboradorResult.data.ativo) {
-      return { success: false, error: 'Colaborador interno nao encontrado ou inativo.' };
-    }
-    if (colaboradorResult.data.tipo !== 'interno') {
-      return { success: false, error: 'Selecione um colaborador interno valido para o atendimento.' };
-    }
-    recebedorNome = colaboradorResult.data.nome;
-    recebedorEmpresa = colaboradorResult.data.empresa;
-    recebedorDocumento = colaboradorResult.data.documento;
-    recebedorTelefone = colaboradorResult.data.telefone;
-    recebedorMatricula = String(colaboradorResult.data.matricula ?? '').trim();
-    recebedorFuncao = String(colaboradorResult.data.funcao ?? '').trim();
-  } else {
-    if (!recebedorNome) return { success: false, error: 'Informe o nome de quem esta retirando.' };
-    if (!recebedorEmpresa) return { success: false, error: 'Informe a empresa do retirante externo.' };
-    if (!recebedorDocumento) return { success: false, error: 'Informe o documento do retirante externo.' };
-    if (!recebedorTelefone) return { success: false, error: 'Informe o telefone do retirante externo.' };
-    if (recebedorTelefone.replace(/\D/g, '').length < 8) {
-      return { success: false, error: 'Informe um telefone valido para o retirante externo.' };
-    }
-    if (!autorizadorInterno) return { success: false, error: 'Informe quem autorizou internamente a retirada.' };
-    if (!motivoRetirada) return { success: false, error: 'Informe o motivo da retirada externa.' };
-
-    const externalResult = await registrarRetiranteExterno({
-      nome: recebedorNome,
-      empresa: recebedorEmpresa,
-      documento: recebedorDocumento,
-      telefone: recebedorTelefone,
-      observacao: `${motivoRetirada}${autorizadorInterno ? ` | Autorizado por: ${autorizadorInterno}` : ''}`,
-    });
-    if (!externalResult.success || !externalResult.data) {
-      return { success: false, error: externalResult.error ?? 'Nao foi possivel registrar o retirante externo.' };
-    }
-    recebedorColaboradorId = externalResult.data.id;
-    recebedorMatricula = String(externalResult.data.matricula ?? '').trim();
-    recebedorFuncao = String(externalResult.data.funcao ?? '').trim();
-  }
-
-  const colaboradoresAtivos = await listarColaboradoresAtivos();
-  const colabAtendente = resolverColaboradorPorTextoAtendente(payload.atendente, colaboradoresAtivos);
-  const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
-  const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
-
-  const remoteState = shouldTryRemoteRead()
-    ? await readRemoteStateForWrite([payload.documentoId]).catch(() => null)
-    : null;
-  const localState = loadLocalState();
-  const documentos = mesclarDocumentosLocaisComRemotos(
-    localState.documentos,
-    remoteState?.documentos ?? [],
-  );
-  const materiais =
-    remoteState != null && remoteState.materiais.length > 0
-      ? remoteState.materiais
-      : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
-  // Sem lista remota de lotes no pre-write (latencia): usa o historico ja no PC.
-  const atendimentos = [...localState.atendimentos];
-  const payloadSequencia: SnapshotPayload = {
-    ...(remoteState?.payload ?? {}),
-    atendimentos: atendimentos as SnapshotPayload['atendimentos'],
-    configuracoesSistema:
-      (remoteState?.payload?.configuracoesSistema as Record<string, unknown> | undefined) ??
-      undefined,
-  };
-
-  let documentoIndex = documentos.findIndex((doc) => doc.id === payload.documentoId);
-  if (documentoIndex === -1 && shouldTryRemoteRead()) {
-    const docNuvem = await carregarDocumentoStoredDaNuvem(payload.documentoId);
-    if (docNuvem) {
-      documentos.push(docNuvem);
-      documentoIndex = documentos.length - 1;
-    }
-  }
-  if (documentoIndex === -1) {
-    return { success: false, error: 'Documento nao encontrado. Recarregue a pagina e tente de novo.' };
-  }
-
-  const documento = documentos[documentoIndex];
-  if (documento.status === 'cancelado') {
-    return { success: false, error: 'Nao e possivel registrar atendimento para um documento cancelado.' };
-  }
-  if (documentoSemSaldoParaAtendimento(documento)) {
-    return {
-      success: false,
-      error: `O documento ${documento.numero} rev. ${documento.revisao} nao aceita novo atendimento: toda a quantidade planejada deste documento ja foi atendida (nao ha saldo pendente por linha). Outros documentos nao sao afetados.`,
-    };
-  }
-  const itensAtendidos: AtendimentoItem[] = [];
-  const documentoItemById = new Map(documento.itens.map((item) => [item.id, item]));
-  const materialByCode = new Map(materiais.map((material, index) => [codigoMaterialKey(material.codigo), { material, index }]));
-
-  for (const requestItem of requestItems) {
-    const documentoItem = documentoItemById.get(requestItem.documentoItemId);
-    if (!documentoItem) {
-      return { success: false, error: 'Item do documento nao encontrado.' };
-    }
-
-    const pendente = documentoItem.quantidadeProjeto - documentoItem.quantidadeAtendida;
-    if (requestItem.quantidade > pendente) {
-      return { success: false, error: `Quantidade maior que o pendente do item ${documentoItem.codigoMaterial}.` };
-    }
-
-    const materialEntry = materialByCode.get(codigoMaterialKey(documentoItem.codigoMaterial));
-    if (!materialEntry) {
-      return { success: false, error: `Material ${documentoItem.codigoMaterial} nao encontrado.` };
-    }
-
-    const material = materialEntry.material;
-
-    if (requestItem.quantidade > (material.saldoAtual ?? 0)) {
-      return { success: false, error: `Saldo insuficiente para o material ${documentoItem.codigoMaterial}.` };
-    }
-
-    documentoItem.quantidadeAtendida += requestItem.quantidade;
-    material.saldoAtual = (material.saldoAtual ?? 0) - requestItem.quantidade;
-
-    itensAtendidos.push({
-      id: crypto.randomUUID(),
-      documentoItemId: documentoItem.id,
-      materialId: material.id,
-      codigoMaterial: documentoItem.codigoMaterial,
-      descricaoMaterial: documentoItem.descricaoMaterial,
-      unidade: documentoItem.unidade,
-      quantidadeAtendida: requestItem.quantidade,
-      quantidadeRetiradaOriginal: requestItem.quantidade,
-      documentoNumero: documento.numero,
-    });
-  }
-
-  documento.status = deriveDocumentoStatus(documento);
-  documentos[documentoIndex] = documento;
-
-  const atendimento: Atendimento = {
-    id: crypto.randomUUID(),
-    numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(payloadSequencia)),
-    documentoId: documento.id,
-    documentoNumero: documento.numero,
-    atendente: payload.atendente.trim(),
-    atendenteMatricula,
-    atendenteFuncao,
+  // Mesmo caminho local-first da sessao (evita readRemoteStateForWrite + colaboradores remotos).
+  const sessao = await registrarAtendimentosSessao({
+    atendente: payload.atendente,
     recebedorTipo: payload.recebedorTipo,
-    recebedorColaboradorId,
-    recebedor: recebedorNome,
-    recebedorMatricula,
-    recebedorFuncao,
-    recebedorEmpresa,
-    recebedorDocumento,
-    recebedorTelefone,
-    autorizadorInterno,
-    motivoRetirada,
-    origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
-    status: 'concluido',
-    dataAtendimento: new Date().toISOString(),
-    itens: itensAtendidos,
-  };
-
-  atendimentos.push(atendimento);
-
-  if (remoteState) {
-    const bloqueioAtendimento = bloqueioLocalChavesAtendimento({
-      documentosLength: documentos.length,
-      materiaisLength: materiais.length,
-      atendimentosLength: atendimentos.length,
-    });
-    if (bloqueioAtendimento) return { success: false, error: bloqueioAtendimento };
-    return executeWrite({
-      shouldWriteRemote: true,
-      writeRemote: () =>
-        writeSnapshotAtendimentoPatch({ documentos: [documento], atendimentos: [atendimento] }),
-      writeLocal: () => {
-        writeJson(documentosKeyAtendimento(), documentos);
-        writeJson(materiaisKeyAtendimento(), materiais);
-        writeJson(atendimentosStorageKey(), atendimentos);
-      },
-      successData: atendimento,
-      fallbackMessage: 'Falha ao salvar atendimento no Supabase.',
-    });
+    recebedorColaboradorId: payload.recebedorColaboradorId,
+    recebedor: payload.recebedor,
+    recebedorEmpresa: payload.recebedorEmpresa,
+    recebedorDocumento: payload.recebedorDocumento,
+    recebedorTelefone: payload.recebedorTelefone,
+    autorizadorInterno: payload.autorizadorInterno,
+    motivoRetirada: payload.motivoRetirada,
+    origem: payload.origem,
+    documentos: [{ documentoId: payload.documentoId, itens: requestItems }],
+  });
+  if (!sessao.success || !sessao.data?.length) {
+    return { success: false, error: sessao.error ?? 'Falha ao salvar atendimento.', meta: sessao.meta };
   }
-  const blockedSalvar = whenBusinessWriteBlockedResult<Atendimento>();
-  if (blockedSalvar) return blockedSalvar;
-  writeJson(documentosKeyAtendimento(), documentos);
-  writeJson(materiaisKeyAtendimento(), materiais);
-  writeJson(atendimentosStorageKey(), atendimentos);
-  return { success: true, data: atendimento, meta: { source: 'local' } };
+  return { success: true, data: sessao.data[0]!, meta: sessao.meta };
 }
 
 export type RegistrarAtendimentosSessaoPayload = {
@@ -2130,19 +1971,19 @@ export async function registrarAtendimentosSessao(
 
   if (payload.recebedorTipo === 'interno') {
     if (!recebedorColaboradorId) return { success: false, error: 'Selecione um colaborador interno cadastrado.' };
-    const colaboradorResult = await buscarColaboradorPorId(recebedorColaboradorId);
-    if (!colaboradorResult.success || !colaboradorResult.data || !colaboradorResult.data.ativo) {
+    const colaborador = buscarColaboradorPorIdLocal(recebedorColaboradorId);
+    if (!colaborador?.ativo) {
       return { success: false, error: 'Colaborador interno nao encontrado ou inativo.' };
     }
-    if (colaboradorResult.data.tipo !== 'interno') {
+    if (colaborador.tipo !== 'interno') {
       return { success: false, error: 'Selecione um colaborador interno valido para o atendimento.' };
     }
-    recebedorNome = colaboradorResult.data.nome;
-    recebedorEmpresa = colaboradorResult.data.empresa;
-    recebedorDocumento = colaboradorResult.data.documento;
-    recebedorTelefone = colaboradorResult.data.telefone;
-    recebedorMatricula = String(colaboradorResult.data.matricula ?? '').trim();
-    recebedorFuncao = String(colaboradorResult.data.funcao ?? '').trim();
+    recebedorNome = colaborador.nome;
+    recebedorEmpresa = colaborador.empresa;
+    recebedorDocumento = colaborador.documento;
+    recebedorTelefone = colaborador.telefone;
+    recebedorMatricula = String(colaborador.matricula ?? '').trim();
+    recebedorFuncao = String(colaborador.funcao ?? '').trim();
   } else {
     if (!recebedorNome) return { success: false, error: 'Informe o nome de quem esta retirando.' };
     if (!recebedorEmpresa) return { success: false, error: 'Informe a empresa do retirante externo.' };
@@ -2183,27 +2024,28 @@ export async function registrarAtendimentosSessao(
       }
     }
   }
-  const materiais =
-    localState.materiais.length > 0
-      ? [...localState.materiais]
-      : (() => {
-          const byCode = new Map<string, MaterialStored>();
-          for (const doc of documentos) {
-            for (const item of doc.itens) {
-              const k = codigoMaterialKey(item.codigoMaterial);
-              if (!k || byCode.has(k)) continue;
-              byCode.set(k, {
-                id: `mat-${k}`,
-                codigo: item.codigoMaterial,
-                descricao: item.descricaoMaterial,
-                unidade: item.unidade,
-                // Sem recalculo remoto no Confirmar (latencia). UI ja validou saldo no leitor.
-                saldoAtual: 999999,
-              });
-            }
+  const materiaisLocais = localState.materiais.length > 0;
+  const materiais = materiaisLocais
+    ? [...localState.materiais]
+    : (() => {
+        const byCode = new Map<string, MaterialStored>();
+        for (const doc of documentos) {
+          for (const item of doc.itens) {
+            const k = codigoMaterialKey(item.codigoMaterial);
+            if (!k || byCode.has(k)) continue;
+            byCode.set(k, {
+              id: `mat-${k}`,
+              codigo: item.codigoMaterial,
+              descricao: item.descricaoMaterial,
+              unidade: item.unidade,
+              // Sem recalculo remoto no Confirmar (latencia). UI ja validou saldo no leitor.
+              // Nao persistir estes saldos sinteticos no localStorage.
+              saldoAtual: 999999,
+            });
           }
-          return [...byCode.values()];
-        })();
+        }
+        return [...byCode.values()];
+      })();
   // Sem listarColaboradoresAtivos / agregados / recebimentos no Confirmar (modelo mobile).
   const atendenteMatricula = '';
   const atendenteFuncao = '';
@@ -2236,7 +2078,7 @@ export async function registrarAtendimentosSessao(
     if (documentoSemSaldoParaAtendimento(documento)) {
       return {
         success: false,
-        error: `O documento ${documento.numero} rev. ${documento.revisao} nao aceita novo atendimento: toda a quantidade planejada deste documento ja foi atendida.`,
+        error: `O documento ${documento.numero} rev. ${documento.revisao} nao aceita novo atendimento: toda a quantidade planejada deste documento ja foi atendida (nao ha saldo pendente por linha). Outros documentos nao sao afetados.`,
       };
     }
 
@@ -2337,7 +2179,7 @@ export async function registrarAtendimentosSessao(
         }),
       writeLocal: () => {
         writeJson(documentosKeyAtendimento(), documentos);
-        writeJson(materiaisKeyAtendimento(), materiais);
+        if (materiaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
         writeJson(atendimentosStorageKey(), atendimentos);
       },
       successData: novosAtendimentos,
@@ -2347,7 +2189,7 @@ export async function registrarAtendimentosSessao(
   const blockedSalvar = whenBusinessWriteBlockedResult<Atendimento[]>();
   if (blockedSalvar) return blockedSalvar;
   writeJson(documentosKeyAtendimento(), documentos);
-  writeJson(materiaisKeyAtendimento(), materiais);
+  if (materiaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
   writeJson(atendimentosStorageKey(), atendimentos);
   return { success: true, data: novosAtendimentos, meta: { source: 'local' } };
 }

@@ -169,8 +169,8 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     .join('');
 
   const total = totalQuantidadeItens(at);
-  // Compacto sempre na impressao (poucos itens tambem) — evita 2.a folha so com assinaturas.
-  const classeDensidade = ' recibo-body--denso';
+  // Denso so com muitos itens — poucos itens voltam ao layout normal (logo/espacamento).
+  const classeDensidade = at.itens.length > 10 ? ' recibo-body--denso' : '';
 
   const extraRecibo = cssReciboAtendimentoBase();
 
@@ -195,7 +195,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   </div>
 
   <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl, true)}</div>
+    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
     <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de retirada de material</h1>
     </div>
@@ -369,9 +369,9 @@ export function cssReciboAtendimentoBase(): string {
         margin-top: 2px !important;
       }
       .recibo-logo-wrap .inst-logo-img {
-        max-height: 32px !important;
-        max-width: 96px !important;
-        padding: 2px !important;
+        max-height: 56px !important;
+        max-width: 140px !important;
+        padding: 6px !important;
       }
       .recibo-bloco-info {
         padding: 6px 8px !important;
@@ -842,56 +842,53 @@ export function cssReciboAtendimentoBase(): string {
         margin: 0 !important;
         font-size: 8pt !important;
       }
-      .recibo-topbar { display: none !important; }
       .recibo-tipo-badge {
-        margin: 0 0 3px !important;
-        padding: 2px 6px !important;
-        font-size: 7pt !important;
+        margin: 0 0 4px !important;
+        padding: 3px 8px !important;
+        font-size: 8pt !important;
       }
       .recibo-header-main, .recibo-header-main--titulo-centro {
-        margin: 0 0 4px !important;
-        padding: 0 0 4px !important;
-        min-height: 28px !important;
-        gap: 4px !important;
+        margin: 0 0 8px !important;
+        padding: 0 0 8px !important;
+        min-height: 56px !important;
+        gap: 10px !important;
       }
-      .inst-logo-col, .inst-logo-col--pequeno {
-        flex-basis: 72px !important;
-        min-height: 28px !important;
+      .inst-logo-col {
+        flex-basis: 140px !important;
+        min-height: 56px !important;
       }
       .inst-logo-img, .recibo-logo-wrap .inst-logo-img {
-        max-height: 28px !important;
-        max-width: 72px !important;
-        padding: 0 !important;
-        border: none !important;
-        background: transparent !important;
+        max-height: 56px !important;
+        max-width: 140px !important;
+        padding: 6px !important;
       }
       .recibo-titulo-centro h1, .recibo-header-main h1 {
-        font-size: 11pt !important;
+        font-size: 13pt !important;
       }
       .recibo-titulo-centro h1::after, .recibo-header-main h1::after {
-        margin-top: 3px !important;
+        margin-top: 4px !important;
         height: 2px !important;
-        width: 36px !important;
+        width: 40px !important;
       }
       .recibo-bloco-info {
-        padding: 4px 6px !important;
-        margin-bottom: 3px !important;
+        padding: 6px 8px !important;
+        margin-bottom: 6px !important;
       }
       .recibo-doc-desc { display: none !important; }
       .recibo-secao-doc .recibo-doc-desc { display: none !important; }
       .recibo-secao-doc {
-        margin-top: 4px !important;
-        padding-top: 4px !important;
+        margin-top: 6px !important;
+        padding-top: 6px !important;
       }
-      .recibo-tabela-itens { font-size: 7.5pt !important; }
-      .recibo-tabela-itens th, .recibo-tabela-itens td { padding: 2px 4px !important; }
-      .espaco-assinatura { min-height: 8px !important; }
-      .assinaturas { margin-top: 4px !important; gap: 8px !important; }
+      .recibo-tabela-itens { font-size: 8pt !important; }
+      .recibo-tabela-itens th, .recibo-tabela-itens td { padding: 3px 5px !important; }
+      .espaco-assinatura { min-height: 28px !important; }
+      .assinaturas { margin-top: 10px !important; gap: 16px !important; }
       .recibo-fechamento, .recibo-rodape-fin, .assinaturas {
         page-break-inside: auto !important;
         break-inside: auto !important;
       }
-      .recibo-doc-foot { margin-top: 3px !important; padding-top: 2px !important; font-size: 6pt !important; }
+      .recibo-doc-foot { margin-top: 6px !important; padding-top: 4px !important; font-size: 7pt !important; }
       .recibo-tabela-itens tr { page-break-inside: auto !important; }
       .recibo-bloco-itens thead { display: table-header-group; }
     }
@@ -951,7 +948,8 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
 
   const lotesRodape = dados.numerosLotes.map((n) => escapeHtmlRelatorio(n)).join(' · ');
   const atRef = dados.secoes[0]?.atendimento;
-  const classeDensidade = ' recibo-body--denso';
+  const totalLinhas = dados.secoes.reduce((acc, s) => acc + s.atendimento.itens.length, 0);
+  const classeDensidade = totalLinhas > 10 ? ' recibo-body--denso' : '';
 
   const extraRecibo = cssReciboAtendimentoBase();
 
@@ -975,7 +973,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
   </div>
 
   <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl, true)}</div>
+    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
     <div class="inst-title-col recibo-titulo-centro">
       <h1>Recibo de retirada de material</h1>
       <p class="recibo-subtitulo-consolidado">Retirada em ${dados.secoes.length} documento(s) · ${escapeHtmlRelatorio(String(dados.secoes.length))} lote(s) no sistema</p>

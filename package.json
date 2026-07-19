@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22"
   },
-  "version": "0.1.138",
+  "version": "0.1.139",
   "type": "module",
   "main": "dist-electron/main.mjs",
   "scripts": {

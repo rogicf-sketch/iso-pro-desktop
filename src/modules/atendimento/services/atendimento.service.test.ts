@@ -73,6 +73,10 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
       const r = await mockReadForWrite();
       return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
     }),
+    readIsoProSnapshotStats: vi.fn(async () => ({
+      payloadBytes: 0,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })),
     commitIsoProSnapshotWrite: mockCommitWrite,
     commitIsoProSnapshotPatch: mockCommitPatch,
   };
@@ -84,6 +88,7 @@ vi.mock('./atendimentoComandoDesktop', () => ({
   waitForAtendimentoSyncIdle: vi.fn(async () => undefined),
   setAtendimentoCloudBaselineCursor: vi.fn(),
   getAtendimentoCloudBaselineCursor: vi.fn(() => '2026-01-01T00:00:00.000Z'),
+  warmAtendimentoCloudBaselineCursor: vi.fn(async () => undefined),
 }));
 
 /** Testes legados exercitam o caminho snapshot; V2 devolve rpcMissing para cair no fallback. */
@@ -128,6 +133,22 @@ function wireSnapshotPatchMock() {
 }
 
 vi.mock('../../colaboradores/services/colaboradores.service', () => ({
+  buscarColaboradorPorIdLocal: vi.fn((id: string) =>
+    id === 'colab-1'
+      ? {
+          id: 'colab-1',
+          nome: 'Joao Interno',
+          matricula: 'J1',
+          funcao: 'Mecanico',
+          ativo: true,
+          tipo: 'interno' as const,
+          empresa: 'Empresa X',
+          documento: '123',
+          telefone: '11987654321',
+          observacao: '',
+        }
+      : null,
+  ),
   buscarColaboradorPorId: vi.fn(() =>
     Promise.resolve({
       success: true,
@@ -813,8 +834,17 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
       await fn();
     });
 
+    const snap = snapshotAtendimentoBase();
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(
+      (snap.materiais ?? []).map((m) => ({
+        id: m.id,
+        codigo: m.codigo,
+        descricao: m.descricao,
+        unidade: m.unidade,
+        saldoAtual: m.saldoAtual,
+      })),
+    );
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await registrarAtendimento({

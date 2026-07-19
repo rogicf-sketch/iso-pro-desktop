@@ -60,6 +60,10 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
       const r = await mockReadForWrite();
       return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
     }),
+    readIsoProSnapshotStats: vi.fn(async () => ({
+      payloadBytes: 0,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })),
     commitIsoProSnapshotWrite: mockCommitWrite,
     commitIsoProSnapshotPatch: mockCommitPatch,
   };
@@ -71,6 +75,7 @@ vi.mock('./atendimentoComandoDesktop', () => ({
   waitForAtendimentoSyncIdle: vi.fn(async () => undefined),
   setAtendimentoCloudBaselineCursor: vi.fn(),
   getAtendimentoCloudBaselineCursor: vi.fn(() => null),
+  warmAtendimentoCloudBaselineCursor: vi.fn(async () => undefined),
 }));
 
 vi.mock('./estornoAtendimentoV2', () => ({
@@ -114,6 +119,7 @@ function wireSnapshotPatchMock() {
 }
 
 vi.mock('../../colaboradores/services/colaboradores.service', () => ({
+  buscarColaboradorPorIdLocal: vi.fn(() => null),
   buscarColaboradorPorId: vi.fn(),
   listarColaboradoresAtivos: vi.fn(() => Promise.resolve([])),
   registrarRetiranteExterno: vi.fn(),

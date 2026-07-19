@@ -288,7 +288,16 @@ export async function salvarColaborador(payload: ColaboradorFormData, currentId?
   });
 }
 
+/** Lookup sincrono no cache local — usar no Confirmar (sem baixar fatia da nuvem). */
+export function buscarColaboradorPorIdLocal(id: string): Colaborador | null {
+  const key = String(id ?? '').trim();
+  if (!key) return null;
+  return readAll().find((colaborador) => colaborador.id === key) ?? null;
+}
+
 export async function buscarColaboradorPorId(id: string): Promise<ServiceResult<Colaborador>> {
+  const local = buscarColaboradorPorIdLocal(id);
+  if (local) return { success: true, data: local };
   const item = (await loadColaboradores()).find((colaborador) => colaborador.id === id);
   if (!item) return { success: false, error: 'Colaborador nao encontrado.' };
   return { success: true, data: item };

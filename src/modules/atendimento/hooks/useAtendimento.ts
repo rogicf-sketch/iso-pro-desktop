@@ -7,6 +7,7 @@ import { tocarFeedbackLeitor } from '../../../lib/leitorFeedbackSonoro';
 import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import {
+  aquecerBaselineAtendimentoNuvem,
   buscarDocumentosPendentesPorCodigoMaterialNuvem,
   estornarAtendimento,
   listarDocumentosPendentesComMeta,
@@ -357,6 +358,7 @@ export function useAtendimento() {
       // Boot prioritário: lotes + colaboradores (UI «Lotes registrados»).
       // Pendentes de desenho em paralelo, mas sem bloquear se forem mais lentos:
       // se pendentes demorarem, devolvemos histórico já e o React Query refetch preenche docs.
+      void aquecerBaselineAtendimentoNuvem();
       const histPromise = listarHistoricoAtendimentosComMeta();
       const colabPromise = listarColaboradoresAtivos();
       const docsPromise = listarDocumentosPendentesComMeta();

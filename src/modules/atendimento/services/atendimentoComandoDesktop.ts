@@ -52,6 +52,24 @@ export function getAtendimentoCloudBaselineCursor(): string | null {
   return atendimentoCloudBaselineCursor;
 }
 
+/**
+ * Pre-aquece o cursor OCC com RPC leve (so updatedAt, sem baixar JSON).
+ * Chamado ao abrir Atendimento para o Confirmar nao precisar ler fatia.
+ */
+export async function warmAtendimentoCloudBaselineCursor(
+  readStats: () => Promise<{ updatedAt: string | null } | null>,
+): Promise<void> {
+  if (atendimentoCloudBaselineCursor) return;
+  try {
+    const stats = await readStats();
+    if (stats?.updatedAt) {
+      atendimentoCloudBaselineCursor = stats.updatedAt;
+    }
+  } catch {
+    /* ignore — Confirmar ainda consegue obter baseline no prepare */
+  }
+}
+
 function runExclusiveAtendimentoSync<T>(fn: () => Promise<T>): Promise<T> {
   const resultPromise = syncAtendimentoTail.then(fn, fn);
   syncAtendimentoTail = resultPromise.then(
