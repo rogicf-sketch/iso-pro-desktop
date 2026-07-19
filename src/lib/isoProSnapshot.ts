@@ -4,6 +4,7 @@ import { getActiveTenantId } from './isoProTenant';
 import { getSupabase } from './supabase';
 import { invalidateSnapshotDerivedCaches } from './snapshotDerivedCache';
 import { notifySnapshotConflict, requestSnapshotRefresh } from './snapshotSessionSync';
+import { applyRemoteFeatureFlags } from './featureFlags';
 
 /** Chaves usadas pelo modulo Atendimento + calculo de saldo. */
 export const SNAPSHOT_OPERATIONAL_SLICE_KEYS = [
@@ -322,6 +323,7 @@ export async function readIsoProSnapshotPayloadForWrite<T extends Record<string,
   const payload = snapshotPayloadFromDatabase(raw);
   cachedPayload = payload;
   cachedAt = Date.now();
+  applyRemoteFeatureFlags(raw);
 
   const baselineUpdatedAt = data?.updated_at != null ? String(data.updated_at) : null;
   return { payload: snapshotCopy<T>(payload), baselineUpdatedAt };
@@ -358,6 +360,7 @@ export async function readIsoProSnapshotPayload<T extends Record<string, unknown
     const payload = snapshotPayloadFromDatabase(raw);
     cachedPayload = payload;
     cachedAt = Date.now();
+    applyRemoteFeatureFlags(raw);
     return payload;
   })();
 

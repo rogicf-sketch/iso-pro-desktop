@@ -4,24 +4,30 @@
  */
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { captureOperationalEvent } from '../../../lib/errorReporting';
+import { resolveFeatureEnabled } from '../../../lib/featureFlags';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
 import type { Atendimento, AtendimentoItem, EstornoAtendimentoLinha } from '../types/atendimento.types';
 
 const FLAG_STORAGE = 'iso-pro-desktop-estorno-v2-opt-in-v1';
 
-export function isEstornoV2FeatureEnabled(): boolean {
-  const envFlag = String(import.meta.env.VITE_ISO_PRO_ESTORNO_V2 ?? '').trim().toLowerCase();
-  if (envFlag === 'false' || envFlag === '0' || envFlag === 'no') return false;
-  if (envFlag === 'true' || envFlag === '1' || envFlag === 'yes') return true;
+function estornoV2OptOutLocal(): boolean {
   try {
     const stored = localStorage.getItem(FLAG_STORAGE);
-    if (stored === '0' || stored === 'false' || stored === 'no') return false;
+    return stored === '0' || stored === 'false' || stored === 'no';
   } catch {
-    /* ignore */
+    return false;
   }
+}
+
+export function isEstornoV2FeatureEnabled(): boolean {
+  // Precedência: kill-switch remoto (snapshot) > env VITE_ISO_PRO_ESTORNO_V2 > opt-out local > default ON.
   // Omissao: activo (com fallback automatico se RPC faltar).
-  return true;
+  return resolveFeatureEnabled('estornoV2', {
+    envValue: import.meta.env.VITE_ISO_PRO_ESTORNO_V2,
+    localOptOut: estornoV2OptOutLocal(),
+    defaultEnabled: true,
+  });
 }
 
 /** Chave estavel para retries/timeout — nao usa UUIDs aleatorios. */
