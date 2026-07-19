@@ -926,6 +926,45 @@ export function useAtendimento() {
         : `Retirada registrada com sucesso (${result.data.length} lote(s): ${numeros}).`,
     );
 
+    // Atualizacao incremental (igual ao estorno): nao esperar load() completo — em obra grande
+    // isso acrescentava 20–40s depois da gravacao ja concluida.
+    const novos = result.data;
+    const qtdPorLinha = new Map<string, number>();
+    for (const at of novos) {
+      for (const it of at.itens) {
+        const k = `${at.documentoId}::${it.documentoItemId}`;
+        qtdPorLinha.set(k, (qtdPorLinha.get(k) ?? 0) + (Number(it.quantidadeAtendida) || 0));
+      }
+    }
+    const aplicarBaixasDocs = (docs: AtendimentoDocumento[]) =>
+      docs.map((doc) => {
+        let mudou = false;
+        const linhas = doc.linhas.map((linha) => {
+          const add = qtdPorLinha.get(`${doc.id}::${linha.documentoItemId}`);
+          if (!add) return linha;
+          mudou = true;
+          return {
+            ...linha,
+            quantidadeAtendida: (Number(linha.quantidadeAtendida) || 0) + add,
+          };
+        });
+        return mudou ? { ...doc, linhas } : doc;
+      });
+
+    setHistorico((prev) => [...novos, ...prev]);
+    setDocumentos((prev) => aplicarBaixasDocs(prev));
+    queryClient.setQueryData(
+      atendimentoCoreQueryKey(user?.login),
+      (prev: AtendimentoCorePayload | undefined) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          historico: [...novos, ...prev.historico],
+          documentos: aplicarBaixasDocs(prev.documentos),
+        };
+      },
+    );
+
     setSessaoRetirada([]);
     setRecebedorTipo('interno');
     setRecebedorColaboradorId('');
@@ -937,7 +976,8 @@ export function useAtendimento() {
     setMotivoRetirada('');
     setSelectedDocumentoId('');
     setIdsMarcados(new Set());
-    await load();
+    // Revalidacao leve em fundo — nao bloqueia o recibo.
+    void load({ silent: true });
 
     setReciboSessaoOpcional(
       montarDadosReciboSessaoConsolidada(
