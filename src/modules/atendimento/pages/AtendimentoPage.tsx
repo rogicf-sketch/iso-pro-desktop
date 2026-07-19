@@ -61,6 +61,7 @@ export function AtendimentoPage() {
     pedirConfirmacaoAtendimento,
     podeRegistrarAtendimento,
     motivoBloqueioAtendimento,
+    gravandoAtendimento,
     confirmacaoAtendimento,
     cancelarConfirmacaoAtendimento,
     confirmarAtendimentoNoModal,
@@ -542,7 +543,9 @@ export function AtendimentoPage() {
       </div>
 
       <Modal
-        onClose={cancelarConfirmacaoAtendimento}
+        onClose={() => {
+          if (!gravandoAtendimento) cancelarConfirmacaoAtendimento();
+        }}
         open={Boolean(confirmacaoAtendimento)}
         title="Confirmar atendimento"
         wide
@@ -554,12 +557,17 @@ export function AtendimentoPage() {
               <strong>{confirmacaoAtendimento.itemCount}</strong> item(ns) e total de{' '}
               <strong>{confirmacaoAtendimento.totalUnidades}</strong> unidade(s)?
             </p>
+            {gravandoAtendimento ? (
+              <OperationalNotice>
+                A registrar o atendimento na nuvem… aguarde, pode levar alguns segundos. Nao feche esta janela.
+              </OperationalNotice>
+            ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
-              <Button onClick={cancelarConfirmacaoAtendimento} type="button" variant="ghost">
+              <Button disabled={gravandoAtendimento} onClick={cancelarConfirmacaoAtendimento} type="button" variant="ghost">
                 Cancelar
               </Button>
-              <Button onClick={() => void confirmarAtendimentoNoModal()} type="button">
-                Confirmar
+              <Button disabled={gravandoAtendimento} onClick={() => void confirmarAtendimentoNoModal()} type="button">
+                {gravandoAtendimento ? 'A gravar…' : 'Confirmar'}
               </Button>
             </div>
           </div>
@@ -567,7 +575,9 @@ export function AtendimentoPage() {
       </Modal>
 
       <Modal
-        onClose={cancelarConfirmacaoSessaoRetirada}
+        onClose={() => {
+          if (!gravandoAtendimento) cancelarConfirmacaoSessaoRetirada();
+        }}
         open={Boolean(confirmacaoSessaoRetirada)}
         title="Confirmar retirada (varios desenhos)"
         wide
@@ -583,12 +593,17 @@ export function AtendimentoPage() {
               O sistema registrara um lote por desenho (rastreio e estorno) e emitira um recibo consolidado para
               assinatura unica.
             </p>
+            {gravandoAtendimento ? (
+              <OperationalNotice>
+                A registrar a retirada na nuvem… aguarde, pode levar alguns segundos. Nao feche esta janela.
+              </OperationalNotice>
+            ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
-              <Button onClick={cancelarConfirmacaoSessaoRetirada} type="button" variant="ghost">
+              <Button disabled={gravandoAtendimento} onClick={cancelarConfirmacaoSessaoRetirada} type="button" variant="ghost">
                 Cancelar
               </Button>
-              <Button onClick={() => void confirmarSessaoRetiradaNoModal()} type="button">
-                Confirmar retirada
+              <Button disabled={gravandoAtendimento} onClick={() => void confirmarSessaoRetiradaNoModal()} type="button">
+                {gravandoAtendimento ? 'A gravar…' : 'Confirmar retirada'}
               </Button>
             </div>
           </div>

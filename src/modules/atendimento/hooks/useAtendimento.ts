@@ -278,6 +278,8 @@ export function useAtendimento() {
     itemCount: number;
     totalUnidades: number;
   } | null>(null);
+  /** Gravacao na nuvem em curso (atendimento unico ou sessao): mantem o modal aberto com progresso. */
+  const [gravandoAtendimento, setGravandoAtendimento] = useState(false);
   /** Apos sucesso: oferecer impressao do recibo. */
   const [reciboOpcional, setReciboOpcional] = useState<DadosReciboAtendimento | null>(null);
   /** Apos estorno confirmado: oferecer impressao do recibo de estorno. */
@@ -837,8 +839,9 @@ export function useAtendimento() {
     const extAuth = autorizadorInterno;
     const extMotivo = motivoRetirada;
 
-    setConfirmacaoSessaoRetirada(null);
-
+    // Modal aberto com progresso ate a nuvem confirmar todos os lotes.
+    setGravandoAtendimento(true);
+    try {
     const result = await registrarAtendimentosSessao({
       atendente,
       recebedorTipo,
@@ -913,6 +916,10 @@ export function useAtendimento() {
           : undefined,
       ),
     );
+    } finally {
+      setGravandoAtendimento(false);
+      setConfirmacaoSessaoRetirada(null);
+    }
   }
 
   function dispensarImpressaoReciboSessao() {
@@ -1149,8 +1156,10 @@ export function useAtendimento() {
       quantidade: linha.quantidadeNestaOperacao,
     }));
 
-    setConfirmacaoAtendimento(null);
-
+    // Mantem o modal aberto com indicador de progresso ate a nuvem confirmar
+    // (a gravacao + recarga podem levar dezenas de segundos em snapshot grande).
+    setGravandoAtendimento(true);
+    try {
     const result = await registrarAtendimento({
       documentoId: selectedDocumento.id,
       atendente,
@@ -1223,6 +1232,10 @@ export function useAtendimento() {
               }
             : undefined,
       });
+    }
+    } finally {
+      setGravandoAtendimento(false);
+      setConfirmacaoAtendimento(null);
     }
   }
 
@@ -1606,6 +1619,7 @@ export function useAtendimento() {
     pedirConfirmacaoAtendimento,
     podeRegistrarAtendimento,
     motivoBloqueioAtendimento,
+    gravandoAtendimento,
     confirmacaoAtendimento,
     cancelarConfirmacaoAtendimento,
     confirmarAtendimentoNoModal,
