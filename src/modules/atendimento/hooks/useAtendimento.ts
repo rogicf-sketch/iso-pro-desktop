@@ -165,10 +165,11 @@ export type AtendimentoLeitorCandidato = {
 
 export type AtendimentoLeitorPainelState = {
   scan: string;
-  material: Material;
+  /** `null` enquanto o passo e `buscando` (cadastro + desenhos pendentes na nuvem). */
+  material: Material | null;
   candidatos: AtendimentoLeitorCandidato[];
   documentoSelecionadoId?: string;
-  passo?: 'escolher' | 'concluido';
+  passo?: 'buscando' | 'escolher' | 'concluido';
   quantidadeAplicada?: number;
 };
 
@@ -279,6 +280,8 @@ export function useAtendimento() {
   } | null>(null);
   /** Leitor USB: modal com desenho, quantidade e continuar bipando. */
   const [leitorPainel, setLeitorPainel] = useState<AtendimentoLeitorPainelState | null>(null);
+  /** Sequencia da busca do leitor: fechar o modal invalida resultados tardios da nuvem. */
+  const leitorBuscaSeqRef = useRef(0);
   /** Fila multi-desenho antes de confirmar retirada unica + recibo consolidado. */
   const [sessaoRetirada, setSessaoRetirada] = useState<SessaoRetiradaLinha[]>([]);
   /** Ids de documentos que o refetch nao pode descartar (sessao em curso + painel do leitor aberto). */
@@ -726,7 +729,7 @@ export function useAtendimento() {
           : prev,
       );
       setSuccess(
-        `${leitorPainel.material.codigo} incluido na sessao (${q} ${linha.unidade}) — ${documento.numero} Rev. ${documento.revisao}.`,
+        `${leitorPainel.material?.codigo ?? linha.codigoMaterial} incluido na sessao (${q} ${linha.unidade}) — ${documento.numero} Rev. ${documento.revisao}.`,
       );
       tocarFeedbackLeitor('confirmado');
     },
@@ -981,6 +984,7 @@ export function useAtendimento() {
   }
 
   const continuarLeitorBipando = useCallback(() => {
+    leitorBuscaSeqRef.current += 1;
     setLeitorPainel(null);
   }, []);
 
@@ -994,19 +998,28 @@ export function useAtendimento() {
       }
       setError('');
       setSuccess('');
+      // Feedback imediato: modal abre ja no passo «buscando» enquanto consultamos a nuvem.
+      // Se o usuario fechar o modal durante a busca, o resultado tardio nao pode reabri-lo.
+      const buscaId = ++leitorBuscaSeqRef.current;
+      const buscaAtiva = () => leitorBuscaSeqRef.current === buscaId;
+      setLeitorPainel({ scan, material: null, candidatos: [], passo: 'buscando' });
 
       const matRes = await buscarMaterialPorLeituraCodigo(scan);
       if (!matRes.success) {
+        if (buscaAtiva()) setLeitorPainel(null);
         tocarFeedbackLeitor('erro');
         setError(matRes.error ?? 'Falha ao buscar material.');
         return;
       }
       if (!matRes.data) {
+        if (buscaAtiva()) setLeitorPainel(null);
         tocarFeedbackLeitor('erro');
         setError('Material nao encontrado no cadastro (codigo ou codigo de barras).');
         return;
       }
       const material = matRes.data;
+      // Material identificado — o modal ja mostra codigo/descricao enquanto procura desenhos.
+      if (buscaAtiva()) setLeitorPainel({ scan, material, candidatos: [], passo: 'buscando' });
       const codigoRef = material.codigo.trim().toLowerCase();
 
       const buscarCandidatos = (docs: AtendimentoDocumento[]) =>
@@ -1041,6 +1054,7 @@ export function useAtendimento() {
         (c) => quantidadeMaximaRestanteLeitor(c.linha, sessaoRetirada, c.documento.id) > 0,
       );
 
+      if (!buscaAtiva()) return;
       setLeitorPainel({ scan, material, candidatos, passo: 'escolher' });
 
       if (candidatos.length === 0) {
@@ -1068,6 +1082,7 @@ export function useAtendimento() {
   );
 
   const fecharLeitorPainel = useCallback(() => {
+    leitorBuscaSeqRef.current += 1;
     setLeitorPainel(null);
   }, []);
 

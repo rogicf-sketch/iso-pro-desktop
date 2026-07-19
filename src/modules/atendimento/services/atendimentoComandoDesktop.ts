@@ -21,6 +21,26 @@ export type AtendimentoDesktopSyncOutcome = {
 
 const CONFLICT_RETRY_MAX = 6;
 
+function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Erros de rede/timeout sao seguros de repetir: o comando e idempotente pela chave,
+ * entao reenviar nunca duplica a baixa (o servidor devolve o resultado ja gravado).
+ */
+function isErroTransienteNuvem(message: string | null | undefined): boolean {
+  const m = String(message ?? '').toLowerCase();
+  return (
+    m.includes('timeout') ||
+    m.includes('failed to fetch') ||
+    m.includes('fetch failed') ||
+    m.includes('network') ||
+    m.includes('econnreset') ||
+    m.includes('econnrefused')
+  );
+}
+
 let syncAtendimentoTail: Promise<unknown> = Promise.resolve();
 let atendimentoCloudBaselineCursor: string | null = null;
 
@@ -172,7 +192,24 @@ export async function gravarAtendimentoNaNuvemComComando(input: {
   return runExclusiveAtendimentoSync(async () => {
     let lastError: unknown;
     for (let attempt = 0; attempt < CONFLICT_RETRY_MAX; attempt++) {
-      const { baseline, next, idempotencyKey } = await input.prepare();
+      let prepared: Awaited<ReturnType<typeof input.prepare>>;
+      try {
+        prepared = await input.prepare();
+      } catch (err) {
+        // Leitura da baseline falhou por rede/timeout: repetir e seguro (ainda nada foi gravado).
+        const msg = err instanceof Error ? err.message : '';
+        if (isErroTransienteNuvem(msg)) {
+          if (attempt < CONFLICT_RETRY_MAX - 1) {
+            await delayMs(700 + attempt * 500);
+            continue;
+          }
+          throw new Error(
+            'A ligacao com a nuvem esta lenta e a gravacao nao foi concluida. Nada foi registrado — verifique a internet e clique Confirmar de novo.',
+          );
+        }
+        throw err;
+      }
+      const { baseline, next, idempotencyKey } = prepared;
       const delta = buildDesktopAtendimentoPatchDelta(baseline.slices, next.slices);
 
       const outcome = await syncAtendimentoComandoDesktop({
@@ -190,11 +227,24 @@ export async function gravarAtendimentoNaNuvemComComando(input: {
       }
 
       if (outcome.conflict && attempt < CONFLICT_RETRY_MAX - 1) {
+        // Outro dispositivo (ex.: mobile) gravou entre a leitura e o envio — pequena espera antes de reler.
+        await delayMs(250 + attempt * 350);
         continue;
       }
 
       if (outcome.conflict) {
         throw new IsoProSnapshotConflictError(outcome.error ?? SNAPSHOT_CONFLICT_MESSAGE);
+      }
+
+      if (isErroTransienteNuvem(outcome.error)) {
+        if (attempt < CONFLICT_RETRY_MAX - 1) {
+          await delayMs(700 + attempt * 500);
+          continue;
+        }
+        lastError = new Error(
+          'A nuvem nao confirmou a gravacao (ligacao lenta). Recarregue a pagina e confira o historico antes de tentar de novo.',
+        );
+        break;
       }
 
       lastError = new Error(outcome.error ?? 'Falha ao gravar atendimento na nuvem.');

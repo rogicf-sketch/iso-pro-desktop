@@ -179,6 +179,7 @@ export function AtendimentoLeitorModal({
   if (!painel) return null;
 
   const { material, candidatos, scan } = painel;
+  const buscando = painel.passo === 'buscando';
 
   return (
     <Modal onClose={onCancelar} open={open} title="Atendimento via leitor" wide>
@@ -195,14 +196,31 @@ export function AtendimentoLeitorModal({
         </div>
 
         <div className="document-summary">
-          <strong>{material.codigo}</strong>
-          <p className="panel-copy">{material.descricao || 'Sem descricao no cadastro.'}</p>
+          <strong>{material ? material.codigo : 'A identificar material…'}</strong>
+          <p className="panel-copy">
+            {material ? material.descricao || 'Sem descricao no cadastro.' : 'A consultar o cadastro na nuvem.'}
+          </p>
           <p className="panel-copy">
             Leitura: <code>{scan}</code>
           </p>
         </div>
 
-        {candidatos.length === 0 ? (
+        {buscando || !material ? (
+          <>
+            <OperationalNotice>
+              <strong>Aguarde…</strong>{' '}
+              {material
+                ? 'A procurar desenhos com pendencia deste material na nuvem.'
+                : 'A identificar o material no cadastro.'}{' '}
+              Isto pode levar alguns segundos.
+            </OperationalNotice>
+            <div className="form-actions">
+              <Button onClick={onCancelar} type="button" variant="ghost">
+                Cancelar
+              </Button>
+            </div>
+          </>
+        ) : candidatos.length === 0 ? (
           <OperationalNotice tone="warning">
             Nenhum documento pendente inclui este material. Verifique planejamento, recebimento (saldo) e cadastro.
           </OperationalNotice>

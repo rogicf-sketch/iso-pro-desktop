@@ -676,7 +676,11 @@ async function writeSnapshotAtendimentoPatch(patch: {
       const sliceKeys = ehEstornoPrepare
         ? (['atendimentos', 'atendimentoEstornoLog', 'configuracoesSistema'] as const)
         : (['atendimentos', 'atendimentoHistorico', 'atendimentoEstornoLog', 'configuracoesSistema'] as const);
-      const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(sliceKeys);
+      // Sem timeout esta leitura pode pendurar a gravacao indefinidamente (modal «A gravar…» sem fim).
+      const { slices: currentPayload, baselineUpdatedAt } = await withRemoteReadTimeout(
+        () => readIsoProSnapshotSlicesForWrite(sliceKeys),
+        REMOTE_READ_TIMEOUT_HEAVY_MS,
+      );
       const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
       const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
       const existingEstornoLog = mapEstornoLogFromSnapshot(
@@ -746,6 +750,7 @@ async function writeSnapshotAtendimentoPatch(patch: {
       };
     },
   });
+  invalidateSaldoOperacionalCache();
   registrarAtividadeBackupOracle('atendimento');
 }
 
@@ -826,23 +831,38 @@ async function enrichMateriaisSaldoFromLocalMovement(
   }));
 }
 
+/**
+ * Cache curto do saldo operacional: cada bipe do leitor precisava baixar ~1,3 MB de fatias.
+ * Validacao final de saldo acontece na gravacao; aqui o saldo orienta a UI do leitor/busca.
+ */
+let saldoOperacionalCache: { map: Map<string, number>; at: number } | null = null;
+const SALDO_OPERACIONAL_CACHE_TTL_MS = 45_000;
+
+export function invalidateSaldoOperacionalCache(): void {
+  saldoOperacionalCache = null;
+}
+
 /** Saldo recebimentos − já atendido (+ ajustes), igual ao mobile e à lista de Materiais após recálculo. */
 async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
   if (shouldTryRemoteRead()) {
+    if (saldoOperacionalCache && Date.now() - saldoOperacionalCache.at <= SALDO_OPERACIONAL_CACHE_TTL_MS) {
+      return new Map(saldoOperacionalCache.map);
+    }
     try {
       const [payloadLight, atendidoPorCodigo] = await Promise.all([
         withRemoteReadTimeout(() => readSnapshotPayloadLight()),
         fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
       ]);
-      if (atendidoPorCodigo.size > 0) {
-        const payloadComAgg: SnapshotPayload = {
-          ...payloadLight,
-          documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
-        };
-        return buildSaldoMap(payloadComAgg);
-      }
-      // Nunca cair no snapshot completo com documentos[] (timeout ~20s no boot).
-      return buildSaldoMap(payloadLight);
+      const saldoMap =
+        atendidoPorCodigo.size > 0
+          ? buildSaldoMap({
+              ...payloadLight,
+              documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+            } satisfies SnapshotPayload)
+          : // Nunca cair no snapshot completo com documentos[] (timeout ~20s no boot).
+            buildSaldoMap(payloadLight);
+      saldoOperacionalCache = { map: new Map(saldoMap), at: Date.now() };
+      return saldoMap;
     } catch {
       return new Map();
     }
@@ -1139,48 +1159,50 @@ async function readRemoteState() {
   };
 }
 
-/** Leitura operacional sem documentos[] completo — carrega só os IDs pedidos nas tabelas. */
+/**
+ * Leitura operacional sem documentos[] completo — carrega só os IDs pedidos nas tabelas.
+ * Nunca cai no snapshot completo (4k+ documentos): em obra grande isso levava 30-60s e a
+ * gravacao da sessao parecia «congelada» ate falhar por timeout. Falha aqui = caller decide
+ * (registrar* usa `.catch(() => null)` e segue com o estado local).
+ */
 async function readRemoteStateForWrite(documentoIds: string[]) {
   const uniqueIds = [...new Set(documentoIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
-  try {
-    const [payloadLight, atendidoPorCodigo] = await Promise.all([
-      readSnapshotPayloadLight(),
-      fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
-    ]);
-    const saldoMap =
-      atendidoPorCodigo.size > 0
-        ? buildSaldoMap({
-            ...payloadLight,
-            documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
-          })
-        : buildSaldoMap(payloadLight);
-    let materiais = mapSnapshotMateriais(payloadLight, saldoMap);
-    if (shouldUseCloudMaterials()) {
-      try {
-        const cadastro = await carregarMateriaisDoCadastro();
-        materiais = mergeMateriaisSnapshotComCadastroNuvem(materiais, cadastro, saldoMap);
-      } catch {
-        /* mantem snapshot */
-      }
+  const [payloadLight, atendidoPorCodigo] = await withRemoteReadTimeout(
+    () =>
+      Promise.all([
+        readSnapshotPayloadLight(),
+        fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
+      ]),
+    REMOTE_READ_TIMEOUT_HEAVY_MS,
+  );
+  const saldoMap =
+    atendidoPorCodigo.size > 0
+      ? buildSaldoMap({
+          ...payloadLight,
+          documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+        })
+      : buildSaldoMap(payloadLight);
+  let materiais = mapSnapshotMateriais(payloadLight, saldoMap);
+  if (shouldUseCloudMaterials()) {
+    try {
+      const cadastro = await carregarMateriaisDoCadastro();
+      materiais = mergeMateriaisSnapshotComCadastroNuvem(materiais, cadastro, saldoMap);
+    } catch {
+      /* mantem snapshot */
     }
-    const documentos: DocumentoStored[] = [];
-    for (const id of uniqueIds) {
-      const doc = await carregarDocumentoStoredDaNuvem(id);
-      if (doc) documentos.push(doc);
-    }
-    if (uniqueIds.length > 0 && documentos.length === 0) {
-      return await readRemoteState();
-    }
-    return {
-      payload: payloadLight,
-      documentos,
-      materiais,
-      atendimentos: mapSnapshotAtendimentos(payloadLight),
-      estornoLog: mapEstornoLogFromSnapshot(payloadLight.atendimentoEstornoLog),
-    };
-  } catch {
-    return await readRemoteState();
   }
+  // Em paralelo, com uma repeticao por documento (RPC leve ~2KB cada).
+  const docsLidos = await Promise.all(
+    uniqueIds.map(async (id) => (await carregarDocumentoStoredDaNuvem(id)) ?? (await carregarDocumentoStoredDaNuvem(id))),
+  );
+  const documentos = docsLidos.filter((doc): doc is DocumentoStored => doc != null);
+  return {
+    payload: payloadLight,
+    documentos,
+    materiais,
+    atendimentos: mapSnapshotAtendimentos(payloadLight),
+    estornoLog: mapEstornoLogFromSnapshot(payloadLight.atendimentoEstornoLog),
+  };
 }
 
 function mesclarDocumentosLocaisComRemotos(
@@ -1812,8 +1834,17 @@ export async function registrarAtendimento(payload: {
       : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
   const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
 
-  const documentoIndex = documentos.findIndex((doc) => doc.id === payload.documentoId);
-  if (documentoIndex === -1) return { success: false, error: 'Documento nao encontrado.' };
+  let documentoIndex = documentos.findIndex((doc) => doc.id === payload.documentoId);
+  if (documentoIndex === -1 && shouldTryRemoteRead()) {
+    const docNuvem = await carregarDocumentoStoredDaNuvem(payload.documentoId);
+    if (docNuvem) {
+      documentos.push(docNuvem);
+      documentoIndex = documentos.length - 1;
+    }
+  }
+  if (documentoIndex === -1) {
+    return { success: false, error: 'Documento nao encontrado. Recarregue a pagina e tente de novo.' };
+  }
 
   const documento = documentos[documentoIndex];
   if (documento.status === 'cancelado') {
@@ -2045,9 +2076,17 @@ export async function registrarAtendimentosSessao(
   const dataAtendimento = new Date().toISOString();
 
   for (const grupo of gruposValidados) {
-    const documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
+    let documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
+    if (documentoIndex === -1 && shouldTryRemoteRead()) {
+      // Documento veio do leitor/busca remota e pode nao estar na copia local: ultima tentativa direta.
+      const docNuvem = await carregarDocumentoStoredDaNuvem(grupo.documentoId);
+      if (docNuvem) {
+        documentos.push(docNuvem);
+        documentoIndex = documentos.length - 1;
+      }
+    }
     if (documentoIndex === -1) {
-      return { success: false, error: 'Documento nao encontrado.' };
+      return { success: false, error: 'Documento nao encontrado. Recarregue a pagina e tente de novo.' };
     }
 
     const documento = documentosMutados.get(grupo.documentoId) ?? { ...documentos[documentoIndex] };
