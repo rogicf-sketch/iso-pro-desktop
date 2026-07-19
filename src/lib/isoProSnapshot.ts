@@ -514,7 +514,7 @@ export async function submitAtendimentoComandoToCloud(
     p_idempotency_key: idempotencyKey,
     p_baseline: baselineUpdatedAt,
   };
-  let { data, error } = await supabase.rpc('iso_pro_submit_atendimento_comando', commandArgs);
+  const { data, error } = await supabase.rpc('iso_pro_submit_atendimento_comando', commandArgs);
   if (!error && data != null) {
     invalidateIsoProSnapshotCache();
     return { ok: true, updatedAt: String(data), usedCommandRpc: true };

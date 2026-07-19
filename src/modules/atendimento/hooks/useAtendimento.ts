@@ -483,9 +483,12 @@ export function useAtendimento() {
   );
 
   /** Documento encontrado pela busca remota (fora dos primeiros pendentes do boot): entra na lista local. */
-  const adicionarDocumentoPendenteRemoto = useCallback((documento: AtendimentoDocumento) => {
-    setDocumentos((prev) => (prev.some((d) => d.id === documento.id) ? prev : [...prev, documento]));
-  }, []);
+  const adicionarDocumentoPendenteRemoto = useCallback(
+    (documento: AtendimentoDocumento) => {
+      setDocumentos((prev) => (prev.some((d) => d.id === documento.id) ? prev : [...prev, documento]));
+    },
+    [setDocumentos],
+  );
 
   useEffect(() => {
     if (!selectedDocumentoId) {

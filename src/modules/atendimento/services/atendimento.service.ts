@@ -1349,7 +1349,7 @@ export async function buscarDocumentosPendentesNuvem(busca: string): Promise<Ate
 
 export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<AtendimentoDocumento[]>> {
   let source: 'supabase' | 'local' = 'local';
-  let fallbackReason = '';
+  const fallbackReason = '';
 
   try {
     const data = await listarDocumentosPendentes();

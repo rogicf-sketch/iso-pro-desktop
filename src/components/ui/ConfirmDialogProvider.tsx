@@ -130,6 +130,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- hook acompanha o provider; sem impacto no fast refresh em producao
 export function useConfirmDialog() {
   const confirm = useContext(ConfirmDialogContext);
   if (!confirm) {

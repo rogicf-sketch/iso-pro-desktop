@@ -14,7 +14,7 @@ const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, moc
 }));
 
 vi.mock('../../../lib/snapshotSliceRead', () => ({
-  readSnapshotRemoteSliceOrFull: (_keys: readonly unknown[]) => mockReadPayload(),
+  readSnapshotRemoteSliceOrFull: () => mockReadPayload(),
 }));
 
 vi.mock('../../../lib/supabase', () => ({

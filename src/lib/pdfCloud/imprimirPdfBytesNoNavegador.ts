@@ -4,7 +4,7 @@
  */
 export async function imprimirPdfBytesNoNavegador(
   bytes: Uint8Array,
-  _fileName?: string,
+  fileName?: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (typeof document === 'undefined' || !document.body) {
     return { ok: false, error: 'Impressão indisponível neste ambiente.' };
@@ -20,7 +20,7 @@ export async function imprimirPdfBytesNoNavegador(
   return new Promise((resolve) => {
     let settled = false;
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('title', 'I.S.O PRO — impressão PDF');
+    iframe.setAttribute('title', fileName?.trim() || 'I.S.O PRO — impressão PDF');
     iframe.style.cssText =
       'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;border:0;pointer-events:none;';
 
