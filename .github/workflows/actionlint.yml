@@ -1,7 +1,7 @@
-﻿# Valida sintaxe e boas praticas dos workflows (.github/workflows).
+# Valida sintaxe e boas praticas dos workflows (.github/workflows).
 # https://github.com/rhysd/actionlint
 #
-# So corre em branch/PR quando os YAML mudam — tags web-v* nao disparam
+# So corre em branch/PR quando os YAML mudam - tags web-v* nao disparam
 # (filtro paths nao aplica a push de tag; isso gerava X vermelho em todo deploy).
 
 name: Lint workflows
@@ -25,7 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Download actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=1.7.12
+          curl -fsSL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+
       - name: Run actionlint
-        uses: docker://rhysd/actionlint:1.7.12
-        with:
-          args: -color
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/actionlint -color -shellcheck=
