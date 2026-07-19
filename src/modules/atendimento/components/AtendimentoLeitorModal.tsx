@@ -24,6 +24,8 @@ type Props = {
   onConfirmar: (documentoId: string, quantidade: number) => void;
   onContinuarBipando: () => void;
   onCancelar: () => void;
+  /** Abre a confirmacao da retirada (recibo unico) sem precisar rolar ate a tabela da sessao. */
+  onFinalizarRetirada?: () => void;
 };
 
 function rotuloRetirante(
@@ -52,6 +54,7 @@ export function AtendimentoLeitorModal({
   onConfirmar,
   onContinuarBipando,
   onCancelar,
+  onFinalizarRetirada,
 }: Props) {
   const [documentoId, setDocumentoId] = useState('');
   const [quantidade, setQuantidade] = useState('');
@@ -214,11 +217,20 @@ export function AtendimentoLeitorModal({
                 ? ` no documento ${candidatoConcluido.documento.numero} Rev. ${candidatoConcluido.documento.revisao}.`
                 : '.'}
             </OperationalNotice>
-            <p className="panel-copy">Deseja bipar o proximo material? (Enter = sim, Esc = fechar)</p>
-            <div className="form-actions">
+            <p className="panel-copy">
+              Sessao atual: {sessaoRetirada.length} item(ns) ·{' '}
+              {sessaoRetirada.reduce((acc, l) => acc + (Number(l.quantidade) || 0), 0)} unidade(s). Deseja bipar o
+              proximo material ou finalizar? (Enter = continuar, Esc = fechar)
+            </p>
+            <div className="form-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
               <Button onClick={onContinuarBipando} ref={continuarRef} type="button">
                 Sim — continuar bipando
               </Button>
+              {onFinalizarRetirada && sessaoRetirada.length > 0 ? (
+                <Button onClick={onFinalizarRetirada} type="button" variant="ghost">
+                  Finalizar retirada (recibo unico)
+                </Button>
+              ) : null}
               <Button onClick={onCancelar} type="button" variant="ghost">
                 Nao — fechar e revisar tabela
               </Button>

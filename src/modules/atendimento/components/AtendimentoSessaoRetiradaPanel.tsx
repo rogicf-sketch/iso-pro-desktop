@@ -6,6 +6,8 @@ import type { SessaoRetiradaLinha } from '../types/atendimento.types';
 type Props = {
   linhas: SessaoRetiradaLinha[];
   podeConfirmar: boolean;
+  /** Mensagem exata que explica o botao desativado (validacao da sessao). */
+  motivoBloqueio?: string | null;
   loading: boolean;
   onConfirmar: () => void;
   onRemoverLinha: (documentoId: string, documentoItemId: string) => void;
@@ -15,6 +17,7 @@ type Props = {
 export function AtendimentoSessaoRetiradaPanel({
   linhas,
   podeConfirmar,
+  motivoBloqueio,
   loading,
   onConfirmar,
   onRemoverLinha,
@@ -56,6 +59,12 @@ export function AtendimentoSessaoRetiradaPanel({
         {documentoCount} desenho(s) · {linhas.length} item(ns) · {totalUn} unidade(s) nesta retirada. Ao confirmar, o
         sistema registra um lote por desenho e imprime um recibo consolidado com uma assinatura.
       </OperationalNotice>
+
+      {!podeConfirmar && !loading && motivoBloqueio ? (
+        <OperationalNotice tone="warning">
+          <strong>Falta para confirmar:</strong> {motivoBloqueio}
+        </OperationalNotice>
+      ) : null}
 
       {[...grupos.entries()].map(([documentoId, grupo]) => {
         const cab = grupo[0];

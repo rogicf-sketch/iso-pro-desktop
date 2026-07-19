@@ -176,6 +176,22 @@ export type AtendimentoLeitorPainelState = {
  * Sincronização em segundo plano (nuvem): atualiza pendência/saldo vindos do servidor sem apagar
  * quantidades já digitadas nesta operação.
  */
+/**
+ * O refetch traz so os primeiros pendentes do boot. Documentos trazidos pelo leitor/busca remota
+ * que estao na sessao de retirada (ou abertos no painel do leitor) nao podem sumir da lista,
+ * senao a validacao da sessao falha («item nao encontrado») e o Confirmar retirada bloqueia.
+ */
+export function reterDocumentosProtegidos(
+  prev: AtendimentoDocumento[],
+  base: AtendimentoDocumento[],
+  protegidos: ReadonlySet<string>,
+): AtendimentoDocumento[] {
+  if (!protegidos.size) return base;
+  const idsBase = new Set(base.map((d) => d.id));
+  const faltantes = prev.filter((d) => protegidos.has(d.id) && !idsBase.has(d.id));
+  return faltantes.length ? [...base, ...faltantes] : base;
+}
+
 function mergeDocumentosPendentesPreservandoOperacao(
   prev: AtendimentoDocumento[],
   next: AtendimentoDocumento[],
@@ -265,6 +281,13 @@ export function useAtendimento() {
   const [leitorPainel, setLeitorPainel] = useState<AtendimentoLeitorPainelState | null>(null);
   /** Fila multi-desenho antes de confirmar retirada unica + recibo consolidado. */
   const [sessaoRetirada, setSessaoRetirada] = useState<SessaoRetiradaLinha[]>([]);
+  /** Ids de documentos que o refetch nao pode descartar (sessao em curso + painel do leitor aberto). */
+  const documentosProtegidosRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const ids = new Set(sessaoRetirada.map((l) => l.documentoId));
+    for (const c of leitorPainel?.candidatos ?? []) ids.add(c.documento.id);
+    documentosProtegidosRef.current = ids;
+  }, [sessaoRetirada, leitorPainel]);
   /** Confirmacao da sessao multi-desenho. */
   const [confirmacaoSessaoRetirada, setConfirmacaoSessaoRetirada] = useState<{
     documentoCount: number;
@@ -436,9 +459,15 @@ export function useAtendimento() {
 
     setSnapshotConflict(false);
     if (mode === 'merge') {
-      setDocumentos((prev) => mergeDocumentosPendentesPreservandoOperacao(prev, payload.documentos));
+      setDocumentos((prev) =>
+        reterDocumentosProtegidos(
+          prev,
+          mergeDocumentosPendentesPreservandoOperacao(prev, payload.documentos),
+          documentosProtegidosRef.current,
+        ),
+      );
     } else {
-      setDocumentos(payload.documentos);
+      setDocumentos((prev) => reterDocumentosProtegidos(prev, payload.documentos, documentosProtegidosRef.current));
       setDocumentosListaTick((n) => n + 1);
       ultimoDocumentoComSugestaoAplicadaRef.current = '';
     }
@@ -731,7 +760,8 @@ export function useAtendimento() {
     setIdsMarcados(new Set());
   }, [setDocumentos]);
 
-  const podeConfirmarSessaoRetirada = useMemo(
+  /** Mensagem exata do bloqueio (ou null) — exibida junto ao botao «Confirmar retirada». */
+  const motivoBloqueioSessaoRetirada = useMemo(
     () =>
       obterErroRegistroSessaoRetirada(
         sessaoRetirada,
@@ -745,7 +775,7 @@ export function useAtendimento() {
         recebedorTelefone,
         autorizadorInterno,
         motivoRetirada,
-      ) === null,
+      ),
     [
       sessaoRetirada,
       documentos,
@@ -760,6 +790,7 @@ export function useAtendimento() {
       motivoRetirada,
     ],
   );
+  const podeConfirmarSessaoRetirada = motivoBloqueioSessaoRetirada === null;
 
   function pedirConfirmacaoSessaoRetirada() {
     setError('');
@@ -1688,6 +1719,7 @@ export function useAtendimento() {
     removerLinhaSessaoRetirada,
     limparSessaoRetirada,
     podeConfirmarSessaoRetirada,
+    motivoBloqueioSessaoRetirada,
     pedirConfirmacaoSessaoRetirada,
     confirmacaoSessaoRetirada,
     cancelarConfirmacaoSessaoRetirada,

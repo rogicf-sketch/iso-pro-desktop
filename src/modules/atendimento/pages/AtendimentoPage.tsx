@@ -102,6 +102,7 @@ export function AtendimentoPage() {
     removerLinhaSessaoRetirada,
     limparSessaoRetirada,
     podeConfirmarSessaoRetirada,
+    motivoBloqueioSessaoRetirada,
     pedirConfirmacaoSessaoRetirada,
     confirmacaoSessaoRetirada,
     cancelarConfirmacaoSessaoRetirada,
@@ -122,6 +123,8 @@ export function AtendimentoPage() {
   const estornoQtdRefs = useRef<(HTMLInputElement | null)[]>([]);
   const estornoConfirmarRef = useRef<HTMLButtonElement | null>(null);
   const [leitorCodigoBuffer, setLeitorCodigoBuffer] = useState('');
+  /** Leitura em processamento (cadastro + busca de desenhos na nuvem) — feedback «aguarde» junto ao campo. */
+  const [leituraEmCurso, setLeituraEmCurso] = useState(false);
   const [reciboHistoricoLoadingId, setReciboHistoricoLoadingId] = useState<string | null>(null);
   const [reciboSessaoPreviewLoading, setReciboSessaoPreviewLoading] = useState(false);
   const [reciboAviso, setReciboAviso] = useState<string | null>(null);
@@ -151,8 +154,10 @@ export function AtendimentoPage() {
       // Nao roubar o foco de quem esta a preencher outro campo (nome/empresa/motivo):
       // so re-focar o leitor se o cursor estava nele quando a leitura comecou.
       const leitorTinhaFoco = document.activeElement === leitorCodigoRef.current;
+      setLeituraEmCurso(true);
       void processarLeituraCodigoBarras(scan).finally(() => {
         leitorProcessandoRef.current = false;
+        setLeituraEmCurso(false);
         if (leitorTinhaFoco) focarLeitor();
       });
     },
@@ -381,6 +386,11 @@ export function AtendimentoPage() {
                 value={leitorCodigoBuffer}
               />
             </label>
+            {leituraEmCurso ? (
+              <OperationalNotice>
+                A identificar o material e a procurar desenhos com pendencia na nuvem… aguarde um instante.
+              </OperationalNotice>
+            ) : null}
             <ModuleHelp>
               <p className="panel-copy" style={{ marginTop: 8 }}>
                 Fluxo: preencha atendente e retirante, bipe os materiais de varios desenhos e confirme a sessao — um recibo consolidado e um lote por desenho no historico.
@@ -423,6 +433,7 @@ export function AtendimentoPage() {
           <AtendimentoSessaoRetiradaPanel
             linhas={sessaoRetirada}
             loading={loading}
+            motivoBloqueio={motivoBloqueioSessaoRetirada}
             onConfirmar={pedirConfirmacaoSessaoRetirada}
             onLimpar={limparSessaoRetirada}
             onRemoverLinha={removerLinhaSessaoRetirada}
@@ -593,6 +604,30 @@ export function AtendimentoPage() {
               O sistema registrara um lote por desenho (rastreio e estorno) e emitira um recibo consolidado para
               assinatura unica.
             </p>
+            <table className="data-table" style={{ marginTop: 8 }}>
+              <thead>
+                <tr>
+                  <th>Desenho</th>
+                  <th>Codigo</th>
+                  <th>Descricao</th>
+                  <th>UN</th>
+                  <th>Qtd</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessaoRetirada.map((linha) => (
+                  <tr key={`${linha.documentoId}-${linha.documentoItemId}`}>
+                    <td>
+                      {linha.documentoNumero} Rev. {linha.documentoRevisao}
+                    </td>
+                    <td>{linha.codigoMaterial}</td>
+                    <td>{linha.descricaoMaterial}</td>
+                    <td>{linha.unidade}</td>
+                    <td>{linha.quantidade}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
             {gravandoAtendimento ? (
               <OperationalNotice>
                 A registrar a retirada na nuvem… aguarde, pode levar alguns segundos. Nao feche esta janela.
@@ -916,6 +951,10 @@ export function AtendimentoPage() {
         onContinuarBipando={() => {
           continuarLeitorBipando();
           focarLeitor();
+        }}
+        onFinalizarRetirada={() => {
+          fecharLeitorPainel();
+          pedirConfirmacaoSessaoRetirada();
         }}
         open={Boolean(leitorPainel)}
         painel={leitorPainel}

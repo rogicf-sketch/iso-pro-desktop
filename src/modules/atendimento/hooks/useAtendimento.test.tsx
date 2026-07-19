@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AtendimentoDocumento } from '../types/atendimento.types';
-import { obterErroRegistroAtendimento, useAtendimento } from './useAtendimento';
+import { obterErroRegistroAtendimento, reterDocumentosProtegidos, useAtendimento } from './useAtendimento';
 
 const mocks = vi.hoisted(() => ({
   listarDocumentosPendentesComMeta: vi.fn(),
@@ -200,5 +200,23 @@ describe('obterErroRegistroAtendimento', () => {
     expect(
       obterErroRegistroAtendimento(d, 'Op', 'externo', '', 'N', '', 'RG', '', '', '', [linha], ids),
     ).toMatch(/retirante externo/);
+  });
+});
+
+describe('reterDocumentosProtegidos', () => {
+  it('reanexa documento da sessao que o refetch descartou (fora dos primeiros pendentes do boot)', () => {
+    const docBoot = buildDoc();
+    const docRemoto = { ...buildDoc(), id: 'doc-remoto', numero: 'N9' };
+    const prev = [docBoot, docRemoto];
+    const baseRefetch = [docBoot];
+    const out = reterDocumentosProtegidos(prev, baseRefetch, new Set(['doc-remoto']));
+    expect(out.map((d) => d.id)).toEqual(['doc-1', 'doc-remoto']);
+  });
+
+  it('sem protegidos ou sem faltantes devolve a base intacta', () => {
+    const docBoot = buildDoc();
+    const base = [docBoot];
+    expect(reterDocumentosProtegidos([docBoot], base, new Set())).toBe(base);
+    expect(reterDocumentosProtegidos([docBoot], base, new Set(['doc-1']))).toBe(base);
   });
 });
