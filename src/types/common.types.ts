@@ -7,7 +7,7 @@ export type ServiceResult<T> = {
   /** Mensagem informativa complementar (ex.: sync na nuvem concluida). */
   info?: string;
   meta?: {
-    source?: 'supabase' | 'local';
+    source?: 'supabase' | 'local' | 'remote';
     fallbackReason?: string;
     /** Conflito de versao em `iso_pro_snapshot` apos retries; ideal recarregar dados na tela. */
     snapshotConflict?: boolean;
@@ -17,6 +17,14 @@ export type ServiceResult<T> = {
     syncMateriaisLocalBloqueado?: boolean;
     /** Leitura serviu cache local enquanto a nuvem ainda podia estar a responder (SWR). */
     staleWhileRevalidate?: boolean;
+    /** Estorno V2 (RPC transacional). */
+    estornoV2?: boolean;
+    idempotencyKey?: string;
+    durationMs?: number;
+    serverDurationMs?: number;
+    idempotentHit?: boolean;
+    rpcMissing?: boolean;
+    documentosAfetados?: unknown;
   };
 };
 

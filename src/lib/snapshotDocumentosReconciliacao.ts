@@ -34,6 +34,11 @@ export type DocumentoPlanejamentoStored = {
 
 /** Payload mínimo do `iso_pro_snapshot` para reconciliar planejamento. */
 export type PayloadPlanejamentoReconcile = {
+  /**
+   * Quando `tables`, `quantidadeAtendida` nos documentos ja veio das tabelas (SoT)
+   * e nao deve ser elevada por historico/coluna stale (anti-ressurreicao pos-estorno).
+   */
+  _documentosSource?: 'tables' | 'snapshot' | string;
   documentos?: Array<{
     id?: string | number;
     numero?: string;
@@ -228,6 +233,7 @@ export function reconciliarDocumentosComRegistrosDeAtendimento(
   documentos: DocumentoPlanejamentoStored[],
   payload: PayloadPlanejamentoReconcile,
 ): DocumentoPlanejamentoStored[] {
+  const preferTables = String(payload._documentosSource ?? '').trim().toLowerCase() === 'tables';
   const structSum = new Map<string, number>();
   for (const at of payload.atendimentos ?? []) {
     if (String(at.status) === 'estornado') continue;
@@ -241,8 +247,12 @@ export function reconciliarDocumentosComRegistrosDeAtendimento(
   }
 
   const lotesEstornados = lotesEstornadosDoPayload(payload);
-  const histByDocCod = somarHistoricoPorDocumentoECodigo(documentos, payload, lotesEstornados);
-  const histPorItemId = somarHistoricoPorDocumentoItemId(payload, lotesEstornados);
+  const histByDocCod = preferTables
+    ? new Map<string, number>()
+    : somarHistoricoPorDocumentoECodigo(documentos, payload, lotesEstornados);
+  const histPorItemId = preferTables
+    ? new Map<string, number>()
+    : somarHistoricoPorDocumentoItemId(payload, lotesEstornados);
 
   return documentos.map((doc) => {
     const did = String(doc.id);
@@ -250,7 +260,8 @@ export function reconciliarDocumentosComRegistrosDeAtendimento(
       const qSnap = Math.max(0, Number(it.quantidadeAtendida) || 0);
       const qSt = structSum.get(it.id) ?? 0;
       const qHistItem = histPorItemId.get(it.id) ?? 0;
-      const qa = Math.max(qSnap, qSt, qHistItem);
+      // Tabelas = SoT: nao elevar com historico/coluna (evita ressuscitar estorno).
+      const qa = preferTables ? qSnap : Math.max(qSnap, qSt, qHistItem);
       const proj = Math.max(0, Number(it.quantidadeProjeto) || 0);
       return { ...it, quantidadeAtendida: Math.min(proj, qa) };
     });

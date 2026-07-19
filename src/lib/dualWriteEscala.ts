@@ -2,7 +2,9 @@ import { captureOperationalEvent } from './errorReporting';
 
 /**
  * Dual-write snapshot → tabelas de escala: falhas deixam de ser silenciosas.
- * Snapshot continua a ser a fonte de verdade; a falha fica registada para o painel.
+ * Contrato Estorno V2: tabelas de planejamento sao a fonte de verdade das
+ * quantidades atendidas; snapshot/coluna documentos e projecao/cache compatível.
+ * A falha fica registada para o painel.
  */
 
 export type DualWriteDomain =

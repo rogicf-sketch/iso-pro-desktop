@@ -12,4 +12,6 @@ interface ImportMetaEnv {
   readonly VITE_RELEASE_CHANNEL?: string;
   /** JWT Auth bootstrap: true/false (omissão activo) */
   readonly VITE_ISO_PRO_JWT_AUTH?: string;
+  /** Estorno V2 (RPC transacional): true/false (omissão activo com fallback legado) */
+  readonly VITE_ISO_PRO_ESTORNO_V2?: string;
 }

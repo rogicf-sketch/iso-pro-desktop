@@ -40,6 +40,12 @@ const SLO_EVENTS = new Set<string>([
   'offline_flush',
   'outbox_flush_fail',
   'mfa_challenge',
+  'estorno_ok',
+  'estorno_timeout',
+  'estorno_conflict',
+  'estorno_network',
+  'estorno_late_confirm',
+  'estorno_idempotent_hit',
 ]);
 
 /** Evento operacional nomeado (conflito snapshot, dual-write, fila offline). */

@@ -73,6 +73,16 @@ vi.mock('./atendimentoComandoDesktop', () => ({
   getAtendimentoCloudBaselineCursor: vi.fn(() => null),
 }));
 
+vi.mock('./estornoAtendimentoV2', () => ({
+  isEstornoV2FeatureEnabled: vi.fn(() => true),
+  buildEstornoV2IdempotencyKey: vi.fn(() => 'pc-est-v2-test'),
+  estornarAtendimentoV2: vi.fn(async () => ({
+    success: false,
+    error: 'RPC V2 mock ausente',
+    meta: { rpcMissing: true },
+  })),
+}));
+
 function wireSnapshotPatchMock() {
   mockCommitWrite.mockImplementation(async (prepare) => {
     await prepare();

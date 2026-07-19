@@ -14,6 +14,8 @@ import {
   registrarAtendimento,
   registrarAtendimentosSessao,
 } from '../services/atendimento.service';
+import { buildEstornoV2IdempotencyKey } from '../services/estornoAtendimentoV2';
+import { captureOperationalEvent } from '../../../lib/errorReporting';
 import type { Colaborador } from '../../colaboradores/types/colaborador.types';
 import type {
   Atendimento,
@@ -300,6 +302,8 @@ export function useAtendimento() {
   /** Estorno em gravacao na nuvem (desativa o botao Confirmar e mostra progresso). */
   const [estornoConfirmando, setEstornoConfirmando] = useState(false);
   const [estornoDuplicadosAviso, setEstornoDuplicadosAviso] = useState<AvisoLoteDuplicadoMaterial[]>([]);
+  /** Chave V2 estavel por tentativa de confirmacao (retry/timeout). */
+  const estornoIdempotencyKeyRef = useRef<string | null>(null);
 
   /**
    * `initial` → primeira aplicação após fetch (replace).
@@ -1250,6 +1254,7 @@ export function useAtendimento() {
     setEstornoMotivo('');
     setEstornoLinhas({});
     setEstornoDuplicadosAviso([]);
+    // Mantem idempotencyKey apos fechar com falha/timeout — retry reutiliza a mesma chave.
   }
 
   function montarLinhasEstornoRequest(): EstornoAtendimentoLinha[] {
@@ -1331,6 +1336,10 @@ export function useAtendimento() {
       setError('Seu perfil nao possui permissao para estornar atendimento.');
       return;
     }
+    // Novo alvo = nova operacao (nao reutilizar chave de outro lote).
+    if (!estornoAlvo || estornoAlvo.id !== item.id) {
+      estornoIdempotencyKeyRef.current = null;
+    }
     setEstornoAlvo(item);
     setEstornoDocInfo(null);
     setEstornoNomeQuemEstorna('');
@@ -1407,12 +1416,25 @@ export function useAtendimento() {
 
     setSnapshotConflict(false);
     const numero = estornoAlvo.numero;
+    if (!estornoIdempotencyKeyRef.current) {
+      estornoIdempotencyKeyRef.current = buildEstornoV2IdempotencyKey({
+        loteId: estornoAlvo.id,
+        loteNumero: estornoAlvo.numero,
+        linhas: linhas.map((l) => ({
+          atendimentoItemId: l.atendimentoItemId,
+          quantidade: l.quantidade,
+        })),
+        motivo: estornoMotivo,
+      });
+    }
+    const idempotencyKey = estornoIdempotencyKeyRef.current;
+
     let result: Awaited<ReturnType<typeof estornarAtendimento>>;
-    // MULTIPLOS / varios desenhos: o servidor reescreve o snapshot grande — dar margem.
+    // V2 e rapido; legado MULTIPLOS ainda pode precisar de margem.
     const desenhosNoLote = new Set(
       estornoAlvo.itens.map((it) => String(it.documentoNumero ?? '').trim()).filter((n) => n && n !== '-'),
     ).size;
-    const ESTORNO_TIMEOUT_MS = Math.min(180_000, 90_000 + Math.max(0, desenhosNoLote - 1) * 45_000);
+    const ESTORNO_TIMEOUT_MS = Math.min(180_000, 60_000 + Math.max(0, desenhosNoLote - 1) * 30_000);
     try {
       result = await Promise.race([
         estornarAtendimento(estornoAlvo.id, linhas, {
@@ -1420,13 +1442,14 @@ export function useAtendimento() {
           nomeQuemDevolve: estornoNomeQuemDevolve,
           motivoEstorno: estornoMotivo,
           atendimentoSnapshot: estornoAlvo,
+          idempotencyKey,
         }),
         new Promise<Awaited<ReturnType<typeof estornarAtendimento>>>((_, reject) => {
           setTimeout(
             () =>
               reject(
                 new Error(
-                  'O estorno demorou demais na nuvem. Feche o modal, Ctrl+F5, confirme que a migration de merge (passagem unica / 180s) esta no Supabase e tente de novo.',
+                  'O estorno demorou demais na nuvem. A confirmar se ja concluiu (idempotencia)...',
                 ),
               ),
             ESTORNO_TIMEOUT_MS,
@@ -1434,11 +1457,37 @@ export function useAtendimento() {
         }),
       ]);
     } catch (err) {
-      // Falha inesperada (fora do ServiceResult): sem isto o botao parecia "sem acao".
-      result = {
-        success: false,
-        error: err instanceof Error && err.message ? err.message : 'Nao foi possivel estornar o atendimento.',
-      };
+      captureOperationalEvent('estorno_timeout', { idempotencyKeyPrefix: idempotencyKey.slice(0, 24) }, 'warning');
+      // Confirmacao tardia: reenviar com a MESMA chave — servidor devolve resultado ja gravado.
+      try {
+        result = await estornarAtendimento(estornoAlvo.id, linhas, {
+          nomeQuemEstorna: estornoNomeQuemEstorna,
+          nomeQuemDevolve: estornoNomeQuemDevolve,
+          motivoEstorno: estornoMotivo,
+          atendimentoSnapshot: estornoAlvo,
+          idempotencyKey,
+        });
+        if (result.success) {
+          captureOperationalEvent(
+            result.meta?.idempotentHit ? 'estorno_idempotent_hit' : 'estorno_late_confirm',
+            { idempotencyKeyPrefix: idempotencyKey.slice(0, 24), durationMs: result.meta?.durationMs },
+            'info',
+          );
+        } else {
+          result = {
+            success: false,
+            error:
+              (err instanceof Error && err.message ? err.message : 'Timeout no estorno.') +
+              ' Se o lote ja aparecer como estornado, nao confirme de novo.',
+          };
+        }
+      } catch {
+        captureOperationalEvent('estorno_network', { idempotencyKeyPrefix: idempotencyKey.slice(0, 24) }, 'warning');
+        result = {
+          success: false,
+          error: err instanceof Error && err.message ? err.message : 'Nao foi possivel estornar o atendimento.',
+        };
+      }
     } finally {
       setEstornoConfirmando(false);
     }
@@ -1448,18 +1497,65 @@ export function useAtendimento() {
       return;
     }
 
+    // Atualizacao incremental — nao bloquear com load() completo (7 MB).
+    const atualizado = result.data!;
+    const docsDelta = Array.isArray(result.meta?.documentosAfetados)
+      ? (result.meta!.documentosAfetados as Array<{
+          documentoId?: string;
+          documentoItemId?: string;
+          delta?: number;
+        }>)
+      : [];
+    const aplicarDeltasDocs = (docs: AtendimentoDocumento[]) => {
+      if (!docsDelta.length) return docs;
+      return docs.map((doc) => {
+        const afetados = docsDelta.filter((d) => d.documentoId === doc.id);
+        if (!afetados.length) return doc;
+        return {
+          ...doc,
+          linhas: doc.linhas.map((linha) => {
+            const hit = afetados.find((d) => d.documentoItemId === linha.id);
+            if (!hit) return linha;
+            const delta = Number(hit.delta) || 0;
+            // delta e negativo (estorno); quantidadeAtendida diminui.
+            const nextQ = Math.max(0, (Number(linha.quantidadeAtendida) || 0) + delta);
+            return { ...linha, quantidadeAtendida: nextQ };
+          }),
+        };
+      });
+    };
+    setHistorico((prev) => {
+      const idx = prev.findIndex((a) => a.id === atualizado.id || a.numero === atualizado.numero);
+      if (idx === -1) return [atualizado, ...prev];
+      const next = [...prev];
+      next[idx] = atualizado;
+      return next;
+    });
+    setDocumentos((prev) => aplicarDeltasDocs(prev));
+    queryClient.setQueryData(
+      atendimentoCoreQueryKey(user?.login),
+      (prev: AtendimentoCorePayload | undefined) => {
+        if (!prev) return prev;
+        const hist = [...prev.historico];
+        const idx = hist.findIndex((a) => a.id === atualizado.id || a.numero === atualizado.numero);
+        if (idx === -1) hist.unshift(atualizado);
+        else hist[idx] = atualizado;
+        return { ...prev, historico: hist, documentos: aplicarDeltasDocs(prev.documentos) };
+      },
+    );
+    // Revalidacao leve em fundo (merge), sem travar o sucesso.
+    void load({ silent: true });
+
     fecharModalEstorno();
-    const loteEncerrado = !result.data?.itens?.length;
+    estornoIdempotencyKeyRef.current = null;
+    const loteEncerrado = !atualizado.itens?.length;
+    const rtt =
+      typeof result.meta?.durationMs === 'number' ? ` (${result.meta.durationMs} ms)` : '';
     setSuccess(
       loteEncerrado
-        ? result.meta?.source === 'local'
-          ? `Atendimento ${numero} estornado localmente (lote encerrado).`
-          : `Atendimento ${numero} estornado com sucesso (lote encerrado).`
-        : result.meta?.source === 'local'
-          ? `Estorno parcial registrado no atendimento ${numero} (material restante no lote).`
-          : `Estorno parcial registrado no atendimento ${numero} (material restante no lote).`,
+        ? `Atendimento ${numero} estornado com sucesso (lote encerrado).${rtt}`
+        : `Estorno parcial registrado no atendimento ${numero}.${rtt}`,
     );
-    await load();
     setReciboEstornoOpcional(dadosRecibo);
   }
 

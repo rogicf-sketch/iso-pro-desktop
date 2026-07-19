@@ -142,10 +142,17 @@ async function readSnapshotSlicesFromSelect(
   if (!supabase) {
     throw new Error('Supabase nao configurado.');
   }
-  const selectCols = keys.map((k) => `payload->${k}`).join(', ');
+  // documentos vive na coluna dedicada (pos-migration 19030000); restantes no payload.
+  const wantsDocumentos = keys.includes('documentos');
+  const payloadKeys = keys.filter((k) => k !== 'documentos');
+  const selectParts = [
+    ...payloadKeys.map((k) => `payload->${k}`),
+    ...(wantsDocumentos ? ['documentos'] : []),
+    'updated_at',
+  ];
   const { data, error } = await supabase
     .from('iso_pro_snapshot')
-    .select(`${selectCols}, updated_at`)
+    .select(selectParts.join(', '))
     .eq('id', SNAPSHOT_ID)
     .eq('tenant_id', getActiveTenantId())
     .maybeSingle();
@@ -154,10 +161,13 @@ async function readSnapshotSlicesFromSelect(
   }
   const slices: Record<string, unknown> = {};
   const row = (data ?? {}) as Record<string, unknown>;
-  for (const key of keys) {
+  for (const key of payloadKeys) {
     if (key in row) {
       slices[key] = row[key];
     }
+  }
+  if (wantsDocumentos && 'documentos' in row) {
+    slices.documentos = row.documentos;
   }
   const updatedAt = row.updated_at != null ? String(row.updated_at) : null;
   return { slices, updatedAt };

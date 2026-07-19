@@ -143,6 +143,9 @@ export type EstornoAtendimentoMeta = {
   motivoEstorno: string;
   /** Atendimento ja carregado na UI — evita re-baixar snapshot completo no estorno MULTIPLOS. */
   atendimentoSnapshot?: Atendimento;
+  /** Reutilizar chave V2 apos timeout (idempotencia estavel). */
+  idempotencyKey?: string;
+  expectedVersion?: number;
 };
 
 /** Evento persistido no snapshot para exportacao e auditoria de estornos. */

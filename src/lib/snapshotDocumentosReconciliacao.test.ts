@@ -70,6 +70,23 @@ describe('reconciliacao de documentos com estornos', () => {
     expect(doc!.status).toBe('atendido');
   });
 
+  it('fonte tables: nao eleva quantidadeAtendida com historico stale', () => {
+    const payload: PayloadPlanejamentoReconcile = {
+      _documentosSource: 'tables',
+      documentos: [
+        {
+          ...docBase,
+          itens: docBase.itens.map((it) => ({ ...it, quantidadeAtendida: 0 })),
+        },
+      ],
+      atendimentos: [{ numero: 'ATD-20260711-00080', status: 'concluido', itens: [] }],
+      atendimentoHistorico: historicoLote,
+    };
+    const [doc] = documentosReconciliadosDoPayload(payload);
+    expect(doc!.itens[0]!.quantidadeAtendida).toBe(0);
+    expect(doc!.itens[1]!.quantidadeAtendida).toBe(0);
+  });
+
   it('estorno total: lote estornado nao ressuscita quantidades do historico', () => {
     const payload: PayloadPlanejamentoReconcile = {
       documentos: [docBase],

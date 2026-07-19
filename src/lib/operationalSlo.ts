@@ -11,7 +11,13 @@ export type OperationalSloEvent =
   | 'dual_write_failure'
   | 'offline_flush'
   | 'outbox_flush_fail'
-  | 'mfa_challenge';
+  | 'mfa_challenge'
+  | 'estorno_ok'
+  | 'estorno_timeout'
+  | 'estorno_conflict'
+  | 'estorno_network'
+  | 'estorno_late_confirm'
+  | 'estorno_idempotent_hit';
 
 type SloBucket = {
   at: number;

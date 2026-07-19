@@ -84,6 +84,17 @@ vi.mock('./atendimentoComandoDesktop', () => ({
   getAtendimentoCloudBaselineCursor: vi.fn(() => null),
 }));
 
+/** Testes legados exercitam o caminho snapshot; V2 devolve rpcMissing para cair no fallback. */
+vi.mock('./estornoAtendimentoV2', () => ({
+  isEstornoV2FeatureEnabled: vi.fn(() => true),
+  buildEstornoV2IdempotencyKey: vi.fn(() => 'pc-est-v2-test'),
+  estornarAtendimentoV2: vi.fn(async () => ({
+    success: false,
+    error: 'RPC V2 mock ausente',
+    meta: { rpcMissing: true },
+  })),
+}));
+
 function wireSnapshotPatchMock() {
   mockCommitWrite.mockImplementation(async (prepare) => {
     await prepare();
@@ -914,6 +925,42 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
       payload: snapshotParaEstorno(),
       baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
     });
+  });
+
+  it('V2 sucesso nao reescreve snapshot legado (retire write path)', async () => {
+    const { estornarAtendimentoV2 } = await import('./estornoAtendimentoV2');
+    vi.mocked(estornarAtendimentoV2).mockResolvedValueOnce({
+      success: true,
+      data: {
+        id: 'atd-est-1',
+        numero: 'EST-1',
+        documentoId: 'doc-1',
+        documentoNumero: 'DOC-1',
+        atendente: 'Admin',
+        recebedorTipo: 'interno',
+        recebedorColaboradorId: null,
+        recebedor: 'Joao',
+        recebedorEmpresa: '',
+        recebedorDocumento: '',
+        recebedorTelefone: '',
+        autorizadorInterno: '',
+        motivoRetirada: '',
+        origem: 'windows',
+        status: 'estornado',
+        dataAtendimento: '2026-01-01T00:00:00.000Z',
+        itens: [],
+      },
+      meta: { estornoV2: true, durationMs: 40, idempotencyKey: 'pc-est-v2-x' },
+    });
+
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+    const result = await estornarAtendimento('atd-est-1');
+    expect(result.success).toBe(true);
+    expect(result.meta?.estornoV2).toBe(true);
+    expect(mockCommitWrite).not.toHaveBeenCalled();
+    expect(mockGravarComando).not.toHaveBeenCalled();
+    const local = JSON.parse(store[ATENDIMENTOS_KEY] ?? '[]') as Array<{ status: string }>;
+    expect(local[0]?.status).toBe('estornado');
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {

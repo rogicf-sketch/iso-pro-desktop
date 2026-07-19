@@ -2128,12 +2128,45 @@ export async function registrarAtendimentosSessao(
  *
  * Escopo deliberado: estorno (devolucao ao estoque) existe apenas no PC/desktop e na web.
  * O app Campo regista somente retiradas — exige perfil administrador e recibo de estorno auditavel.
+ *
+ * SoT (V2): tabelas `iso_pro_atendimento_*` via `iso_pro_estornar_atendimento_v2`.
+ * Snapshot/`documentos` = projecao compatível; o caminho legado abaixo so corre se a RPC V2
+ * estiver ausente (`rpcMissing`) ou a feature flag desligada (`VITE_ISO_PRO_ESTORNO_V2=false`).
  */
 export async function estornarAtendimento(
   id: string,
   linhasEstorno?: EstornoAtendimentoLinha[],
   meta?: EstornoAtendimentoMeta,
 ): Promise<ServiceResult<Atendimento>> {
+  // Estorno V2: RPC transacional (tabelas SoT). Fallback automatico se RPC faltar.
+  if (shouldTryRemoteRead()) {
+    const { isEstornoV2FeatureEnabled, estornarAtendimentoV2 } = await import('./estornoAtendimentoV2');
+    if (isEstornoV2FeatureEnabled()) {
+      const v2 = await estornarAtendimentoV2(id, linhasEstorno, meta);
+      if (v2.success) {
+        // Espelho local minimo (lista de lotes) — sem rewrite de documentos[].
+        try {
+          const local = loadLocalState();
+          const atendimentos = [...local.atendimentos];
+          let idx = atendimentos.findIndex((a) => a.id === id);
+          if (idx === -1 && v2.data) {
+            idx = atendimentos.findIndex((a) => a.numero === v2.data!.numero);
+          }
+          if (idx >= 0 && v2.data) atendimentos[idx] = v2.data;
+          else if (v2.data) atendimentos.push(v2.data);
+          writeJson(atendimentosStorageKey(), atendimentos);
+        } catch {
+          /* ignore */
+        }
+        return { ...v2, meta: { ...v2.meta, source: 'supabase' } };
+      }
+      if (!v2.meta?.rpcMissing) {
+        return v2;
+      }
+      // RPC ausente → caminho legado abaixo.
+    }
+  }
+
   const localState = loadLocalState();
   let remoteState: Awaited<ReturnType<typeof readRemoteState>> | null = null;
   if (shouldTryRemoteRead()) {
