@@ -43,15 +43,11 @@ export const SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS = [
 ] as const;
 
 /**
- * Fatia minima para gravar baixa/sessao: sem historico nem lista de lotes
- * (obra grande = dezenas de MB e 40–60s). Sequencia vem de configuracoesSistema
- * + lotes locais; saldo de materiais + agregados do servidor.
+ * Fatia minima para gravar baixa/sessao: so configuracoesSistema (sequencia).
+ * Materiais/historico/lotes NAO — obra grande = dezenas de MB e 40–60s.
+ * Saldo vem dos agregados RPC + materiais ja no PC.
  */
-export const SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS = [
-  'materiais',
-  'estoqueAjustes',
-  'configuracoesSistema',
-] as const;
+export const SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS = ['configuracoesSistema'] as const;
 
 /** Minimo para saldo com agregados do servidor (recebido/atendido por codigo). */
 export const SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS = ['materiais', 'estoqueAjustes'] as const;

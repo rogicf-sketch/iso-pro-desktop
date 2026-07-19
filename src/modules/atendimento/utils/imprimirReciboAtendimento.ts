@@ -171,7 +171,8 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     .join('');
 
   const total = totalQuantidadeItens(at);
-  const classeDensidade = at.itens.length > 6 ? ' recibo-body--denso' : '';
+  // Compacto sempre na impressao (poucos itens tambem) — evita 2.a folha so com assinaturas.
+  const classeDensidade = ' recibo-body--denso';
 
   const extraRecibo = cssReciboAtendimentoBase();
 
@@ -310,7 +311,7 @@ export function cssReciboAtendimentoBase(): string {
     }
     @page {
       size: A4 portrait;
-      margin: 10mm 12mm 11mm;
+      margin: 7mm 9mm 8mm;
     }
     @media print {
       body.recibo-body { background: #fff !important; padding: 0 !important; }
@@ -323,19 +324,19 @@ export function cssReciboAtendimentoBase(): string {
         margin: 0 !important;
       }
       .recibo-topbar {
-        margin-bottom: 8px !important;
-        padding: 6px 10px !important;
-        font-size: 8.5pt !important;
+        margin-bottom: 4px !important;
+        padding: 3px 8px !important;
+        font-size: 7.5pt !important;
       }
       .recibo-header-main {
-        margin-bottom: 10px !important;
-        padding-bottom: 10px !important;
-        gap: 10px !important;
+        margin-bottom: 6px !important;
+        padding-bottom: 6px !important;
+        gap: 6px !important;
       }
       .recibo-header-main--titulo-centro {
         position: relative !important;
         display: block !important;
-        min-height: 48px !important;
+        min-height: 36px !important;
       }
       .recibo-header-main--titulo-centro .recibo-logo-wrap {
         position: relative !important;
@@ -353,89 +354,90 @@ export function cssReciboAtendimentoBase(): string {
         z-index: 1 !important;
       }
       .recibo-header-main--titulo-centro .recibo-titulo-centro h1 {
-        font-size: 13pt !important;
+        font-size: 11.5pt !important;
         text-align: center !important;
         display: inline-block !important;
         max-width: 72% !important;
       }
       .recibo-header-main--titulo-centro .recibo-titulo-centro h1::after {
-        margin-top: 6px !important;
+        margin-top: 4px !important;
         margin-left: auto !important;
         margin-right: auto !important;
         height: 2px !important;
-        width: 48px !important;
+        width: 40px !important;
       }
       .recibo-subtitulo-consolidado {
-        font-size: 9pt !important;
-        margin-top: 4px !important;
+        font-size: 8pt !important;
+        margin-top: 2px !important;
       }
       .recibo-logo-wrap .inst-logo-img {
-        max-height: 44px !important;
-        max-width: 112px !important;
-        padding: 4px !important;
+        max-height: 32px !important;
+        max-width: 96px !important;
+        padding: 2px !important;
       }
       .recibo-bloco-info {
-        padding: 10px 12px !important;
-        margin-bottom: 8px !important;
+        padding: 6px 8px !important;
+        margin-bottom: 4px !important;
       }
       .recibo-bloco-info .grid2 p,
       .recibo-doc-desc,
       .recibo-grid-externo p {
-        font-size: 9pt !important;
-        margin: 3px 0 !important;
+        font-size: 8pt !important;
+        margin: 2px 0 !important;
       }
       .recibo-bloco-info .recibo-doc-desc {
-        margin-top: 8px !important;
-        padding-top: 8px !important;
+        margin-top: 4px !important;
+        padding-top: 4px !important;
       }
       .recibo-tipo-badge {
-        margin: 0 0 8px !important;
-        padding: 6px 10px !important;
-        font-size: 8.5pt !important;
+        margin: 0 0 4px !important;
+        padding: 4px 8px !important;
+        font-size: 7.5pt !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
       .recibo-bloco-tipo--externa {
-        padding: 8px 12px !important;
-        margin-bottom: 8px !important;
+        padding: 6px 8px !important;
+        margin-bottom: 4px !important;
       }
-      .bloco h2 { margin-bottom: 6px !important; font-size: 7.5pt !important; }
-      .recibo-bloco-itens { margin-bottom: 8px !important; }
-      .recibo-bloco-itens h2 { margin-bottom: 6px !important; }
-      .recibo-tabela-wrap { margin-top: 4px !important; }
-      .recibo-tabela-itens { font-size: 9pt !important; }
+      .bloco h2 { margin-bottom: 4px !important; font-size: 7pt !important; }
+      .recibo-bloco-itens { margin-bottom: 4px !important; }
+      .recibo-bloco-itens h2 { margin-bottom: 4px !important; }
+      .recibo-tabela-wrap { margin-top: 2px !important; }
+      .recibo-tabela-itens { font-size: 8pt !important; }
       .recibo-tabela-itens th,
       .recibo-tabela-itens td {
-        padding: 5px 10px !important;
+        padding: 3px 6px !important;
       }
       .recibo-tabela-itens thead th {
-        padding: 6px 10px !important;
-        font-size: 7.5pt !important;
+        padding: 4px 6px !important;
+        font-size: 6.5pt !important;
       }
       .recibo-total-linha {
-        margin-top: 8px !important;
-        padding: 6px 10px !important;
-        font-size: 9.5pt !important;
+        margin-top: 4px !important;
+        padding: 4px 8px !important;
+        font-size: 8.5pt !important;
       }
       .recibo-total-geral {
-        margin-top: 10px !important;
-        padding: 8px 12px !important;
-        font-size: 10pt !important;
+        margin-top: 6px !important;
+        padding: 5px 8px !important;
+        font-size: 9pt !important;
       }
       .recibo-rodape-fin {
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-      /* Poucos itens: nao empurrar o bloco inteiro (total+assinaturas) para a 2.a folha. */
-      .recibo-fechamento {
         page-break-inside: auto;
         break-inside: auto;
       }
+      /* Nunca empurrar assinaturas sozinhas para a 2.a folha. */
+      .recibo-fechamento {
+        page-break-inside: auto;
+        break-inside: auto;
+        page-break-before: avoid;
+      }
       .assinaturas {
-        margin-top: 8px !important;
-        gap: 14px !important;
-        page-break-inside: avoid;
-        break-inside: avoid;
+        margin-top: 6px !important;
+        gap: 10px !important;
+        page-break-inside: auto;
+        break-inside: auto;
       }
       .assinatura-box {
         display: flex !important;
@@ -444,54 +446,47 @@ export function cssReciboAtendimentoBase(): string {
         text-align: center !important;
       }
       .linha-ass {
-        margin: 0 0 4px !important;
+        margin: 0 0 2px !important;
         width: 88% !important;
-        max-width: 280px !important;
+        max-width: 260px !important;
       }
       .espaco-assinatura {
         width: 88% !important;
-        max-width: 280px !important;
-        min-height: 22px !important;
+        max-width: 260px !important;
+        min-height: 12px !important;
       }
-      .rotulo-ass { margin: 0 0 2px !important; font-size: 8pt !important; text-align: center !important; width: 100%; }
-      .ass-nome-principal { font-size: 10pt !important; margin: 0 0 2px !important; text-align: center !important; width: 100%; }
-      .ass-meta-linha { font-size: 8.5pt !important; text-align: center !important; width: 100%; }
+      .rotulo-ass { margin: 0 0 1px !important; font-size: 7.5pt !important; text-align: center !important; width: 100%; }
+      .ass-nome-principal { font-size: 9pt !important; margin: 0 0 1px !important; text-align: center !important; width: 100%; }
+      .ass-meta-linha { font-size: 7.5pt !important; text-align: center !important; width: 100%; }
       .bloco-ass-pessoa {
         margin: 0 !important;
         width: 88% !important;
-        max-width: 280px !important;
+        max-width: 260px !important;
         text-align: center !important;
       }
-      /* Compacto na impressao mesmo com poucos itens (antes so --denso com >6). */
-      .recibo-tabela-itens { font-size: 8.5pt !important; }
-      .recibo-tabela-itens th,
-      .recibo-tabela-itens td {
-        padding: 4px 8px !important;
-      }
-      .recibo-tabela-itens thead th {
-        padding: 5px 8px !important;
-        font-size: 7pt !important;
-      }
-      body.recibo-body--denso .recibo-tabela-itens { font-size: 8.25pt !important; }
+      body.recibo-body--denso .recibo-tabela-itens { font-size: 7.5pt !important; }
       body.recibo-body--denso .recibo-tabela-itens th,
       body.recibo-body--denso .recibo-tabela-itens td {
-        padding: 3px 8px !important;
+        padding: 2px 5px !important;
       }
-      body.recibo-body--denso .recibo-tabela-itens .col-desc { line-height: 1.28 !important; }
-      body.recibo-body--denso .recibo-tabela-itens thead th { font-size: 7pt !important; padding: 4px 8px !important; }
-      .recibo-tipo-badge {
-        margin-bottom: 6px !important;
-        padding: 5px 9px !important;
-        font-size: 8pt !important;
-      }
-      .recibo-bloco-info {
-        margin-bottom: 6px !important;
-        padding: 8px 10px !important;
-      }
+      body.recibo-body--denso .recibo-tabela-itens .col-desc { line-height: 1.2 !important; }
+      body.recibo-body--denso .recibo-tabela-itens thead th { font-size: 6.5pt !important; padding: 3px 5px !important; }
       .recibo-doc-foot {
-        margin-top: 6px !important;
-        padding-top: 5px !important;
-        font-size: 7pt !important;
+        margin-top: 4px !important;
+        padding-top: 3px !important;
+        font-size: 6.5pt !important;
+      }
+      .recibo-secao-doc {
+        margin-top: 8px !important;
+        padding-top: 6px !important;
+      }
+      .recibo-secao-doc:first-of-type {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+      }
+      .recibo-secao-meta {
+        font-size: 8pt !important;
+        margin: 0 0 4px !important;
       }
       .recibo-bloco-itens tbody tr:nth-child(even) { background: transparent !important; }
       .recibo-tabela-itens tbody tr:nth-child(even) { background: #f8fafc !important; }
@@ -897,8 +892,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
 
   const lotesRodape = dados.numerosLotes.map((n) => escapeHtmlRelatorio(n)).join(' · ');
   const atRef = dados.secoes[0]?.atendimento;
-  const totalItens = dados.secoes.reduce((acc, s) => acc + s.atendimento.itens.length, 0);
-  const classeDensidade = totalItens > 6 ? ' recibo-body--denso' : '';
+  const classeDensidade = ' recibo-body--denso';
 
   const extraRecibo = cssReciboAtendimentoBase();
 

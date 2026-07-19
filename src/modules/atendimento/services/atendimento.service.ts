@@ -7,7 +7,6 @@ import {
   readIsoProSnapshotSlicesForWrite,
   SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS,
-  SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS,
   SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
   SNAPSHOT_OPERATIONAL_SLICE_KEYS,
@@ -250,6 +249,8 @@ type SnapshotPayload = {
     motivoEstorno?: string;
     estornoParcialLote?: boolean;
   }>;
+  configuracoesSistema?: Record<string, unknown>;
+  dataAtualizacao?: string;
 };
 
 function readJson<T>(key: string): T[] {
@@ -444,36 +445,29 @@ function recebimentosSinteticosDeRecebidoPorCodigo(
 }
 
 /**
- * Fatia leve com o recebido agregado no servidor: evita baixar `recebimentos`
- * (~1 MB em obra grande) so para somar quantidades por codigo. Se a RPC ainda
- * nao existir na nuvem, cai na fatia leve completa (comportamento anterior).
- */
-async function readSnapshotPayloadLightComAgregados(): Promise<SnapshotPayload> {
-  const recebidoPorCodigo = await fetchQuantidadeRecebidaPorCodigo().catch(() => null);
-  if (recebidoPorCodigo == null) {
-    return await readSnapshotPayloadLight();
-  }
-  const parcial = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(
-    SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS,
-  );
-  return { ...parcial, recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo) };
-}
-
-/**
  * Pre-write da baixa/sessao: NAO baixa atendimentoHistorico nem atendimentos[]
- * (causa tipica dos 50–60s no «Confirmar retirada»). Saldo via materiais +
- * agregados; sequencia via configuracoesSistema + lotes ja no PC.
+ * (causa tipica dos 40–60s). Com RPC de recebido agregado: so configuracoesSistema.
+ * Sem RPC: materiais/recebimentos/ajustes (ainda sem historico).
  */
 async function readSnapshotPayloadParaBaixaWrite(): Promise<SnapshotPayload> {
-  const [recebidoPorCodigo, parcial] = await Promise.all([
+  const [recebidoPorCodigo, cfg] = await Promise.all([
     fetchQuantidadeRecebidaPorCodigo().catch(() => null),
     readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS),
   ]);
-  return {
-    ...parcial,
-    recebimentos:
-      recebidoPorCodigo != null ? recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo) : [],
-  };
+  if (recebidoPorCodigo != null) {
+    return {
+      ...cfg,
+      materiais: [],
+      recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo),
+    };
+  }
+  // RPC ausente na nuvem: fatia de saldo sem historico/lotes.
+  return await readSnapshotRemoteSliceOrFull<SnapshotPayload>([
+    'materiais',
+    'estoqueAjustes',
+    'recebimentos',
+    'configuracoesSistema',
+  ]);
 }
 
 async function readSnapshotPayloadHistorico(): Promise<SnapshotPayload> {
@@ -1254,14 +1248,49 @@ async function readRemoteStateForWrite(documentoIds: string[]) {
           documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
         })
       : buildSaldoMap(payloadLight);
-  // So materiais do snapshot (+ agregados). Sem carregarMateriaisDoCadastro no caminho
-  // critico da confirmacao — outra ida a nuvem que somava segundos.
-  const materiais = mapSnapshotMateriais(payloadLight, saldoMap);
+  // Materiais do PC + saldo fresco dos agregados (nao baixar o array materiais da nuvem).
+  const localMats = loadLocalState().materiais;
   // Em paralelo, com uma repeticao por documento (RPC leve ~2KB cada).
   const docsLidos = await Promise.all(
     uniqueIds.map(async (id) => (await carregarDocumentoStoredDaNuvem(id)) ?? (await carregarDocumentoStoredDaNuvem(id))),
   );
   const documentos = docsLidos.filter((doc): doc is DocumentoStored => doc != null);
+
+  let materiais: MaterialStored[] =
+    localMats.length > 0
+      ? localMats.map((m) => ({
+          ...m,
+          saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual ?? 0,
+        }))
+      : mapSnapshotMateriais(payloadLight, saldoMap);
+
+  if (materiais.length === 0 && documentos.length > 0) {
+    const byCode = new Map<string, MaterialStored>();
+    for (const doc of documentos) {
+      for (const item of doc.itens) {
+        const k = codigoMaterialKey(item.codigoMaterial);
+        if (!k || byCode.has(k)) continue;
+        byCode.set(k, {
+          id: `mat-${k}`,
+          codigo: item.codigoMaterial,
+          descricao: item.descricaoMaterial,
+          unidade: item.unidade,
+          saldoAtual: saldoMap.get(k) ?? 0,
+        });
+      }
+    }
+    materiais = [...byCode.values()];
+  }
+
+  // Preferir saldo do mapa (agregados / movimentos); se 0 e o cadastro local tem explicito, manter explicito.
+  materiais = materiais.map((m) => {
+    const k = codigoMaterialKey(m.codigo);
+    const calc = saldoMap.get(k);
+    if (calc != null && calc > 0) return { ...m, saldoAtual: calc };
+    if (m.saldoAtual != null && Number(m.saldoAtual) > 0) return m;
+    return { ...m, saldoAtual: calc ?? m.saldoAtual ?? 0 };
+  });
+
   return {
     payload: payloadLight,
     documentos,
@@ -2121,14 +2150,17 @@ export async function registrarAtendimentosSessao(
     recebedorFuncao = String(externalResult.data.funcao ?? '').trim();
   }
 
-  const colaboradoresAtivos = await listarColaboradoresAtivos();
+  const docIds = gruposValidados.map((g) => g.documentoId);
+  const [colaboradoresAtivos, remoteState] = await Promise.all([
+    listarColaboradoresAtivos(),
+    shouldTryRemoteRead()
+      ? readRemoteStateForWrite(docIds).catch(() => null)
+      : Promise.resolve(null),
+  ]);
   const colabAtendente = resolverColaboradorPorTextoAtendente(payload.atendente, colaboradoresAtivos);
   const atendenteMatricula = String(colabAtendente?.matricula ?? '').trim();
   const atendenteFuncao = String(colabAtendente?.funcao ?? '').trim();
 
-  const remoteState = shouldTryRemoteRead()
-    ? await readRemoteStateForWrite(gruposValidados.map((g) => g.documentoId)).catch(() => null)
-    : null;
   const localState = loadLocalState();
   const documentos = mesclarDocumentosLocaisComRemotos(
     localState.documentos,
