@@ -1128,17 +1128,28 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
   return { success: true, data: { removidos } };
 }
 
-function mergeDominiosComValoresEmUso(dominio: string[], emUso: string[]): string[] {
-  const set = new Set<string>();
+/** Chave sem acentos/caixa: «Elétrica» e «Eletrica» contam como o mesmo valor. */
+function chaveDominioSemAcentos(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '');
+}
+
+export function mergeDominiosComValoresEmUso(dominio: string[], emUso: string[]): string[] {
+  // A lista configurada tem prioridade (normalmente com acentos corretos);
+  // valores em uso nos materiais só entram se não forem variante do mesmo nome.
+  const porChave = new Map<string, string>();
   for (const s of dominio) {
     const t = s.trim();
-    if (t) set.add(t);
+    if (t && !porChave.has(chaveDominioSemAcentos(t))) porChave.set(chaveDominioSemAcentos(t), t);
   }
   for (const s of emUso) {
     const t = s.trim();
-    if (t) set.add(t);
+    if (t && !porChave.has(chaveDominioSemAcentos(t))) porChave.set(chaveDominioSemAcentos(t), t);
   }
-  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  return [...porChave.values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
 /** Disciplinas: lista configurada + valores ja usados em materiais (filtros e formulario). */
