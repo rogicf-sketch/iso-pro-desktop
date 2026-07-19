@@ -7,10 +7,13 @@ import {
   readIsoProSnapshotSlicesForWrite,
   SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS,
+  SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS,
+  SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
   SNAPSHOT_OPERATIONAL_SLICE_KEYS,
 } from '../../../lib/isoProSnapshot';
 import {
   fetchQuantidadeAtendidaPorCodigo,
+  fetchQuantidadeRecebidaPorCodigo,
   listDocumentosPendentesAtendimentoFromCloud,
   listDocumentosPendentesPorCodigoMaterialFromCloud,
 } from '../../../lib/operacaoEscalaContagens';
@@ -421,6 +424,34 @@ async function readSnapshotPayload(): Promise<SnapshotPayload> {
 
 async function readSnapshotPayloadLight(): Promise<SnapshotPayload> {
   return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS);
+}
+
+/** Recebimento sintetico equivalente ao agregado do servidor — buildSaldoMap soma `quantidade` no modo direto. */
+function recebimentosSinteticosDeRecebidoPorCodigo(
+  recebidoPorCodigo: Map<string, number>,
+): NonNullable<SnapshotPayload['recebimentos']> {
+  return [
+    {
+      modoRecebimento: 'direto',
+      itens: [...recebidoPorCodigo.entries()].map(([codigo, quantidade]) => ({ codigo, quantidade })),
+    },
+  ];
+}
+
+/**
+ * Fatia leve com o recebido agregado no servidor: evita baixar `recebimentos`
+ * (~1 MB em obra grande) so para somar quantidades por codigo. Se a RPC ainda
+ * nao existir na nuvem, cai na fatia leve completa (comportamento anterior).
+ */
+async function readSnapshotPayloadLightComAgregados(): Promise<SnapshotPayload> {
+  const recebidoPorCodigo = await fetchQuantidadeRecebidaPorCodigo().catch(() => null);
+  if (recebidoPorCodigo == null) {
+    return await readSnapshotPayloadLight();
+  }
+  const parcial = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(
+    SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS,
+  );
+  return { ...parcial, recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo) };
 }
 
 async function readSnapshotPayloadHistorico(): Promise<SnapshotPayload> {
@@ -849,18 +880,32 @@ async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
       return new Map(saldoOperacionalCache.map);
     }
     try {
-      const [payloadLight, atendidoPorCodigo] = await Promise.all([
-        withRemoteReadTimeout(() => readSnapshotPayloadLight()),
+      const [recebidoPorCodigo, atendidoPorCodigo] = await Promise.all([
+        fetchQuantidadeRecebidaPorCodigo().catch(() => null),
         fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
       ]);
-      const saldoMap =
-        atendidoPorCodigo.size > 0
-          ? buildSaldoMap({
-              ...payloadLight,
-              documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
-            } satisfies SnapshotPayload)
-          : // Nunca cair no snapshot completo com documentos[] (timeout ~20s no boot).
-            buildSaldoMap(payloadLight);
+      let saldoMap: Map<string, number>;
+      if (recebidoPorCodigo != null) {
+        // Agregados do servidor: so materiais + ajustes (~KB) em vez de recebimentos (~1 MB).
+        const parcial = await withRemoteReadTimeout(() =>
+          readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS),
+        );
+        saldoMap = buildSaldoMap({
+          ...parcial,
+          recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo),
+          documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+        } satisfies SnapshotPayload);
+      } else {
+        const payloadLight = await withRemoteReadTimeout(() => readSnapshotPayloadLight());
+        saldoMap =
+          atendidoPorCodigo.size > 0
+            ? buildSaldoMap({
+                ...payloadLight,
+                documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+              } satisfies SnapshotPayload)
+            : // Nunca cair no snapshot completo com documentos[] (timeout ~20s no boot).
+              buildSaldoMap(payloadLight);
+      }
       saldoOperacionalCache = { map: new Map(saldoMap), at: Date.now() };
       return saldoMap;
     } catch {
@@ -1170,7 +1215,7 @@ async function readRemoteStateForWrite(documentoIds: string[]) {
   const [payloadLight, atendidoPorCodigo] = await withRemoteReadTimeout(
     () =>
       Promise.all([
-        readSnapshotPayloadLight(),
+        readSnapshotPayloadLightComAgregados(),
         fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
       ]),
     REMOTE_READ_TIMEOUT_HEAVY_MS,

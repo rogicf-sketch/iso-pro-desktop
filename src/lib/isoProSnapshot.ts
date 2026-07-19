@@ -29,6 +29,21 @@ export const SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS = [
   'estoqueAjustes',
 ] as const;
 
+/**
+ * Fatia leve sem `recebimentos` — usar quando o saldo recebido por codigo
+ * vem agregado do servidor (`iso_pro_sum_quantidade_recebida_por_codigo`).
+ */
+export const SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS = [
+  'atendimentos',
+  'atendimentoHistorico',
+  'atendimentoEstornoLog',
+  'materiais',
+  'estoqueAjustes',
+] as const;
+
+/** Minimo para saldo com agregados do servidor (recebido/atendido por codigo). */
+export const SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS = ['materiais', 'estoqueAjustes'] as const;
+
 /** Só histórico de lotes (abrir Atendimento sem baixar documentos[]). */
 export const SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS = [
   'atendimentos',

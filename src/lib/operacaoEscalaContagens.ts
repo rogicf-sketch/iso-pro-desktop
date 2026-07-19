@@ -214,6 +214,31 @@ export async function listDocumentosPendentesPorCodigoMaterialFromCloud(
   return { documentos };
 }
 
+/**
+ * Mapa codigo → quantidade recebida, agregado no servidor a partir do snapshot
+ * (mesmas regras do buildSaldoMap). Devolve `null` quando a RPC nao existe/falha —
+ * o caller decide o fallback (baixar a fatia `recebimentos` completa).
+ */
+export async function fetchQuantidadeRecebidaPorCodigo(): Promise<Map<string, number> | null> {
+  if (!hasSupabaseConfig()) return null;
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase.rpc('iso_pro_sum_quantidade_recebida_por_codigo', {
+    p_tenant_id: getActiveTenantId(),
+  });
+  if (error) return null;
+  const row = (data ?? {}) as { porCodigo?: Record<string, unknown>; _error?: string };
+  if (row._error || !row.porCodigo || typeof row.porCodigo !== 'object') return null;
+  const out = new Map<string, number>();
+  for (const [k, v] of Object.entries(row.porCodigo)) {
+    const key = String(k ?? '').trim().toLowerCase();
+    if (!key) continue;
+    out.set(key, num(v));
+  }
+  return out;
+}
+
 /** Mapa codigo → quantidade já atendida (tabelas). */
 export async function fetchQuantidadeAtendidaPorCodigo(): Promise<Map<string, number>> {
   const out = new Map<string, number>();

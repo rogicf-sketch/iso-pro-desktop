@@ -53,6 +53,8 @@ vi.mock('../../../lib/supabase', () => ({
 
 vi.mock('../../../lib/operacaoEscalaContagens', () => ({
   fetchQuantidadeAtendidaPorCodigo: vi.fn(async () => new Map()),
+  /** Null = RPC de recebido agregado ausente → serviço cai na fatia leve completa (payload mockado). */
+  fetchQuantidadeRecebidaPorCodigo: vi.fn(async () => null),
   listDocumentosPendentesAtendimentoFromCloud: vi.fn(async () => []),
 }));
 
@@ -874,6 +876,45 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
 
     const atendimentos = JSON.parse(store[ATENDIMENTOS_KEY] ?? '[]') as Array<{ documentoId: string }>;
     expect(atendimentos).toHaveLength(2);
+  });
+
+  it('com recebido agregado no servidor, a sessao nao baixa a fatia recebimentos', async () => {
+    const { fetchQuantidadeRecebidaPorCodigo } = await import('../../../lib/operacaoEscalaContagens');
+    vi.mocked(fetchQuantidadeRecebidaPorCodigo).mockResolvedValue(
+      new Map([
+        ['m1', 100],
+        ['m2', 50],
+      ]),
+    );
+    mockReadPayload.mockResolvedValue(snapshotDoisDocumentosAtendimento());
+    mockReadForWrite.mockResolvedValue({
+      payload: {},
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await registrarAtendimentosSessao({
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: '',
+      documentos: [
+        { documentoId: 'doc-atd', itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }] },
+        { documentoId: 'doc-atd-2', itens: [{ documentoItemId: 'doc-atd-item-2', quantidade: 4 }] },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+    const pedidosComRecebimentos = mockReadPayload.mock.calls.filter(
+      ([keys]) => Array.isArray(keys) && (keys as string[]).includes('recebimentos'),
+    );
+    expect(pedidosComRecebimentos).toHaveLength(0);
   });
 
   it('nao registra atendimento quando nao ha quantidade pendente nas linhas do documento', async () => {
