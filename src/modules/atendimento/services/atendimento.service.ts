@@ -12,6 +12,7 @@ import {
 import {
   fetchQuantidadeAtendidaPorCodigo,
   listDocumentosPendentesAtendimentoFromCloud,
+  listDocumentosPendentesPorCodigoMaterialFromCloud,
 } from '../../../lib/operacaoEscalaContagens';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
@@ -1338,6 +1339,29 @@ export async function buscarDocumentosPendentesNuvem(busca: string): Promise<Ate
       listDocumentosPendentesAtendimentoFromCloud({ busca: q, limit: 60 }),
     );
     if (cloud.source === 'tables' && !cloud.error) {
+      const saldoMap = await obterSaldoMapOperacional();
+      return mapDocumentosPendentesWire(cloud.documentos, saldoMap);
+    }
+  } catch {
+    /* busca é auxiliar — sem erro visível */
+  }
+  return [];
+}
+
+/**
+ * Documentos pendentes que contêm o codigo bipado no leitor. Leitura directa das
+ * tabelas (nao depende do boot de 150 pendentes nem do p_busca da RPC).
+ */
+export async function buscarDocumentosPendentesPorCodigoMaterialNuvem(
+  codigoMaterial: string,
+): Promise<AtendimentoDocumento[]> {
+  const codigo = codigoMaterial.trim();
+  if (!codigo || !shouldTryRemoteRead()) return [];
+  try {
+    const cloud = await withRemoteReadTimeout(() =>
+      listDocumentosPendentesPorCodigoMaterialFromCloud(codigo),
+    );
+    if (!cloud.error && cloud.documentos.length > 0) {
       const saldoMap = await obterSaldoMapOperacional();
       return mapDocumentosPendentesWire(cloud.documentos, saldoMap);
     }

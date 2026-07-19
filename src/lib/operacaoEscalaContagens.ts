@@ -135,6 +135,85 @@ export async function listDocumentosPendentesAtendimentoFromCloud(options?: {
   };
 }
 
+/**
+ * Documentos pendentes que contêm um código de material (leitura directa das tabelas).
+ * Usado pelo atendimento via leitor: o boot carrega só os primeiros pendentes e o
+ * material bipado pode estar em documentos fora dessa página.
+ */
+export async function listDocumentosPendentesPorCodigoMaterialFromCloud(
+  codigoMaterial: string,
+): Promise<{ documentos: DocumentoPendenteAtendimentoWire[]; error?: string }> {
+  const codigo = codigoMaterial.trim();
+  if (!codigo) return { documentos: [] };
+  if (!hasSupabaseConfig()) return { documentos: [], error: 'Supabase nao configurado.' };
+  const supabase = getSupabase();
+  if (!supabase) return { documentos: [], error: 'Supabase indisponivel.' };
+  const tenantId = getActiveTenantId();
+
+  const { data: linhas, error: e1 } = await supabase
+    .from('iso_pro_documento_itens_planejamento')
+    .select('documento_id,quantidade,quantidade_atendida')
+    .eq('tenant_id', tenantId)
+    .ilike('codigo', codigo)
+    .limit(400);
+  if (e1) return { documentos: [], error: e1.message };
+
+  const docIds = [
+    ...new Set(
+      (linhas ?? [])
+        .filter((l) => (Number(l.quantidade) || 0) > (Number(l.quantidade_atendida) || 0) + 1e-9)
+        .map((l) => String(l.documento_id)),
+    ),
+  ].slice(0, 60);
+  if (!docIds.length) return { documentos: [] };
+
+  const [{ data: docs, error: e2 }, { data: itens, error: e3 }] = await Promise.all([
+    supabase
+      .from('iso_pro_documentos_planejamento')
+      .select('id,numero,revisao,descricao,responsavel,status')
+      .eq('tenant_id', tenantId)
+      .in('id', docIds),
+    supabase
+      .from('iso_pro_documento_itens_planejamento')
+      .select('id,documento_id,codigo,descricao,unidade,quantidade,quantidade_atendida')
+      .eq('tenant_id', tenantId)
+      .in('documento_id', docIds),
+  ]);
+  if (e2) return { documentos: [], error: e2.message };
+  if (e3) return { documentos: [], error: e3.message };
+
+  const itensPorDoc = new Map<string, DocumentoPendenteAtendimentoWire['itens']>();
+  for (const item of itens ?? []) {
+    if ((Number(item.quantidade) || 0) <= (Number(item.quantidade_atendida) || 0) + 1e-9) continue;
+    const key = String(item.documento_id);
+    const lista = itensPorDoc.get(key) ?? [];
+    lista.push({
+      id: String(item.id),
+      codigo: String(item.codigo ?? ''),
+      descricao: String(item.descricao ?? ''),
+      unidade: String(item.unidade ?? 'UN'),
+      quantidade: Number(item.quantidade) || 0,
+      quantidadeAtendida: Number(item.quantidade_atendida) || 0,
+    });
+    itensPorDoc.set(key, lista);
+  }
+
+  const documentos: DocumentoPendenteAtendimentoWire[] = (docs ?? [])
+    .filter((d) => String(d.status ?? '').trim().toLowerCase() !== 'cancelado')
+    .map((d) => ({
+      id: String(d.id),
+      numero: String(d.numero ?? ''),
+      revisao: String(d.revisao ?? 'A'),
+      descricao: String(d.descricao ?? ''),
+      responsavel: String(d.responsavel ?? ''),
+      status: String(d.status ?? 'pendente'),
+      itens: itensPorDoc.get(String(d.id)) ?? [],
+    }))
+    .filter((d) => (d.itens ?? []).length > 0);
+
+  return { documentos };
+}
+
 /** Mapa codigo → quantidade já atendida (tabelas). */
 export async function fetchQuantidadeAtendidaPorCodigo(): Promise<Map<string, number>> {
   const out = new Map<string, number>();

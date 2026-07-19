@@ -7,6 +7,7 @@ import { tocarFeedbackLeitor } from '../../../lib/leitorFeedbackSonoro';
 import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import {
+  buscarDocumentosPendentesPorCodigoMaterialNuvem,
   estornarAtendimento,
   listarDocumentosPendentesComMeta,
   listarHistoricoAtendimentosComMeta,
@@ -977,10 +978,33 @@ export function useAtendimento() {
       const material = matRes.data;
       const codigoRef = material.codigo.trim().toLowerCase();
 
-      const candidatos = documentos.flatMap((d) => {
-        const linha = d.linhas.find((l) => l.codigoMaterial.trim().toLowerCase() === codigoRef);
-        return linha ? [{ documento: d, linha }] : [];
-      });
+      const buscarCandidatos = (docs: AtendimentoDocumento[]) =>
+        docs.flatMap((d) => {
+          const linha = d.linhas.find((l) => l.codigoMaterial.trim().toLowerCase() === codigoRef);
+          return linha ? [{ documento: d, linha }] : [];
+        });
+
+      let candidatos = buscarCandidatos(documentos);
+
+      // O boot carrega so os primeiros pendentes (de milhares). Se o material bipado
+      // nao esta neles, busca na nuvem pelo codigo e incorpora os documentos achados.
+      if (candidatos.length === 0) {
+        const remotos = (await buscarDocumentosPendentesPorCodigoMaterialNuvem(material.codigo)).filter((doc) =>
+          doc.linhas.some((l) => l.codigoMaterial.trim().toLowerCase() === codigoRef),
+        );
+        if (remotos.length > 0) {
+          const idsLocais = new Set(documentos.map((d) => d.id));
+          const novos = remotos.filter((d) => !idsLocais.has(d.id));
+          if (novos.length > 0) {
+            setDocumentos((prev) => {
+              const ids = new Set(prev.map((d) => d.id));
+              const adicionar = novos.filter((d) => !ids.has(d.id));
+              return adicionar.length ? [...prev, ...adicionar] : prev;
+            });
+          }
+          candidatos = buscarCandidatos([...documentos, ...novos]);
+        }
+      }
 
       const candidatosComRestante = candidatos.filter(
         (c) => quantidadeMaximaRestanteLeitor(c.linha, sessaoRetirada, c.documento.id) > 0,
@@ -1009,7 +1033,7 @@ export function useAtendimento() {
         tocarFeedbackLeitor('sucesso');
       }
     },
-    [documentos, sessaoRetirada, canAccessAction],
+    [documentos, sessaoRetirada, canAccessAction, setDocumentos],
   );
 
   const fecharLeitorPainel = useCallback(() => {
