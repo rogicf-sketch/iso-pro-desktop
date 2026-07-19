@@ -291,7 +291,15 @@ export function readTemaEfetivoParaSessao(): ConfiguracaoSistema['tema'] {
 }
 
 export function aplicarTemaEfetivoNaSessao(): void {
-  aplicarTemaSistema(readTemaEfetivoParaSessao());
+  const tema = readTemaEfetivoParaSessao();
+  // Ecra de login (sem sessao): o tema claro (hibrido) deixava o cartao branco com
+  // textos ilegiveis. O login usa sempre a identidade escura; o tema escolhido
+  // volta a valer assim que o utilizador entra.
+  if (!getCurrentUser() && tema === 'hibrido') {
+    aplicarTemaSistema('campo');
+    return;
+  }
+  aplicarTemaSistema(tema);
 }
 
 function bootstrapSyncReciboConfigSessionKey(): string {

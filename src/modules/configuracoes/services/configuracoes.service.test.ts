@@ -19,6 +19,7 @@ import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstituciona
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
+  aplicarTemaEfetivoNaSessao,
   limparUsuarioTemaPreferido,
   readConfiguracoes,
   readTemaEfetivoParaSessao,
@@ -189,5 +190,19 @@ describe('configuracoes.service — tema preferido do utilizador', () => {
     localStorage.setItem(key, 'claro');
     expect(readUsuarioTemaPreferido()).toBe('hibrido');
     expect(readTemaEfetivoParaSessao()).toBe('hibrido');
+  });
+
+  it('sem sessao, tema hibrido nao vai para o login (aplica escuro campo)', () => {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify({ ...readConfiguracoes(), tema: 'hibrido' }));
+    vi.spyOn(authService, 'getCurrentUser').mockReturnValue(null);
+    aplicarTemaEfetivoNaSessao();
+    expect(document.body.classList.contains('theme-campo')).toBe(true);
+    expect(document.body.classList.contains('theme-hibrido')).toBe(false);
+  });
+
+  it('com sessao, tema hibrido continua a valer', () => {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify({ ...readConfiguracoes(), tema: 'hibrido' }));
+    aplicarTemaEfetivoNaSessao();
+    expect(document.body.classList.contains('theme-hibrido')).toBe(true);
   });
 });
