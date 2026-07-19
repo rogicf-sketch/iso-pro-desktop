@@ -1408,20 +1408,25 @@ export function useAtendimento() {
     setSnapshotConflict(false);
     const numero = estornoAlvo.numero;
     let result: Awaited<ReturnType<typeof estornarAtendimento>>;
-    const ESTORNO_TIMEOUT_MS = 90_000;
+    // MULTIPLOS / varios desenhos: o servidor reescreve o snapshot grande — dar margem.
+    const desenhosNoLote = new Set(
+      estornoAlvo.itens.map((it) => String(it.documentoNumero ?? '').trim()).filter((n) => n && n !== '-'),
+    ).size;
+    const ESTORNO_TIMEOUT_MS = Math.min(180_000, 90_000 + Math.max(0, desenhosNoLote - 1) * 45_000);
     try {
       result = await Promise.race([
         estornarAtendimento(estornoAlvo.id, linhas, {
           nomeQuemEstorna: estornoNomeQuemEstorna,
           nomeQuemDevolve: estornoNomeQuemDevolve,
           motivoEstorno: estornoMotivo,
+          atendimentoSnapshot: estornoAlvo,
         }),
         new Promise<Awaited<ReturnType<typeof estornarAtendimento>>>((_, reject) => {
           setTimeout(
             () =>
               reject(
                 new Error(
-                  'O estorno demorou demais na nuvem. Feche o modal, aplique a migration de merge rapido no Supabase se ainda nao aplicou, Ctrl+F5 e tente de novo.',
+                  'O estorno demorou demais na nuvem. Feche o modal, Ctrl+F5, confirme que a migration de merge (passagem unica / 180s) esta no Supabase e tente de novo.',
                 ),
               ),
             ESTORNO_TIMEOUT_MS,

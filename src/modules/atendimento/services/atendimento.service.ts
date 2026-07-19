@@ -696,12 +696,19 @@ async function writeSnapshotAtendimentoPatch(patch: {
         ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
         : (currentPayload.atendimentoEstornoLog ?? existingEstornoLog.map(estornoLogToSnapshotRecord));
 
-      const atendimentosMerged = mapAtendimentosFromSnapshotArray({
-        ...currentPayload,
-        atendimentos: atendimentosSnapshot,
-      });
       const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
-      const atendimentoHistorico = mergeAtendimentoHistoricoPreservingLegacy(existingHistorico, atendimentosMerged);
+      // Estorno: nao reconstruir historico a partir de todos os lotes (custa caro e o delta
+      // quase nunca manda linhas novas). O log de estorno e a fonte de auditoria da devolucao.
+      const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
+      const atendimentoHistorico = ehEstorno
+        ? existingHistorico
+        : mergeAtendimentoHistoricoPreservingLegacy(
+            existingHistorico,
+            mapAtendimentosFromSnapshotArray({
+              ...currentPayload,
+              atendimentos: atendimentosSnapshot,
+            }),
+          );
 
       const nextSlices: SnapshotSlice = {
         documentos,
@@ -2134,28 +2141,42 @@ export async function estornarAtendimento(
   let remoteState: Awaited<ReturnType<typeof readRemoteState>> | null = null;
   if (shouldTryRemoteRead()) {
     try {
-      // Preferir fatia light + RPC por desenho. Snapshot documentos[] completo so como
-      // ultimo recurso (timeout em obras grandes / lotes MULTIPLOS).
+      // Nunca baixar documentos[] completo no estorno (obra grande / MULTIPLOS → timeout).
+      // Usa o atendimento da UI quando vier, fatia light + RPC por desenho.
       const light = await readRemoteStateForWrite([]);
-      let atPreview = light.atendimentos.find((item) => item.id === id);
-      if (!atPreview) {
-        const full = await readRemoteState();
-        atPreview = full.atendimentos.find((item) => item.id === id);
-        if (!atPreview) {
-          remoteState = full;
-        } else {
-          const docs = await carregarDocumentosParaEstorno(atPreview);
-          remoteState = { ...full, documentos: docs.length > 0 ? docs : full.documentos };
-        }
-      } else {
-        const docs = await carregarDocumentosParaEstorno(atPreview);
-        remoteState = { ...light, documentos: docs };
+      const fromUi = meta?.atendimentoSnapshot;
+      const atParaDocs =
+        light.atendimentos.find((item) => item.id === id) ??
+        (fromUi
+          ? light.atendimentos.find((item) => String(item.numero ?? '') === String(fromUi.numero ?? ''))
+          : undefined) ??
+        fromUi;
+      if (!atParaDocs) {
+        return {
+          success: false,
+          error:
+            'Atendimento nao encontrado na nuvem para estorno. Recarregue a pagina (Ctrl+F5) e tente de novo.',
+        };
       }
-    } catch {
-      remoteState = await readRemoteState().catch(() => null);
+      const docs = await carregarDocumentosParaEstorno(atParaDocs);
+      if (docs.length === 0) {
+        return {
+          success: false,
+          error:
+            'Nao foi possivel carregar os desenhos deste lote na nuvem. Verifique a ligacao e tente de novo.',
+        };
+      }
+      remoteState = { ...light, documentos: docs };
+    } catch (error) {
+      return {
+        success: false,
+        error: traduzirErroOperacionalIsoPro(
+          error instanceof Error ? error.message : 'Falha ao preparar estorno na nuvem.',
+        ),
+      };
     }
   }
-  const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
+  let atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
   const documentos = mesclarDocumentosLocaisComRemotos(
     localState.documentos,
     remoteState?.documentos ?? [],
@@ -2165,7 +2186,16 @@ export async function estornarAtendimento(
       ? remoteState.materiais
       : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
 
-  const atendimentoIndex = atendimentos.findIndex((item) => item.id === id);
+  let atendimentoIndex = atendimentos.findIndex((item) => item.id === id);
+  if (atendimentoIndex === -1 && meta?.atendimentoSnapshot) {
+    atendimentoIndex = atendimentos.findIndex(
+      (item) => String(item.numero ?? '') === String(meta.atendimentoSnapshot!.numero ?? ''),
+    );
+  }
+  if (atendimentoIndex === -1 && meta?.atendimentoSnapshot) {
+    atendimentos = [...atendimentos, meta.atendimentoSnapshot];
+    atendimentoIndex = atendimentos.length - 1;
+  }
   if (atendimentoIndex === -1) return { success: false, error: 'Atendimento nao encontrado.' };
 
   const atendimento = atendimentos[atendimentoIndex];

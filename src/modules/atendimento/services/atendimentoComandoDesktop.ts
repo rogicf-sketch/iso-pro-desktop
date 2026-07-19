@@ -104,6 +104,10 @@ export async function syncAtendimentoComandoDesktop(input: {
     return syncAtendimentoPatchFallback(input);
   }
 
+  const ehEstorno =
+    Array.isArray(input.comandoPatch.atendimentoEstornoLog) &&
+    (input.comandoPatch.atendimentoEstornoLog as unknown[]).length > 0;
+
   if (deltaAtendimentoTemConteudoComando(input.comandoPatch)) {
     try {
       const result = await submitAtendimentoComandoToCloud(
@@ -114,6 +118,15 @@ export async function syncAtendimentoComandoDesktop(input: {
       if (result.ok) {
         atendimentoCloudBaselineCursor = result.updatedAt;
         return { error: null, conflict: false, updatedAt: result.updatedAt };
+      }
+      // Estorno: nao cair no patch_snapshot pesado (historico/atendimentos inteiros) —
+      // em obra grande isso estoura timeout e parece que o estorno "nao funciona".
+      if (ehEstorno) {
+        return {
+          error: 'Nao foi possivel gravar o estorno na nuvem (comando indisponivel). Tente de novo.',
+          conflict: false,
+          updatedAt: null,
+        };
       }
     } catch (err) {
       if (isIsoProSnapshotConflictError(err)) {
@@ -133,6 +146,14 @@ export async function syncAtendimentoComandoDesktop(input: {
 
   if (!deltaAtendimentoTemConteudoPatch(input.patch)) {
     return { error: null, conflict: false, updatedAt: input.baselineUpdatedAt };
+  }
+
+  if (ehEstorno) {
+    return {
+      error: 'Nao foi possivel gravar o estorno na nuvem. Recarregue e tente de novo.',
+      conflict: false,
+      updatedAt: null,
+    };
   }
 
   return syncAtendimentoPatchFallback(input);

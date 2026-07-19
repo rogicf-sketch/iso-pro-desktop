@@ -31,6 +31,29 @@ vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
   /** Testes usam snapshot mockado; evita cruzar com tabela `materiais` real. */
   shouldUseCloudMaterials: vi.fn(() => false),
+  getSupabase: vi.fn(() => ({
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      if (name !== 'iso_pro_read_documento_planejamento') {
+        return { data: null, error: null };
+      }
+      const payload = (await mockReadPayload()) as {
+        documentos?: Array<{ id?: string; numero?: string }>;
+      };
+      const docs = payload.documentos ?? [];
+      const byId = String(args.p_documento_id ?? '').trim();
+      const byNum = String(args.p_numero ?? '').trim().toLowerCase();
+      const doc =
+        docs.find((d) => byId && String(d.id ?? '') === byId) ??
+        docs.find((d) => byNum && String(d.numero ?? '').trim().toLowerCase() === byNum) ??
+        null;
+      return { data: { documento: doc }, error: null };
+    },
+  })),
+}));
+
+vi.mock('../../../lib/operacaoEscalaContagens', () => ({
+  fetchQuantidadeAtendidaPorCodigo: vi.fn(async () => new Map()),
+  listDocumentosPendentesAtendimentoFromCloud: vi.fn(async () => []),
 }));
 
 vi.mock('../../../lib/snapshotSliceRead', () => ({

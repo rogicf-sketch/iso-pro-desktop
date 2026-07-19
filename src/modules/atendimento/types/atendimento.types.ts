@@ -141,6 +141,8 @@ export type EstornoAtendimentoMeta = {
   nomeQuemEstorna: string;
   nomeQuemDevolve: string;
   motivoEstorno: string;
+  /** Atendimento ja carregado na UI — evita re-baixar snapshot completo no estorno MULTIPLOS. */
+  atendimentoSnapshot?: Atendimento;
 };
 
 /** Evento persistido no snapshot para exportacao e auditoria de estornos. */
