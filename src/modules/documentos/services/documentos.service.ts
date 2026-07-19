@@ -45,6 +45,7 @@ import type {
 import { listarDocumentosComAtendimentoVinculado } from '../../atendimento/services/atendimento.service';
 import { construirJsonImportacaoDocumentosPlanoCsv } from './documentos.import.csv';
 import { imprimirPlanejamentoCampoHtml } from '../utils/imprimirPlanejamentoCampoHtml';
+import { preservarAtendimentoNosItens } from '../utils/preservarAtendimentoNosItens';
 import {
   aplicarStatusPlanejamentoEmDocumentos,
   montarLocalizacoesPorCodigoMaterial,
@@ -937,10 +938,16 @@ export async function salvarDocumento(
         if (comStatus[index].status === 'cancelado') {
           return { success: false, error: 'Documentos cancelados nao podem ser editados.' };
         }
-        if (comStatus[index].status !== 'pendente') {
-          return { success: false, error: 'Documentos com atendimento iniciado nao podem ser editados por este fluxo.' };
+        const mergeItens = preservarAtendimentoNosItens(comStatus[index].itens, normalized.itens);
+        if (!mergeItens.ok) {
+          return { success: false, error: mergeItens.error };
         }
-        items[index] = { ...normalized, id: currentId, status: 'pendente' };
+        items[index] = {
+          ...normalized,
+          id: currentId,
+          status: comStatus[index].status,
+          itens: mergeItens.itens,
+        };
         items = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
         const bloqueioLocal = bloqueioSubstituicaoLocalDocumentos(items.length);
         if (bloqueioLocal) {
@@ -996,11 +1003,17 @@ export async function salvarDocumento(
     if (comStatus[index].status === 'cancelado') {
       return { success: false, error: 'Documentos cancelados nao podem ser editados.' };
     }
-    if (comStatus[index].status !== 'pendente') {
-      return { success: false, error: 'Documentos com atendimento iniciado nao podem ser editados por este fluxo.' };
+    const mergeItensLocal = preservarAtendimentoNosItens(comStatus[index].itens, normalized.itens);
+    if (!mergeItensLocal.ok) {
+      return { success: false, error: mergeItensLocal.error };
     }
 
-    items[index] = { ...normalized, id: currentId, status: 'pendente' };
+    items[index] = {
+      ...normalized,
+      id: currentId,
+      status: comStatus[index].status,
+      itens: mergeItensLocal.itens,
+    };
     items = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
     const blockedDocEdit = whenBusinessWriteBlockedResult<Documento>();
     if (blockedDocEdit) return blockedDocEdit;

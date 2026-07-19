@@ -66,7 +66,9 @@ export function DocumentoForm({ initialValue, onCancel, onSubmit, onReloadAfterC
       </OperationalNotice>
       {isEditing ? (
         <OperationalNotice>
-          Edicao em andamento: revise numero, revisao e quantidades planejadas antes de confirmar alteracoes no documento.
+          Edicao em andamento: revise numero, revisao e quantidades planejadas antes de confirmar. Documentos com
+          atendimento ja iniciado tambem podem ser editados (subir revisao, adicionar itens ou aumentar quantidades);
+          nao e permitido reduzir abaixo do ja atendido nem remover itens atendidos.
         </OperationalNotice>
       ) : null}
       <div className="form-columns">

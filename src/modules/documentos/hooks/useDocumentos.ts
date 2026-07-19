@@ -707,10 +707,6 @@ export function useDocumentos() {
         setError('Documentos cancelados nao podem ser editados.');
         return;
       }
-      if (item.status !== 'pendente') {
-        setError('Documentos com atendimento iniciado nao podem ser editados por este fluxo.');
-        return;
-      }
       const result = await buscarDocumentoPorId(item.id);
       if (!result.success || !result.data) {
         setError(result.error ?? 'Nao foi possivel carregar o documento.');

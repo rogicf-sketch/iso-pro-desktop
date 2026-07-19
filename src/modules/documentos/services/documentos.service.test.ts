@@ -260,6 +260,138 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
     expect(result.error).toMatch(/Enviar planejamento deste PC para a nuvem/i);
     expect(mockCommitWrite).not.toHaveBeenCalled();
   });
+
+  it('permite editar documento com atendimento (subir revisao / aumentar qtd) e preserva qtd atendida', async () => {
+    mockReadPayload.mockResolvedValue({
+      documentos: [
+        {
+          id: 'doc-edit',
+          numero: 'N1',
+          revisao: 'A',
+          data: '2026-01-10',
+          descricao: 'Antigo',
+          responsavel: 'Resp',
+          itens: [
+            {
+              id: 'item-1',
+              codigo: 'C1',
+              descricao: 'Material',
+              unidade: 'UN',
+              quantidade: 10,
+              quantidadeAtendida: 4,
+            },
+          ],
+        },
+      ],
+    });
+    mockReadForWrite.mockResolvedValue({
+      payload: {
+        documentos: [
+          {
+            id: 'doc-edit',
+            numero: 'N1',
+            revisao: 'A',
+            data: '2026-01-10',
+            descricao: 'Antigo',
+            responsavel: 'Resp',
+            itens: [
+              {
+                id: 'item-1',
+                codigo: 'C1',
+                descricao: 'Material',
+                unidade: 'UN',
+                quantidade: 10,
+                quantidadeAtendida: 4,
+              },
+            ],
+          },
+        ],
+      },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+    store[STORAGE_KEY] = JSON.stringify([]);
+
+    const result = await salvarDocumento(
+      minimalForm({
+        revisao: 'B',
+        itens: [
+          {
+            id: 'item-1',
+            codigoMaterial: 'C1',
+            descricaoMaterial: 'Material',
+            unidade: 'UN',
+            quantidadeProjeto: 12,
+            quantidadeAtendida: 0,
+          },
+          {
+            id: 'item-2',
+            codigoMaterial: 'X1',
+            descricaoMaterial: 'Novo',
+            unidade: 'UN',
+            quantidadeProjeto: 2,
+            quantidadeAtendida: 0,
+          },
+        ],
+      }),
+      'doc-edit',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.data?.revisao).toBe('B');
+    expect(result.data?.itens).toHaveLength(2);
+    expect(result.data?.itens[0].quantidadeAtendida).toBe(4);
+    expect(result.data?.itens[0].quantidadeProjeto).toBe(12);
+    expect(mockCommitWrite).toHaveBeenCalled();
+  });
+
+  it('recusa reduzir quantidade abaixo do ja atendido', async () => {
+    mockReadPayload.mockResolvedValue({
+      documentos: [
+        {
+          id: 'doc-edit',
+          numero: 'N1',
+          revisao: 'A',
+          data: '2026-01-10',
+          descricao: 'Antigo',
+          responsavel: 'Resp',
+          itens: [
+            {
+              id: 'item-1',
+              codigo: 'C1',
+              descricao: 'Material',
+              unidade: 'UN',
+              quantidade: 10,
+              quantidadeAtendida: 5,
+            },
+          ],
+        },
+      ],
+    });
+    store[STORAGE_KEY] = JSON.stringify([]);
+
+    const result = await salvarDocumento(
+      minimalForm({
+        itens: [
+          {
+            id: 'item-1',
+            codigoMaterial: 'C1',
+            descricaoMaterial: 'Material',
+            unidade: 'UN',
+            quantidadeProjeto: 3,
+            quantidadeAtendida: 5,
+          },
+        ],
+      }),
+      'doc-edit',
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/nao pode ser menor/i);
+    expect(mockCommitWrite).not.toHaveBeenCalled();
+  });
 });
 
 function payloadDocCancelarPendente() {
