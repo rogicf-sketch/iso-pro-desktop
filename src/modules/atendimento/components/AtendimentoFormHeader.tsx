@@ -106,7 +106,18 @@ export function AtendimentoFormHeader({
           <Input label="Empresa" onChange={(event) => onRecebedorEmpresaChange(event.target.value)} value={recebedorEmpresa} />
           <Input label="Documento" onChange={(event) => onRecebedorDocumentoChange(event.target.value)} value={recebedorDocumento} />
           <Input label="Telefone" onChange={(event) => onRecebedorTelefoneChange(event.target.value)} value={recebedorTelefone} />
-          <Input label="Autorizado por" onChange={(event) => onAutorizadorInternoChange(event.target.value)} value={autorizadorInterno} />
+          <SearchableSelect
+            label="Autorizado por (colaborador interno)"
+            onChange={onAutorizadorInternoChange}
+            options={colaboradores
+              .filter((item) => item.tipo === 'interno')
+              .map((item) => {
+                const rotulo = `${item.nome.trim()}${item.matricula ? ` - ${item.matricula.trim()}` : ''}`;
+                return { value: rotulo, label: rotulo };
+              })}
+            placeholder="Digite nome ou matricula do autorizador"
+            value={autorizadorInterno}
+          />
           <label className="field" style={{ gridColumn: '1 / -1' }}>
             <span>Motivo da retirada</span>
             <textarea className="input-control text-area" onChange={(event) => onMotivoRetiradaChange(event.target.value)} rows={3} value={motivoRetirada} />
