@@ -28,10 +28,24 @@ export function captureException(error: unknown, context?: Record<string, unknow
 export function captureMessage(
   message: string,
   context?: Record<string, unknown>,
-  _level: 'info' | 'warning' | 'error' = 'warning',
+  level: 'info' | 'warning' | 'error' = 'warning',
 ): void {
-  void _level;
-  captureException(new Error(message), { ...context, operationalMessage: true });
+  if (sentryEnabled()) {
+    if (level === 'error') {
+      // Erro real: stack trace + agrupamento por exceção no Sentry.
+      Sentry.captureException(new Error(message), { extra: { ...context, operationalMessage: true } });
+    } else {
+      // info/warning: mensagem com a severidade correta (não polui a fila de erros).
+      Sentry.captureMessage(message, { level, extra: { ...context, operationalMessage: true } });
+    }
+  }
+
+  const line = ['[iso-pro-desktop]', message] as const;
+  if (import.meta.env.DEV || level !== 'error') {
+    console.warn(...line, context ?? {});
+    return;
+  }
+  console.error(...line, context ?? {});
 }
 
 const SLO_EVENTS = new Set<string>([

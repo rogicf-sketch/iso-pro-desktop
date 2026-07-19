@@ -9,4 +9,15 @@ declare module '@sentry/react' {
     exception: unknown,
     captureContext?: { extra?: Record<string, unknown> },
   ): string;
+  export function captureMessage(
+    message: string,
+    captureContext?:
+      | 'fatal'
+      | 'error'
+      | 'warning'
+      | 'log'
+      | 'info'
+      | 'debug'
+      | { level?: 'fatal' | 'error' | 'warning' | 'log' | 'info' | 'debug'; extra?: Record<string, unknown> },
+  ): string;
 }
