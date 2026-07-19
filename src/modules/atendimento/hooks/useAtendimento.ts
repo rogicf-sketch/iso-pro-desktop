@@ -552,7 +552,8 @@ export function useAtendimento() {
     [selectedDocumento, idsMarcados],
   );
 
-  const podeRegistrarAtendimento = useMemo(
+  /** Mensagem exata do que falta para liberar o registro (null = pode registrar). */
+  const motivoBloqueioAtendimento = useMemo(
     () =>
       obterErroRegistroAtendimento(
         selectedDocumento,
@@ -567,7 +568,7 @@ export function useAtendimento() {
         motivoRetirada,
         itensSelecionados,
         idsMarcados,
-      ) === null,
+      ),
     [
       selectedDocumento,
       atendente,
@@ -583,6 +584,8 @@ export function useAtendimento() {
       idsMarcados,
     ],
   );
+
+  const podeRegistrarAtendimento = motivoBloqueioAtendimento === null;
 
   const toggleMarcaItem = useCallback(
     (documentoItemId: string, marcado: boolean) => {
@@ -1602,6 +1605,7 @@ export function useAtendimento() {
     submitAtendimento,
     pedirConfirmacaoAtendimento,
     podeRegistrarAtendimento,
+    motivoBloqueioAtendimento,
     confirmacaoAtendimento,
     cancelarConfirmacaoAtendimento,
     confirmarAtendimentoNoModal,

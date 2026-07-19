@@ -60,6 +60,7 @@ export function AtendimentoPage() {
     load,
     pedirConfirmacaoAtendimento,
     podeRegistrarAtendimento,
+    motivoBloqueioAtendimento,
     confirmacaoAtendimento,
     cancelarConfirmacaoAtendimento,
     confirmarAtendimentoNoModal,
@@ -472,6 +473,11 @@ export function AtendimentoPage() {
               onToggleMarca={toggleMarcaItem}
             />
 
+            {canEdit && !podeRegistrarAtendimento && !loading && motivoBloqueioAtendimento ? (
+              <OperationalNotice tone="warning">
+                <strong>Falta para confirmar:</strong> {motivoBloqueioAtendimento}
+              </OperationalNotice>
+            ) : null}
             <div className="inline-actions">
               <span className="panel-copy">
                 Total desta operacao: <strong>{totalizarLinhas(selectedDocumento.linhas)}</strong>
@@ -480,11 +486,7 @@ export function AtendimentoPage() {
                 <Button
                   disabled={loading || !podeRegistrarAtendimento}
                   onClick={pedirConfirmacaoAtendimento}
-                  title={
-                    !podeRegistrarAtendimento && !loading
-                      ? 'Preencha documento, atendente, dados do retirante e itens com quantidade valida.'
-                      : undefined
-                  }
+                  title={motivoBloqueioAtendimento && !loading ? motivoBloqueioAtendimento : undefined}
                   type="button"
                 >
                   Confirmar atendimento
