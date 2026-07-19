@@ -146,9 +146,12 @@ export function AtendimentoPage() {
       window.clearTimeout(leitorDebounceRef.current);
       leitorProcessandoRef.current = true;
       setLeitorCodigoBuffer('');
+      // Nao roubar o foco de quem esta a preencher outro campo (nome/empresa/motivo):
+      // so re-focar o leitor se o cursor estava nele quando a leitura comecou.
+      const leitorTinhaFoco = document.activeElement === leitorCodigoRef.current;
       void processarLeituraCodigoBarras(scan).finally(() => {
         leitorProcessandoRef.current = false;
-        focarLeitor();
+        if (leitorTinhaFoco) focarLeitor();
       });
     },
     [processarLeituraCodigoBarras, focarLeitor],
@@ -159,7 +162,11 @@ export function AtendimentoPage() {
       setLeitorCodigoBuffer(value);
       window.clearTimeout(leitorDebounceRef.current);
       if (value.trim().length < 3) return;
-      leitorDebounceRef.current = window.setTimeout(() => enviarLeitura(value), 150);
+      leitorDebounceRef.current = window.setTimeout(() => {
+        // Se o utilizador ja saiu do campo do leitor, o texto nao e um bipe — nao processar.
+        if (document.activeElement !== leitorCodigoRef.current) return;
+        enviarLeitura(value);
+      }, 150);
     },
     [enviarLeitura],
   );
@@ -180,7 +187,15 @@ export function AtendimentoPage() {
 
   useEffect(() => {
     if (!loading && canEdit) {
-      const t = window.setTimeout(() => leitorCodigoRef.current?.focus(), 0);
+      const t = window.setTimeout(() => {
+        // So focar o leitor se o utilizador nao estiver a escrever noutro campo.
+        const ativo = document.activeElement;
+        const digitandoNoutroCampo =
+          ativo instanceof HTMLElement &&
+          ativo !== leitorCodigoRef.current &&
+          (ativo.tagName === 'INPUT' || ativo.tagName === 'TEXTAREA' || ativo.tagName === 'SELECT');
+        if (!digitandoNoutroCampo) leitorCodigoRef.current?.focus();
+      }, 0);
       return () => window.clearTimeout(t);
     }
   }, [loading, canEdit]);
