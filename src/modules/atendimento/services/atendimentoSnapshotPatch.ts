@@ -139,7 +139,9 @@ export function buildDesktopAtendimentoPatchDelta(
   };
   if (next.documentos?.length) patchWithoutMerge.documentos = next.documentos;
   if (next.atendimentos?.length) patchWithoutMerge.atendimentos = next.atendimentos;
-  if (next.atendimentoHistorico?.length) patchWithoutMerge.atendimentoHistorico = next.atendimentoHistorico;
+  // Nunca meter atendimentoHistorico no fallback sem merge: um delta parcial
+  // substituiria o historico completo e apagaria lotes antigos. O caminho seguro
+  // e sempre o patch com mergeKeys (append por id).
   if (next.atendimentoEstornoLog?.length) patchWithoutMerge.atendimentoEstornoLog = next.atendimentoEstornoLog;
   if (next.configuracoesSistema) patchWithoutMerge.configuracoesSistema = next.configuracoesSistema;
 

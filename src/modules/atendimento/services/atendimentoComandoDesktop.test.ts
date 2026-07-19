@@ -56,6 +56,23 @@ describe('atendimentoSnapshotPatch / buildDesktopAtendimentoPatchDelta', () => {
     expect(delta.comandoPatch.atendimentos).toHaveLength(1);
     expect(delta.patch.atendimentos).toHaveLength(1);
   });
+
+  it('envia historico novo no comando mas nunca no fallback sem merge', () => {
+    const baseline = {
+      atendimentoHistorico: [],
+      atendimentos: [],
+    };
+    const next = {
+      atendimentoHistorico: [{ id: 'h-new', loteNumero: 'ATD-00099' }],
+      atendimentos: [{ id: 'a99', numero: 'ATD-00099' }],
+      dataAtualizacao: '2026-07-19T00:00:00.000Z',
+    };
+
+    const delta = buildDesktopAtendimentoPatchDelta(baseline, next);
+    expect(delta.comandoPatch.atendimentoHistorico).toHaveLength(1);
+    expect(delta.patch.atendimentoHistorico).toHaveLength(1);
+    expect(delta.patchWithoutMerge.atendimentoHistorico).toBeUndefined();
+  });
 });
 
 describe('atendimentoComandoDesktop / buildDesktopAtendimentoIdempotencyKey', () => {

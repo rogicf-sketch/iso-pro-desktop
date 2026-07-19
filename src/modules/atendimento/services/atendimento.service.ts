@@ -702,11 +702,10 @@ async function writeSnapshotAtendimentoPatch(patch: {
 }): Promise<void> {
   await gravarAtendimentoNaNuvemComComando({
     prepare: async () => {
-      // Estorno: sem atendimentoHistorico (fatia pesada). Baixa normal continua a ler historico.
-      const ehEstornoPrepare = (patch.estornoLogAppend?.length ?? 0) > 0;
-      const sliceKeys = ehEstornoPrepare
-        ? (['atendimentos', 'atendimentoEstornoLog', 'configuracoesSistema'] as const)
-        : (['atendimentos', 'atendimentoHistorico', 'atendimentoEstornoLog', 'configuracoesSistema'] as const);
+      const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
+      // Baixa E estorno: NAO baixar atendimentoHistorico (fatia pesada — obra grande = dezenas de MB
+      // e 40–60s no «Confirmar retirada»). Novas linhas de historico vao so no delta (append por id).
+      const sliceKeys = ['atendimentos', 'atendimentoEstornoLog', 'configuracoesSistema'] as const;
       // Sem timeout esta leitura pode pendurar a gravacao indefinidamente (modal «A gravar…» sem fim).
       const { slices: currentPayload, baselineUpdatedAt } = await withRemoteReadTimeout(
         () => readIsoProSnapshotSlicesForWrite(sliceKeys),
@@ -730,23 +729,16 @@ async function writeSnapshotAtendimentoPatch(patch: {
         ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
         : (currentPayload.atendimentoEstornoLog ?? existingEstornoLog.map(estornoLogToSnapshotRecord));
 
-      const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
-      const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
-      // Estorno: nao mexer no historico (nao ler/reconstruir). Baixa continua a fundir.
-      const atendimentoHistorico = ehEstorno
-        ? existingHistorico
-        : mergeAtendimentoHistoricoPreservingLegacy(
-            existingHistorico,
-            mapAtendimentosFromSnapshotArray({
-              ...currentPayload,
-              atendimentos: atendimentosSnapshot,
-            }),
-          );
+      // So as linhas novas deste patch (nao reconstruir o historico completo a partir de todos os lotes).
+      const atendimentoHistoricoNovos =
+        !ehEstorno && patch.atendimentos?.length
+          ? buildAtendimentoHistoricoFromAtendimentos(patch.atendimentos)
+          : [];
 
       const nextSlices: SnapshotSlice = {
         documentos,
         atendimentos: atendimentosSnapshot,
-        ...(ehEstorno ? {} : { atendimentoHistorico }),
+        ...(ehEstorno ? {} : { atendimentoHistorico: atendimentoHistoricoNovos }),
         atendimentoEstornoLog: Array.isArray(atendimentoEstornoLog) ? atendimentoEstornoLog : [],
         configuracoesSistema: currentPayload.configuracoesSistema as Record<string, unknown> | undefined,
         dataAtualizacao: new Date().toISOString(),
@@ -755,7 +747,8 @@ async function writeSnapshotAtendimentoPatch(patch: {
       const baselineSlices: SnapshotSlice = {
         documentos: [],
         atendimentos: currentAtendimentos,
-        ...(ehEstorno ? {} : { atendimentoHistorico: existingHistorico }),
+        // Baseline vazio → o delta trata as linhas novas como append (merge por id no servidor).
+        ...(ehEstorno ? {} : { atendimentoHistorico: [] }),
         atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
           ? (currentPayload.atendimentoEstornoLog as unknown[])
           : existingEstornoLog.map(estornoLogToSnapshotRecord),
