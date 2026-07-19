@@ -53,3 +53,12 @@ blob-report/
 *.njsproj
 *.sln
 *.sw?
+
+# Diagnostico local (nao versionar)
+scripts/diag-*.mjs
+scripts/watch-estorno.mjs
+scripts/backup-*.json
+scripts/restaurar-*.mjs
+scripts/fix-*.mjs
+scripts/estorno-baixas-*.mjs
+scripts/auditoria-planejamento-atendimento.mjs
