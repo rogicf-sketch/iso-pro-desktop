@@ -670,14 +670,12 @@ async function writeSnapshotAtendimentoPatch(patch: {
 }): Promise<void> {
   await gravarAtendimentoNaNuvemComComando({
     prepare: async () => {
-      // Sem documentos[] completo: o RPC no servidor faz merge por id no snapshot.
-      // Pedir a fatia inteira em obras grandes (~40k linhas) estourava timeout no estorno.
-      const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite([
-        'atendimentos',
-        'atendimentoHistorico',
-        'atendimentoEstornoLog',
-        'configuracoesSistema',
-      ]);
+      // Estorno: sem atendimentoHistorico (fatia pesada). Baixa normal continua a ler historico.
+      const ehEstornoPrepare = (patch.estornoLogAppend?.length ?? 0) > 0;
+      const sliceKeys = ehEstornoPrepare
+        ? (['atendimentos', 'atendimentoEstornoLog', 'configuracoesSistema'] as const)
+        : (['atendimentos', 'atendimentoHistorico', 'atendimentoEstornoLog', 'configuracoesSistema'] as const);
+      const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(sliceKeys);
       const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
       const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
       const existingEstornoLog = mapEstornoLogFromSnapshot(
@@ -696,10 +694,9 @@ async function writeSnapshotAtendimentoPatch(patch: {
         ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
         : (currentPayload.atendimentoEstornoLog ?? existingEstornoLog.map(estornoLogToSnapshotRecord));
 
-      const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
-      // Estorno: nao reconstruir historico a partir de todos os lotes (custa caro e o delta
-      // quase nunca manda linhas novas). O log de estorno e a fonte de auditoria da devolucao.
       const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
+      const existingHistorico = (currentPayload.atendimentoHistorico ?? []) as SnapshotHistoricoRecord[];
+      // Estorno: nao mexer no historico (nao ler/reconstruir). Baixa continua a fundir.
       const atendimentoHistorico = ehEstorno
         ? existingHistorico
         : mergeAtendimentoHistoricoPreservingLegacy(
@@ -713,7 +710,7 @@ async function writeSnapshotAtendimentoPatch(patch: {
       const nextSlices: SnapshotSlice = {
         documentos,
         atendimentos: atendimentosSnapshot,
-        atendimentoHistorico,
+        ...(ehEstorno ? {} : { atendimentoHistorico }),
         atendimentoEstornoLog: Array.isArray(atendimentoEstornoLog) ? atendimentoEstornoLog : [],
         configuracoesSistema: currentPayload.configuracoesSistema as Record<string, unknown> | undefined,
         dataAtualizacao: new Date().toISOString(),
@@ -722,7 +719,7 @@ async function writeSnapshotAtendimentoPatch(patch: {
       const baselineSlices: SnapshotSlice = {
         documentos: [],
         atendimentos: currentAtendimentos,
-        atendimentoHistorico: existingHistorico,
+        ...(ehEstorno ? {} : { atendimentoHistorico: existingHistorico }),
         atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
           ? (currentPayload.atendimentoEstornoLog as unknown[])
           : existingEstornoLog.map(estornoLogToSnapshotRecord),
@@ -2141,14 +2138,20 @@ export async function estornarAtendimento(
   let remoteState: Awaited<ReturnType<typeof readRemoteState>> | null = null;
   if (shouldTryRemoteRead()) {
     try {
-      // Nunca baixar documentos[] completo no estorno (obra grande / MULTIPLOS → timeout).
-      // Usa o atendimento da UI quando vier, fatia light + RPC por desenho.
-      const light = await readRemoteStateForWrite([]);
+      // Caminho minimo: atendimento da UI + RPC dos desenhos + fatia leve de atendimentos.
+      // Nao usa readRemoteStateForWrite (puxava historico + 26k linhas de escala → timeout falso).
       const fromUi = meta?.atendimentoSnapshot;
+      const { slices: lightSlices } = await readIsoProSnapshotSlicesForWrite([
+        'atendimentos',
+        'atendimentoEstornoLog',
+      ]);
+      const atendimentosNuvem = mapAtendimentosFromSnapshotArray({
+        atendimentos: lightSlices.atendimentos as SnapshotPayload['atendimentos'],
+      });
       const atParaDocs =
-        light.atendimentos.find((item) => item.id === id) ??
+        atendimentosNuvem.find((item) => item.id === id) ??
         (fromUi
-          ? light.atendimentos.find((item) => String(item.numero ?? '') === String(fromUi.numero ?? ''))
+          ? atendimentosNuvem.find((item) => String(item.numero ?? '') === String(fromUi.numero ?? ''))
           : undefined) ??
         fromUi;
       if (!atParaDocs) {
@@ -2158,7 +2161,12 @@ export async function estornarAtendimento(
             'Atendimento nao encontrado na nuvem para estorno. Recarregue a pagina (Ctrl+F5) e tente de novo.',
         };
       }
-      const docs = await carregarDocumentosParaEstorno(atParaDocs);
+      // Preferir itens da UI (tem documentoNumero por linha nos MULTIPLOS).
+      const atComItens =
+        fromUi && fromUi.itens.length > 0
+          ? { ...atParaDocs, itens: fromUi.itens, documentoNumero: fromUi.documentoNumero }
+          : atParaDocs;
+      const docs = await carregarDocumentosParaEstorno(atComItens);
       if (docs.length === 0) {
         return {
           success: false,
@@ -2166,25 +2174,36 @@ export async function estornarAtendimento(
             'Nao foi possivel carregar os desenhos deste lote na nuvem. Verifique a ligacao e tente de novo.',
         };
       }
-      remoteState = { ...light, documentos: docs };
-    } catch (error) {
-      return {
-        success: false,
-        error: traduzirErroOperacionalIsoPro(
-          error instanceof Error ? error.message : 'Falha ao preparar estorno na nuvem.',
+      remoteState = {
+        payload: lightSlices as SnapshotPayload,
+        documentos: docs,
+        materiais: localState.materiais,
+        atendimentos: atendimentosNuvem,
+        estornoLog: mapEstornoLogFromSnapshot(
+          lightSlices.atendimentoEstornoLog as SnapshotPayload['atendimentoEstornoLog'],
         ),
       };
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : 'Falha ao preparar estorno na nuvem.';
+      const translated = traduzirErroOperacionalIsoPro(raw);
+      // Timeout de leitura no estorno nao e "usar cache" — e falha real de preparacao.
+      if (raw.toLowerCase().includes('timeout')) {
+        return {
+          success: false,
+          error:
+            'A preparacao do estorno demorou demais na nuvem. Feche o modal, Ctrl+F5 e tente de novo. Se for lote MULTIPLOS, aguarde ate 3 minutos na confirmacao.',
+        };
+      }
+      return { success: false, error: translated };
     }
   }
   let atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
-  const documentos = mesclarDocumentosLocaisComRemotos(
-    localState.documentos,
-    remoteState?.documentos ?? [],
-  );
-  const materiais =
-    remoteState != null && remoteState.materiais.length > 0
-      ? remoteState.materiais
-      : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
+  // So os desenhos do lote (remotos) — nao misturar com cache local enorme/stale.
+  const documentos =
+    remoteState?.documentos?.length
+      ? remoteState.documentos
+      : mesclarDocumentosLocaisComRemotos(localState.documentos, []);
+  const materiais = localState.materiais;
 
   let atendimentoIndex = atendimentos.findIndex((item) => item.id === id);
   if (atendimentoIndex === -1 && meta?.atendimentoSnapshot) {

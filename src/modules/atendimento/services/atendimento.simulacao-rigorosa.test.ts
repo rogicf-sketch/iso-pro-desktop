@@ -217,13 +217,17 @@ describe('Simulacao rigorosa / lote MULTIPLOS com 4 desenhos', () => {
         length: 0,
       } as Storage,
     );
-    mockReadPayload.mockResolvedValue(snapshot4Desenhos());
-    mockReadForWrite.mockResolvedValue({ payload: {}, baselineUpdatedAt: '2026-01-01T00:00:00.000Z' });
+    const snap = snapshot4Desenhos();
+    mockReadPayload.mockResolvedValue(snap);
+    mockReadForWrite.mockResolvedValue({
+      payload: snap,
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(snap.materiais);
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
   });
 

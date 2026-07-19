@@ -910,6 +910,10 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(snapshotParaEstorno());
+    mockReadForWrite.mockResolvedValue({
+      payload: snapshotParaEstorno(),
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
@@ -928,16 +932,14 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
   });
 
   it('em sucesso reverte quantidades no documento e material e marca estorno', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: {},
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
 
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify([
+      { id: 'mat-1', codigo: 'M1', descricao: 'Material 1', unidade: 'UN', saldoAtual: 95 },
+    ]);
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await estornarAtendimento('atd-est-1', undefined, {
@@ -978,15 +980,11 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
   });
 
   it('estorno parcial mantem lote concluido e ajusta apenas itens selecionados', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: {},
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
 
-    mockReadPayload.mockResolvedValue({
+    const snapParcial = {
       documentos: [
         {
           id: 'doc-est-p',
@@ -1060,10 +1058,15 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
         },
       ],
       atendimentoHistorico: [],
+    };
+    mockReadPayload.mockResolvedValue(snapParcial);
+    mockReadForWrite.mockResolvedValue({
+      payload: snapParcial,
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
     });
 
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(snapParcial.materiais);
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await estornarAtendimento('atd-est-p', [{ atendimentoItemId: 'lote-p-a', quantidade: 5 }]);
@@ -1083,15 +1086,11 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
   });
 
   it('estorno total em lote MULTIPLOS reverte cada item no desenho correto', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: {},
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
 
-    mockReadPayload.mockResolvedValue({
+    const snapMulti = {
       documentos: [
         {
           id: 'doc-a',
@@ -1177,10 +1176,15 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
         },
       ],
       atendimentoHistorico: [],
+    };
+    mockReadPayload.mockResolvedValue(snapMulti);
+    mockReadForWrite.mockResolvedValue({
+      payload: snapMulti,
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
     });
 
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(snapMulti.materiais);
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await estornarAtendimento('atd-multi');
@@ -1204,15 +1208,11 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
   });
 
   it('estorno parcial em lote MULTIPLOS reverte apenas o desenho do item selecionado', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: {},
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
 
-    mockReadPayload.mockResolvedValue({
+    const snapMultiP = {
       documentos: [
         {
           id: 'doc-a',
@@ -1298,10 +1298,15 @@ describe('atendimento.service / estornarAtendimento (Supabase)', () => {
         },
       ],
       atendimentoHistorico: [],
+    };
+    mockReadPayload.mockResolvedValue(snapMultiP);
+    mockReadForWrite.mockResolvedValue({
+      payload: snapMultiP,
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
     });
 
     store[DOCUMENTOS_KEY] = JSON.stringify([]);
-    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify(snapMultiP.materiais);
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
     const result = await estornarAtendimento('atd-multi-p', [{ atendimentoItemId: 'lote-m-a', quantidade: 2 }]);
