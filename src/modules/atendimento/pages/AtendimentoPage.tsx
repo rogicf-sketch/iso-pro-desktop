@@ -108,6 +108,7 @@ export function AtendimentoPage() {
     dispensarImpressaoReciboSessao,
     imprimirReciboSessaoEfechar,
     reciboImprimindo,
+    adicionarDocumentoPendenteRemoto,
   } = useAtendimento();
   const canEdit = canAccessAction('atendimento', 'editar');
   const canAdminister = canAccessAction('atendimento', 'administrar');
@@ -370,7 +371,12 @@ export function AtendimentoPage() {
             </ModuleHelp>
           </div>
         ) : null}
-        <AtendimentoBuscaDocumento documentos={documentos} onSelect={setSelectedDocumentoId} selectedDocumentoId={selectedDocumentoId} />
+        <AtendimentoBuscaDocumento
+          documentos={documentos}
+          onDocumentoRemoto={adicionarDocumentoPendenteRemoto}
+          onSelect={setSelectedDocumentoId}
+          selectedDocumentoId={selectedDocumentoId}
+        />
 
 
 

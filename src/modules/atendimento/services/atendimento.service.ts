@@ -1260,6 +1260,52 @@ function validateRequestedItems(items: Array<{ documentoItemId: string; quantida
   return { valid: true, items: positiveItems };
 }
 
+function mapDocumentosPendentesWire(
+  docs: Awaited<ReturnType<typeof listDocumentosPendentesAtendimentoFromCloud>>['documentos'],
+  saldoMap: Map<string, number>,
+): AtendimentoDocumento[] {
+  return docs
+    .map((doc) => {
+      const statusRaw = String(doc.status ?? 'pendente');
+      const status = (
+        statusRaw === 'parcial' || statusRaw === 'atendido' || statusRaw === 'cancelado' || statusRaw === 'recebido'
+          ? statusRaw
+          : 'pendente'
+      ) as AtendimentoDocumento['status'];
+      return {
+        id: String(doc.id ?? ''),
+        numero: String(doc.numero ?? ''),
+        revisao: String(doc.revisao ?? 'A'),
+        descricao: String(doc.descricao ?? ''),
+        responsavel: String(doc.responsavel ?? ''),
+        status,
+        linhas: (doc.itens ?? [])
+          .map((item) => {
+            const codigo = String(item.codigo ?? '');
+            const key = codigoMaterialKey(codigo);
+            const quantidadeProjeto = Number(item.quantidade ?? 0) || 0;
+            const quantidadeAtendida = Number(item.quantidadeAtendida ?? 0) || 0;
+            const pendente = Math.max(0, quantidadeProjeto - quantidadeAtendida);
+            return {
+              documentoItemId: String(item.id ?? ''),
+              materialId: null as string | null,
+              codigoMaterial: codigo,
+              descricaoMaterial: String(item.descricao ?? ''),
+              unidade: String(item.unidade ?? 'UN'),
+              quantidadeProjeto,
+              quantidadeAtendida,
+              quantidadePendente: pendente,
+              saldoDisponivel: saldoMap.get(key) ?? 0,
+              quantidadeNestaOperacao: 0,
+            };
+          })
+          .filter((item) => item.quantidadePendente > 0),
+      };
+    })
+    .filter((doc) => doc.id && doc.linhas.length > 0)
+    .sort((a, b) => a.numero.localeCompare(b.numero));
+}
+
 export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[]> {
   if (shouldTryRemoteRead()) {
     try {
@@ -1269,53 +1315,35 @@ export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[
       if (cloud.source === 'tables' && !cloud.error) {
         // Boot leve: saldo operacional sem baixar cadastro completo (2k+ materiais).
         const saldoMap = await obterSaldoMapOperacional();
-
-        return cloud.documentos
-          .map((doc) => {
-            const statusRaw = String(doc.status ?? 'pendente');
-            const status = (
-              statusRaw === 'parcial' || statusRaw === 'atendido' || statusRaw === 'cancelado' || statusRaw === 'recebido'
-                ? statusRaw
-                : 'pendente'
-            ) as AtendimentoDocumento['status'];
-            return {
-              id: String(doc.id ?? ''),
-              numero: String(doc.numero ?? ''),
-              revisao: String(doc.revisao ?? 'A'),
-              descricao: String(doc.descricao ?? ''),
-              responsavel: String(doc.responsavel ?? ''),
-              status,
-              linhas: (doc.itens ?? [])
-                .map((item) => {
-                  const codigo = String(item.codigo ?? '');
-                  const key = codigoMaterialKey(codigo);
-                  const quantidadeProjeto = Number(item.quantidade ?? 0) || 0;
-                  const quantidadeAtendida = Number(item.quantidadeAtendida ?? 0) || 0;
-                  const pendente = Math.max(0, quantidadeProjeto - quantidadeAtendida);
-                  return {
-                    documentoItemId: String(item.id ?? ''),
-                    materialId: null as string | null,
-                    codigoMaterial: codigo,
-                    descricaoMaterial: String(item.descricao ?? ''),
-                    unidade: String(item.unidade ?? 'UN'),
-                    quantidadeProjeto,
-                    quantidadeAtendida,
-                    quantidadePendente: pendente,
-                    saldoDisponivel: saldoMap.get(key) ?? 0,
-                    quantidadeNestaOperacao: 0,
-                  };
-                })
-                .filter((item) => item.quantidadePendente > 0),
-            };
-          })
-          .filter((doc) => doc.id && doc.linhas.length > 0)
-          .sort((a, b) => a.numero.localeCompare(b.numero));
+        return mapDocumentosPendentesWire(cloud.documentos, saldoMap);
       }
     } catch {
       /* ignore — sem fallback pesado */
     }
   }
 
+  return [];
+}
+
+/**
+ * Busca paginada na nuvem para o campo Documento do Atendimento. O boot carrega só os
+ * primeiros 150 pendentes (de milhares); ao digitar, esta busca traz o resto por numero,
+ * descricao ou revisao. Aceita a linha completa colada ("NUMERO Rev. X - desc").
+ */
+export async function buscarDocumentosPendentesNuvem(busca: string): Promise<AtendimentoDocumento[]> {
+  const q = busca.split(/\s+Rev\.\s/i)[0]?.trim() ?? '';
+  if (!q || !shouldTryRemoteRead()) return [];
+  try {
+    const cloud = await withRemoteReadTimeout(() =>
+      listDocumentosPendentesAtendimentoFromCloud({ busca: q, limit: 60 }),
+    );
+    if (cloud.source === 'tables' && !cloud.error) {
+      const saldoMap = await obterSaldoMapOperacional();
+      return mapDocumentosPendentesWire(cloud.documentos, saldoMap);
+    }
+  } catch {
+    /* busca é auxiliar — sem erro visível */
+  }
   return [];
 }
 

@@ -480,6 +480,11 @@ export function useAtendimento() {
     [documentos, selectedDocumentoId],
   );
 
+  /** Documento encontrado pela busca remota (fora dos primeiros pendentes do boot): entra na lista local. */
+  const adicionarDocumentoPendenteRemoto = useCallback((documento: AtendimentoDocumento) => {
+    setDocumentos((prev) => (prev.some((d) => d.id === documento.id) ? prev : [...prev, documento]));
+  }, []);
+
   useEffect(() => {
     if (!selectedDocumentoId) {
       setIdsMarcados(new Set());
@@ -1582,6 +1587,7 @@ export function useAtendimento() {
     fallbackReason,
     hasCloudConfig,
     load,
+    adicionarDocumentoPendenteRemoto,
     setSelectedDocumentoId,
     setAtendente,
     setRecebedorTipo,

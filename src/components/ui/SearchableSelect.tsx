@@ -8,11 +8,13 @@ type Props = {
   value: string;
   options: SearchableSelectOption[];
   onChange: (value: string) => void;
+  /** Notifica o texto digitado (ex.: busca remota complementar às opções locais). */
+  onQueryChange?: (query: string) => void;
   placeholder?: string;
   disabled?: boolean;
 };
 
-export function SearchableSelect({ label, value, options, onChange, placeholder, disabled }: Props) {
+export function SearchableSelect({ label, value, options, onChange, onQueryChange, placeholder, disabled }: Props) {
   const reactId = useId();
   const listId = `${reactId}-list`;
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -83,6 +85,7 @@ export function SearchableSelect({ label, value, options, onChange, placeholder,
     setQuery(v);
     setOpen(true);
     if (v === '') onChange('');
+    onQueryChange?.(v);
   }
 
   function onBlur() {
