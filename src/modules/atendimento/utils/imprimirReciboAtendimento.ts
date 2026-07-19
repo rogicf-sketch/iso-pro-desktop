@@ -61,6 +61,7 @@ function htmlBlocoTipoRetirada(
     <section class="bloco recibo-bloco-tipo recibo-bloco-tipo--externa">
       <h2>Retirada externa</h2>
       <div class="grid2 recibo-grid-externo">
+        ${e.empresa?.trim() ? `<p><strong>Empresa:</strong> ${escapeHtmlRelatorio(e.empresa)}</p>` : ''}
         <p><strong>Documento (ID):</strong> ${escapeHtmlRelatorio(e.documentoIdentificacao)}</p>
         <p><strong>Telefone:</strong> ${escapeHtmlRelatorio(e.telefone)}</p>
         <p><strong>Autorizador interno:</strong> ${escapeHtmlRelatorio(e.autorizadorInterno)}</p>

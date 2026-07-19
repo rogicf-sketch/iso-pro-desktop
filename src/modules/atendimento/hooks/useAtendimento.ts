@@ -912,6 +912,7 @@ export function useAtendimento() {
               telefone: extTel.trim(),
               autorizadorInterno: extAuth.trim(),
               motivoRetirada: extMotivo.trim(),
+              empresa: extEmp.trim(),
             }
           : undefined,
       ),
@@ -1229,6 +1230,7 @@ export function useAtendimento() {
                 telefone: extTel.trim(),
                 autorizadorInterno: extAuth.trim(),
                 motivoRetirada: extMotivo.trim(),
+                empresa: extEmp.trim(),
               }
             : undefined,
       });

@@ -82,6 +82,7 @@ export type DadosReciboAtendimento = {
     telefone: string;
     autorizadorInterno: string;
     motivoRetirada: string;
+    empresa?: string;
   };
 };
 
@@ -127,6 +128,7 @@ export type DadosReciboSessaoConsolidada = {
     telefone: string;
     autorizadorInterno: string;
     motivoRetirada: string;
+    empresa?: string;
   };
 };
 

@@ -51,6 +51,7 @@ export async function montarDadosReciboParaAtendimento(at: Atendimento): Promise
             telefone: at.recebedorTelefone,
             autorizadorInterno: at.autorizadorInterno,
             motivoRetirada: at.motivoRetirada,
+            empresa: at.recebedorEmpresa,
           }
         : undefined,
   };
