@@ -426,13 +426,16 @@ export function cssReciboAtendimentoBase(): string {
         page-break-inside: avoid;
         break-inside: avoid;
       }
+      /* Poucos itens: nao empurrar o bloco inteiro (total+assinaturas) para a 2.a folha. */
       .recibo-fechamento {
-        page-break-inside: avoid;
-        break-inside: avoid;
+        page-break-inside: auto;
+        break-inside: auto;
       }
       .assinaturas {
-        margin-top: 10px !important;
-        gap: 18px !important;
+        margin-top: 8px !important;
+        gap: 14px !important;
+        page-break-inside: avoid;
+        break-inside: avoid;
       }
       .assinatura-box {
         display: flex !important;
@@ -441,14 +444,14 @@ export function cssReciboAtendimentoBase(): string {
         text-align: center !important;
       }
       .linha-ass {
-        margin: 0 0 6px !important;
+        margin: 0 0 4px !important;
         width: 88% !important;
         max-width: 280px !important;
       }
       .espaco-assinatura {
         width: 88% !important;
         max-width: 280px !important;
-        min-height: 36px !important;
+        min-height: 22px !important;
       }
       .rotulo-ass { margin: 0 0 2px !important; font-size: 8pt !important; text-align: center !important; width: 100%; }
       .ass-nome-principal { font-size: 10pt !important; margin: 0 0 2px !important; text-align: center !important; width: 100%; }
@@ -459,6 +462,16 @@ export function cssReciboAtendimentoBase(): string {
         max-width: 280px !important;
         text-align: center !important;
       }
+      /* Compacto na impressao mesmo com poucos itens (antes so --denso com >6). */
+      .recibo-tabela-itens { font-size: 8.5pt !important; }
+      .recibo-tabela-itens th,
+      .recibo-tabela-itens td {
+        padding: 4px 8px !important;
+      }
+      .recibo-tabela-itens thead th {
+        padding: 5px 8px !important;
+        font-size: 7pt !important;
+      }
       body.recibo-body--denso .recibo-tabela-itens { font-size: 8.25pt !important; }
       body.recibo-body--denso .recibo-tabela-itens th,
       body.recibo-body--denso .recibo-tabela-itens td {
@@ -466,9 +479,18 @@ export function cssReciboAtendimentoBase(): string {
       }
       body.recibo-body--denso .recibo-tabela-itens .col-desc { line-height: 1.28 !important; }
       body.recibo-body--denso .recibo-tabela-itens thead th { font-size: 7pt !important; padding: 4px 8px !important; }
+      .recibo-tipo-badge {
+        margin-bottom: 6px !important;
+        padding: 5px 9px !important;
+        font-size: 8pt !important;
+      }
+      .recibo-bloco-info {
+        margin-bottom: 6px !important;
+        padding: 8px 10px !important;
+      }
       .recibo-doc-foot {
-        margin-top: 8px !important;
-        padding-top: 6px !important;
+        margin-top: 6px !important;
+        padding-top: 5px !important;
         font-size: 7pt !important;
       }
       .recibo-bloco-itens tbody tr:nth-child(even) { background: transparent !important; }
@@ -804,8 +826,8 @@ export function cssReciboAtendimentoBase(): string {
       min-height: 1px;
     }
     .recibo-fechamento {
-      page-break-inside: avoid;
-      break-inside: avoid;
+      page-break-inside: auto;
+      break-inside: auto;
     }
     body.recibo-body--denso .recibo-tabela-itens .col-desc { line-height: 1.28; font-size: 8.5pt; }
     body.recibo-body--denso .recibo-tabela-itens th,

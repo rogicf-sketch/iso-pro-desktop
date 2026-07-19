@@ -8,6 +8,7 @@ import {
   SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_LIGHT_SEM_RECEBIMENTOS_SLICE_KEYS,
+  SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS,
   SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
   SNAPSHOT_OPERATIONAL_SLICE_KEYS,
 } from '../../../lib/isoProSnapshot';
@@ -20,7 +21,6 @@ import {
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
-import { mergeSnapshotRowsById } from '../../../lib/snapshotPatchMerge';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
 import {
   documentosReconciliadosDoPayload,
@@ -49,7 +49,12 @@ import {
 } from './atendimentoComandoDesktop';
 import type { SnapshotSlice } from './atendimentoSnapshotPatch';
 import { consumirSequenciaAtendimento } from '../../configuracoes/services/configuracoes.service';
-import { chaveAgrupamentoHistoricoAtendimento, formatNumeroAtendimento, maxSequenciaAtendimentoNoPayload } from 'iso-pro-shared';
+import {
+  chaveAgrupamentoHistoricoAtendimento,
+  formatNumeroAtendimento,
+  maxSequenciaAtendimentoNoPayload,
+  parseNumeroAtendimento,
+} from 'iso-pro-shared';
 import { carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
@@ -454,6 +459,23 @@ async function readSnapshotPayloadLightComAgregados(): Promise<SnapshotPayload> 
   return { ...parcial, recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo) };
 }
 
+/**
+ * Pre-write da baixa/sessao: NAO baixa atendimentoHistorico nem atendimentos[]
+ * (causa tipica dos 50–60s no «Confirmar retirada»). Saldo via materiais +
+ * agregados; sequencia via configuracoesSistema + lotes ja no PC.
+ */
+async function readSnapshotPayloadParaBaixaWrite(): Promise<SnapshotPayload> {
+  const [recebidoPorCodigo, parcial] = await Promise.all([
+    fetchQuantidadeRecebidaPorCodigo().catch(() => null),
+    readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS),
+  ]);
+  return {
+    ...parcial,
+    recebimentos:
+      recebidoPorCodigo != null ? recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo) : [],
+  };
+}
+
 async function readSnapshotPayloadHistorico(): Promise<SnapshotPayload> {
   return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS);
 }
@@ -703,16 +725,17 @@ async function writeSnapshotAtendimentoPatch(patch: {
   await gravarAtendimentoNaNuvemComComando({
     prepare: async () => {
       const ehEstorno = (patch.estornoLogAppend?.length ?? 0) > 0;
-      // Baixa E estorno: NAO baixar atendimentoHistorico (fatia pesada — obra grande = dezenas de MB
-      // e 40–60s no «Confirmar retirada»). Novas linhas de historico vao so no delta (append por id).
-      const sliceKeys = ['atendimentos', 'atendimentoEstornoLog', 'configuracoesSistema'] as const;
+      // Baixa E estorno: NAO baixar atendimentoHistorico nem a lista completa de atendimentos
+      // (obra grande = dezenas de MB). Novas linhas vao so no delta (append por id).
+      const sliceKeys = ehEstorno
+        ? (['atendimentoEstornoLog', 'configuracoesSistema'] as const)
+        : (['configuracoesSistema'] as const);
       // Sem timeout esta leitura pode pendurar a gravacao indefinidamente (modal «A gravar…» sem fim).
       const { slices: currentPayload, baselineUpdatedAt } = await withRemoteReadTimeout(
         () => readIsoProSnapshotSlicesForWrite(sliceKeys),
         REMOTE_READ_TIMEOUT_HEAVY_MS,
       );
       const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
-      const currentAtendimentos = (currentPayload.atendimentos ?? []) as SnapshotAtendimentoRecord[];
       const existingEstornoLog = mapEstornoLogFromSnapshot(
         currentPayload.atendimentoEstornoLog as SnapshotPayload['atendimentoEstornoLog'],
       );
@@ -721,9 +744,8 @@ async function writeSnapshotAtendimentoPatch(patch: {
       // O servidor faz merge por id no snapshot completo (GREATEST na baixa / regressao no estorno).
       const documentos = patchDocumentos;
 
-      const atendimentosSnapshot = patch.atendimentos?.length
-        ? mergeSnapshotRowsById(currentAtendimentos, patch.atendimentos.map(atendimentoToSnapshotRecord))
-        : currentAtendimentos;
+      // Append-only: so os lotes novos deste patch (nao fundir com a lista completa da nuvem).
+      const atendimentosNovos = (patch.atendimentos ?? []).map(atendimentoToSnapshotRecord);
 
       const atendimentoEstornoLog = patch.estornoLogAppend?.length
         ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
@@ -735,24 +757,34 @@ async function writeSnapshotAtendimentoPatch(patch: {
           ? buildAtendimentoHistoricoFromAtendimentos(patch.atendimentos)
           : [];
 
+      const cfgAtual = (currentPayload.configuracoesSistema ?? {}) as Record<string, unknown>;
+      let sequenciaCfg = Number(cfgAtual.sequenciaAtendimento) || 0;
+      for (const a of patch.atendimentos ?? []) {
+        const parsed = parseNumeroAtendimento(a.numero);
+        if (parsed) sequenciaCfg = Math.max(sequenciaCfg, parsed.sequencia);
+      }
+
       const nextSlices: SnapshotSlice = {
         documentos,
-        atendimentos: atendimentosSnapshot,
+        atendimentos: atendimentosNovos,
         ...(ehEstorno ? {} : { atendimentoHistorico: atendimentoHistoricoNovos }),
         atendimentoEstornoLog: Array.isArray(atendimentoEstornoLog) ? atendimentoEstornoLog : [],
-        configuracoesSistema: currentPayload.configuracoesSistema as Record<string, unknown> | undefined,
+        configuracoesSistema: {
+          ...cfgAtual,
+          sequenciaAtendimento: sequenciaCfg,
+        },
         dataAtualizacao: new Date().toISOString(),
       };
 
       const baselineSlices: SnapshotSlice = {
         documentos: [],
-        atendimentos: currentAtendimentos,
-        // Baseline vazio → o delta trata as linhas novas como append (merge por id no servidor).
+        // Baseline vazio → delta trata lotes/historico novos como append (merge por id no servidor).
+        atendimentos: [],
         ...(ehEstorno ? {} : { atendimentoHistorico: [] }),
         atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
           ? (currentPayload.atendimentoEstornoLog as unknown[])
           : existingEstornoLog.map(estornoLogToSnapshotRecord),
-        configuracoesSistema: currentPayload.configuracoesSistema as Record<string, unknown> | undefined,
+        configuracoesSistema: cfgAtual,
         dataAtualizacao: currentPayload.dataAtualizacao as string | undefined,
       };
 
@@ -1202,13 +1234,15 @@ async function readRemoteState() {
  * Nunca cai no snapshot completo (4k+ documentos): em obra grande isso levava 30-60s e a
  * gravacao da sessao parecia «congelada» ate falhar por timeout. Falha aqui = caller decide
  * (registrar* usa `.catch(() => null)` e segue com o estado local).
+ *
+ * Tambem NAO baixa atendimentoHistorico / atendimentos[] (mesma latencia 40–60s).
  */
 async function readRemoteStateForWrite(documentoIds: string[]) {
   const uniqueIds = [...new Set(documentoIds.map((id) => String(id ?? '').trim()).filter(Boolean))];
   const [payloadLight, atendidoPorCodigo] = await withRemoteReadTimeout(
     () =>
       Promise.all([
-        readSnapshotPayloadLightComAgregados(),
+        readSnapshotPayloadParaBaixaWrite(),
         fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
       ]),
     REMOTE_READ_TIMEOUT_HEAVY_MS,
@@ -1220,15 +1254,9 @@ async function readRemoteStateForWrite(documentoIds: string[]) {
           documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
         })
       : buildSaldoMap(payloadLight);
-  let materiais = mapSnapshotMateriais(payloadLight, saldoMap);
-  if (shouldUseCloudMaterials()) {
-    try {
-      const cadastro = await carregarMateriaisDoCadastro();
-      materiais = mergeMateriaisSnapshotComCadastroNuvem(materiais, cadastro, saldoMap);
-    } catch {
-      /* mantem snapshot */
-    }
-  }
+  // So materiais do snapshot (+ agregados). Sem carregarMateriaisDoCadastro no caminho
+  // critico da confirmacao — outra ida a nuvem que somava segundos.
+  const materiais = mapSnapshotMateriais(payloadLight, saldoMap);
   // Em paralelo, com uma repeticao por documento (RPC leve ~2KB cada).
   const docsLidos = await Promise.all(
     uniqueIds.map(async (id) => (await carregarDocumentoStoredDaNuvem(id)) ?? (await carregarDocumentoStoredDaNuvem(id))),
@@ -1238,8 +1266,9 @@ async function readRemoteStateForWrite(documentoIds: string[]) {
     payload: payloadLight,
     documentos,
     materiais,
-    atendimentos: mapSnapshotAtendimentos(payloadLight),
-    estornoLog: mapEstornoLogFromSnapshot(payloadLight.atendimentoEstornoLog),
+    // Lotes vem do estado local no caller — nao baixar a lista completa aqui.
+    atendimentos: [] as Atendimento[],
+    estornoLog: [] as EstornoLogRegistro[],
   };
 }
 
@@ -1870,7 +1899,15 @@ export async function registrarAtendimento(payload: {
     remoteState != null && remoteState.materiais.length > 0
       ? remoteState.materiais
       : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
-  const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
+  // Sem lista remota de lotes no pre-write (latencia): usa o historico ja no PC.
+  const atendimentos = [...localState.atendimentos];
+  const payloadSequencia: SnapshotPayload = {
+    ...(remoteState?.payload ?? {}),
+    atendimentos: atendimentos as SnapshotPayload['atendimentos'],
+    configuracoesSistema:
+      (remoteState?.payload?.configuracoesSistema as Record<string, unknown> | undefined) ??
+      undefined,
+  };
 
   let documentoIndex = documentos.findIndex((doc) => doc.id === payload.documentoId);
   if (documentoIndex === -1 && shouldTryRemoteRead()) {
@@ -1941,7 +1978,7 @@ export async function registrarAtendimento(payload: {
 
   const atendimento: Atendimento = {
     id: crypto.randomUUID(),
-    numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(remoteState?.payload ?? null)),
+    numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(payloadSequencia)),
     documentoId: documento.id,
     documentoNumero: documento.numero,
     atendente: payload.atendente.trim(),
@@ -2101,7 +2138,15 @@ export async function registrarAtendimentosSessao(
     remoteState != null && remoteState.materiais.length > 0
       ? remoteState.materiais
       : await enrichMateriaisSaldoFromLocalMovement(localState.materiais, localState.documentos);
-  const atendimentos = remoteState?.atendimentos ?? localState.atendimentos;
+  // Sem lista remota de lotes no pre-write (latencia): usa o historico ja no PC.
+  const atendimentos = [...localState.atendimentos];
+  const payloadSequencia: SnapshotPayload = {
+    ...(remoteState?.payload ?? {}),
+    atendimentos: atendimentos as SnapshotPayload['atendimentos'],
+    configuracoesSistema:
+      (remoteState?.payload?.configuracoesSistema as Record<string, unknown> | undefined) ??
+      undefined,
+  };
 
   const materialByCode = new Map(materiais.map((material, index) => [codigoMaterialKey(material.codigo), { material, index }]));
   const saldoRestantePorCodigo = new Map<string, number>();
@@ -2192,7 +2237,7 @@ export async function registrarAtendimentosSessao(
 
     const atendimento: Atendimento = {
       id: crypto.randomUUID(),
-      numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(remoteState?.payload ?? null)),
+      numero: buildNumeroAtendimento(consumirSequenciaComSnapshot(payloadSequencia)),
       documentoId: documento.id,
       documentoNumero: documento.numero,
       atendente: payload.atendente.trim(),

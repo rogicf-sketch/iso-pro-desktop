@@ -72,6 +72,7 @@ describe('atendimentoSnapshotPatch / buildDesktopAtendimentoPatchDelta', () => {
     expect(delta.comandoPatch.atendimentoHistorico).toHaveLength(1);
     expect(delta.patch.atendimentoHistorico).toHaveLength(1);
     expect(delta.patchWithoutMerge.atendimentoHistorico).toBeUndefined();
+    expect(delta.patchWithoutMerge.atendimentos).toBeUndefined();
   });
 });
 
