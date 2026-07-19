@@ -1514,7 +1514,7 @@ export function useAtendimento() {
         return {
           ...doc,
           linhas: doc.linhas.map((linha) => {
-            const hit = afetados.find((d) => d.documentoItemId === linha.id);
+            const hit = afetados.find((d) => d.documentoItemId === linha.documentoItemId);
             if (!hit) return linha;
             const delta = Number(hit.delta) || 0;
             // delta e negativo (estorno); quantidadeAtendida diminui.
