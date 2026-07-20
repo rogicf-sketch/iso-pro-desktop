@@ -28,6 +28,7 @@ vi.mock('../../colaboradores/services/colaboradores.service', () => ({
 
 vi.mock('../../materiais/services/materiais.service', () => ({
   buscarMaterialPorLeituraCodigo: vi.fn(() => Promise.resolve({ success: true, data: null })),
+  aquecerIndiceLeituraMateriais: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('../services/atendimento.service', () => ({

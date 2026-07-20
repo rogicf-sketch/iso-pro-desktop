@@ -213,15 +213,52 @@ function readAll(opts?: { silenciarAvisoCorrupto?: boolean }): Material[] {
 function writeAll(items: Material[]) {
   localStorage.setItem(materiaisStorageKey(), JSON.stringify(items));
   invalidateMateriaisBaseCache();
+  rebuildMateriaisLeituraIndex(items);
 }
 
 let materiaisBaseCache: Material[] | null = null;
 let materiaisBaseCachePromise: Promise<Material[]> | null = null;
 
+/** Indice O(1) para leitor: codigo lower + digitos do codigo de barras → material ativo. */
+let materiaisLeituraIndex: {
+  porCodigo: Map<string, Material>;
+  porBarras: Map<string, Material>;
+  builtAt: number;
+} | null = null;
+let materiaisLeituraWarmPromise: Promise<void> | null = null;
+
+function rebuildMateriaisLeituraIndex(items: Material[]): void {
+  const porCodigo = new Map<string, Material>();
+  const porBarras = new Map<string, Material>();
+  for (const raw of items) {
+    const m = normalizarMaterialLeitura(raw);
+    if (!m.ativo) continue;
+    const codigoKey = m.codigo.trim().toLowerCase();
+    if (codigoKey) porCodigo.set(codigoKey, m);
+    const barras = m.codigoBarras?.replace(/\D/g, '') ?? '';
+    if (barras.length >= 8) porBarras.set(barras, m);
+  }
+  materiaisLeituraIndex = { porCodigo, porBarras, builtAt: Date.now() };
+}
+
+function lookupMaterialNoIndiceLeitura(scan: string): Material | null {
+  if (!materiaisLeituraIndex) return null;
+  const q = scan.trim();
+  if (!q) return null;
+  const byCode = materiaisLeituraIndex.porCodigo.get(q.toLowerCase());
+  if (byCode) return byCode;
+  const digits = q.replace(/\D/g, '');
+  if (digits.length >= 8) {
+    return materiaisLeituraIndex.porBarras.get(digits) ?? null;
+  }
+  return null;
+}
+
 /** Limpa cache em memoria do cadastro (apos gravacao local ou remota). */
 export function invalidateMateriaisBaseCache(): void {
   materiaisBaseCache = null;
   materiaisBaseCachePromise = null;
+  // Mantem o indice de leitura (SWR): bipe continua O(1) ate o proximo rebuild.
 }
 
 registerSnapshotDerivedCacheInvalidator(invalidateMateriaisBaseCache);
@@ -444,6 +481,7 @@ async function loadMateriaisBase(): Promise<Material[]> {
   materiaisBaseCachePromise = (async () => {
     const result = await fetchMateriaisBaseFromSource();
     materiaisBaseCache = result;
+    rebuildMateriaisLeituraIndex(result);
     return result;
   })();
 
@@ -452,6 +490,43 @@ async function loadMateriaisBase(): Promise<Material[]> {
   } finally {
     materiaisBaseCachePromise = null;
   }
+}
+
+/**
+ * Pre-aquece o indice O(1) do leitor (codigo + codigo de barras).
+ * Usa copia local imediatamente; em fundo atualiza com o cadastro completo (SWR).
+ */
+export async function aquecerIndiceLeituraMateriais(): Promise<void> {
+  if (materiaisLeituraIndex && materiaisLeituraIndex.porCodigo.size > 0) {
+    // Refresh em fundo sem bloquear o bipe.
+    if (!materiaisLeituraWarmPromise && shouldTryRemoteRead()) {
+      materiaisLeituraWarmPromise = loadMateriaisBase()
+        .then(() => undefined)
+        .catch(() => undefined)
+        .finally(() => {
+          materiaisLeituraWarmPromise = null;
+        });
+    }
+    return;
+  }
+  if (materiaisLeituraWarmPromise) {
+    await materiaisLeituraWarmPromise;
+    return;
+  }
+  materiaisLeituraWarmPromise = (async () => {
+    const local = readAll({ silenciarAvisoCorrupto: true });
+    if (local.length > 0) rebuildMateriaisLeituraIndex(local);
+    if (shouldTryRemoteRead() || shouldUseCloudMaterials()) {
+      try {
+        await loadMateriaisBase();
+      } catch {
+        /* indice local ja serve o bipe */
+      }
+    }
+  })().finally(() => {
+    materiaisLeituraWarmPromise = null;
+  });
+  await materiaisLeituraWarmPromise;
 }
 
 /**
@@ -543,14 +618,19 @@ export async function sincronizarMateriaisNuvemParaArmazenamentoLocal(
 }
 
 /**
- * Resolve material pelo codigo interno (exato, ignorando maiusculas) ou pelo codigo de barras (apenas digitos).
- * Usado no atendimento com leitor. Materiais inativos nao sao retornados.
+ * Resolve material pelo codigo interno ou codigo de barras.
+ * Caminho enterprise: indice Map O(1) em memoria → local → query indexada na nuvem.
+ * Nunca percorre O(n) a lista completa no bipe quando o indice esta aquecido.
  */
 export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<ServiceResult<Material | null>> {
   const q = scan.trim();
   if (!q) return { success: true, data: null };
   const qLower = q.toLowerCase();
   const digits = q.replace(/\D/g, '');
+
+  // 1) Indice O(1) — apos aquecerIndiceLeituraMateriais / loadMateriaisBase.
+  const indexed = lookupMaterialNoIndiceLeitura(q);
+  if (indexed) return { success: true, data: indexed };
 
   const matchLocal = (items: Material[]): Material | null => {
     for (const m of items) {
@@ -567,16 +647,26 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
     return null;
   };
 
-  // 1) Cache em memoria (apos 1.a carga da lista) — instantaneo.
-  if (materiaisBaseCache) {
-    return { success: true, data: matchLocal(materiaisBaseCache) };
+  // 2) Copia local + monta indice para os proximos bipes.
+  const localItems = readAll({ silenciarAvisoCorrupto: true });
+  if (localItems.length > 0) {
+    rebuildMateriaisLeituraIndex(localItems);
+    const localHit = lookupMaterialNoIndiceLeitura(q) ?? matchLocal(localItems);
+    if (localHit) {
+      // SWR: atualiza cadastro em fundo sem bloquear o bipe.
+      if (!materiaisLeituraWarmPromise && (shouldTryRemoteRead() || shouldUseCloudMaterials())) {
+        materiaisLeituraWarmPromise = loadMateriaisBase()
+          .then(() => undefined)
+          .catch(() => undefined)
+          .finally(() => {
+            materiaisLeituraWarmPromise = null;
+          });
+      }
+      return { success: true, data: localHit };
+    }
   }
 
-  // 2) Copia local do cadastro — sem paginar a tabela inteira no bipe.
-  const localHit = matchLocal(readAll({ silenciarAvisoCorrupto: true }));
-  if (localHit) return { success: true, data: localHit };
-
-  // 3) Materiais na nuvem: 1–2 queries indexadas (codigo / codigo_barras), nao listRemoteMaterials.
+  // 3) Materiais na nuvem: 1–2 queries indexadas (nao lista a tabela inteira).
   if (shouldUseCloudMaterials() && hasSupabaseConfig()) {
     try {
       const supabase = getSupabase();
@@ -603,7 +693,18 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
         }
         const mapped = rows.map(mapRemoteMaterial);
         const hit = matchLocal(mapped);
-        if (hit) return { success: true, data: hit };
+        if (hit) {
+          // Incorpora no indice sem esperar o catalogo completo.
+          if (!materiaisLeituraIndex) {
+            rebuildMateriaisLeituraIndex(mapped);
+          } else {
+            const codigoKey = hit.codigo.trim().toLowerCase();
+            if (codigoKey) materiaisLeituraIndex.porCodigo.set(codigoKey, hit);
+            const barras = hit.codigoBarras?.replace(/\D/g, '') ?? '';
+            if (barras.length >= 8) materiaisLeituraIndex.porBarras.set(barras, hit);
+          }
+          return { success: true, data: hit };
+        }
       }
     } catch (error) {
       return {
@@ -613,10 +714,10 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
     }
   }
 
-  // 4) Ultimo recurso: cadastro completo (pode demorar) — so se nada acima achou.
+  // 4) Ultimo recurso: cadastro completo.
   try {
     const base = await loadMateriaisBase();
-    return { success: true, data: matchLocal(base) };
+    return { success: true, data: lookupMaterialNoIndiceLeitura(q) ?? matchLocal(base) };
   } catch (error) {
     return {
       success: false,

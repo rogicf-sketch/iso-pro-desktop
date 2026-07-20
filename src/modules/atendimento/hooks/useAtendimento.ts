@@ -4,7 +4,10 @@ import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { listarColaboradoresAtivos } from '../../colaboradores/services/colaboradores.service';
 import { tocarFeedbackLeitor } from '../../../lib/leitorFeedbackSonoro';
-import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materiais.service';
+import {
+  aquecerIndiceLeituraMateriais,
+  buscarMaterialPorLeituraCodigo,
+} from '../../materiais/services/materiais.service';
 import type { Material } from '../../materiais/types/material.types';
 import {
   aquecerBaselineAtendimentoNuvem,
@@ -360,8 +363,9 @@ export function useAtendimento() {
       // Pendentes de desenho em paralelo, mas sem bloquear se forem mais lentos:
       // se pendentes demorarem, devolvemos histórico já e o React Query refetch preenche docs.
       void aquecerBaselineAtendimentoNuvem();
-      // Pre-aquece saldo do leitor em fundo (1.o bipe nao espera 40s).
+      // Pre-aquece saldo + indice O(1) de materiais (1.o bipe nao espera catalogo).
       void aquecerSaldoOperacionalAtendimento();
+      void aquecerIndiceLeituraMateriais();
       const histPromise = listarHistoricoAtendimentosComMeta();
       const colabPromise = listarColaboradoresAtivos();
       const docsPromise = listarDocumentosPendentesComMeta();
