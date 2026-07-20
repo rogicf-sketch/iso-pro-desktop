@@ -303,13 +303,7 @@ export function LoginPage() {
               Selecione um perfil para preencher o utilizador e a palavra-passe; depois clique em Entrar.
             </p>
           </div>
-        ) : (
-          <OperationalNotice tone="neutral">
-            Nesta instalação, os logins de demonstração estão desligados. Utilize as credenciais definidas no módulo{' '}
-            <strong>Utilizadores</strong> (com Supabase) ou um build de testes com <code>VITE_ENABLE_LOCAL_MOCK_AUTH=true</code> no
-            ficheiro <code>.env</code>.
-          </OperationalNotice>
-        )}
+        ) : null}
 
         <OperationalNotice tone="warning">
           Segurança: não partilhe credenciais. Marque «Permanecer logado» só em equipamentos de confiança.

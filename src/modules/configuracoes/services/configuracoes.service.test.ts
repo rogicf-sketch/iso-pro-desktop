@@ -192,12 +192,21 @@ describe('configuracoes.service — tema preferido do utilizador', () => {
     expect(readTemaEfetivoParaSessao()).toBe('hibrido');
   });
 
-  it('sem sessao, tema hibrido nao vai para o login (aplica escuro campo)', () => {
+  it('sem sessao, tema hibrido nao vai para o login (aplica escuro)', () => {
     localStorage.setItem(CONFIG_KEY, JSON.stringify({ ...readConfiguracoes(), tema: 'hibrido' }));
     vi.spyOn(authService, 'getCurrentUser').mockReturnValue(null);
     aplicarTemaEfetivoNaSessao();
-    expect(document.body.classList.contains('theme-campo')).toBe(true);
+    expect(document.body.classList.contains('theme-escuro')).toBe(true);
     expect(document.body.classList.contains('theme-hibrido')).toBe(false);
+    expect(document.body.classList.contains('theme-campo')).toBe(false);
+  });
+
+  it('sem sessao, tema campo tambem nao vai para o login (aplica escuro)', () => {
+    localStorage.setItem(CONFIG_KEY, JSON.stringify({ ...readConfiguracoes(), tema: 'campo' }));
+    vi.spyOn(authService, 'getCurrentUser').mockReturnValue(null);
+    aplicarTemaEfetivoNaSessao();
+    expect(document.body.classList.contains('theme-escuro')).toBe(true);
+    expect(document.body.classList.contains('theme-campo')).toBe(false);
   });
 
   it('com sessao, tema hibrido continua a valer', () => {

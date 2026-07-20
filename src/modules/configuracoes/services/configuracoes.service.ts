@@ -290,13 +290,15 @@ export function readTemaEfetivoParaSessao(): ConfiguracaoSistema['tema'] {
   return readUsuarioTemaPreferido() ?? readConfiguracoes().tema;
 }
 
+/** Temas claros — no ecrã de login partem o contraste (cartão claro + títulos claros). */
+const TEMAS_CLAROS_LOGIN: ConfiguracaoSistema['tema'][] = ['hibrido', 'campo'];
+
 export function aplicarTemaEfetivoNaSessao(): void {
   const tema = readTemaEfetivoParaSessao();
-  // Ecra de login (sem sessao): o tema claro (hibrido) deixava o cartao branco com
-  // textos ilegiveis. O login usa sempre a identidade escura; o tema escolhido
-  // volta a valer assim que o utilizador entra.
-  if (!getCurrentUser() && tema === 'hibrido') {
-    aplicarTemaSistema('campo');
+  // Sem sessão: nunca aplicar tema claro. (0.1.131 forçava `campo`, mas `campo`
+  // também é claro e deixava o cartão branco com «Entrar» ilegível.)
+  if (!getCurrentUser() && TEMAS_CLAROS_LOGIN.includes(tema)) {
+    aplicarTemaSistema('escuro');
     return;
   }
   aplicarTemaSistema(tema);
