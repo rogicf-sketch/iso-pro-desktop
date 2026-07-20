@@ -1,8 +1,11 @@
 import { Outlet } from 'react-router-dom';
-import { normalizarUrlAssetPublicParaAmbiente, resolverUrlLogoInstitucional } from '@/lib/logoInstitucional';
+import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '@/lib/logoInstitucional.constants';
+import { normalizarUrlAssetPublicParaAmbiente } from '@/lib/logoInstitucional';
 
 export function AuthLayout() {
-  const logoUrl = normalizarUrlAssetPublicParaAmbiente(resolverUrlLogoInstitucional());
+  // Login: sempre o logo do sistema (fábrica). O logo da obra/cliente fica para
+  // recibos, RIR e restantes impressões — não na porta de entrada.
+  const logoUrl = normalizarUrlAssetPublicParaAmbiente(LOGO_INSTITUCIONAL_PADRAO_FABRICA);
 
   return (
     <div className="auth-page">
