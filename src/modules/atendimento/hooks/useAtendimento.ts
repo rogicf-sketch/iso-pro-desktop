@@ -8,6 +8,7 @@ import { buscarMaterialPorLeituraCodigo } from '../../materiais/services/materia
 import type { Material } from '../../materiais/types/material.types';
 import {
   aquecerBaselineAtendimentoNuvem,
+  aquecerSaldoOperacionalAtendimento,
   buscarDocumentosPendentesPorCodigoMaterialNuvem,
   estornarAtendimento,
   listarDocumentosPendentesComMeta,
@@ -359,6 +360,8 @@ export function useAtendimento() {
       // Pendentes de desenho em paralelo, mas sem bloquear se forem mais lentos:
       // se pendentes demorarem, devolvemos histórico já e o React Query refetch preenche docs.
       void aquecerBaselineAtendimentoNuvem();
+      // Pre-aquece saldo do leitor em fundo (1.o bipe nao espera 40s).
+      void aquecerSaldoOperacionalAtendimento();
       const histPromise = listarHistoricoAtendimentosComMeta();
       const colabPromise = listarColaboradoresAtivos();
       const docsPromise = listarDocumentosPendentesComMeta();

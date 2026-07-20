@@ -1,5 +1,4 @@
 import {
-  commitIsoProSnapshotPatch,
   isIsoProSnapshotConflictError,
   SNAPSHOT_CONFLICT_MESSAGE,
   submitAtendimentoComandoToCloud,
@@ -100,36 +99,6 @@ export function buildDesktopAtendimentoIdempotencyKey(input: {
   return `pc-at-${Date.now()}`;
 }
 
-async function syncAtendimentoPatchFallback(input: {
-  patch: Record<string, unknown>;
-  mergeKeys: readonly string[];
-  patchWithoutMerge?: Record<string, unknown>;
-  baselineUpdatedAt: string | null;
-}): Promise<AtendimentoDesktopSyncOutcome> {
-  try {
-    await commitIsoProSnapshotPatch(async () => ({
-      patch: input.patch,
-      baselineUpdatedAt: input.baselineUpdatedAt,
-      mergeKeys: input.mergeKeys,
-      patchWithoutMerge: input.patchWithoutMerge,
-    }));
-    return { error: null, conflict: false, updatedAt: new Date().toISOString() };
-  } catch (err) {
-    if (isIsoProSnapshotConflictError(err)) {
-      return {
-        error: err instanceof Error ? err.message : 'Conflito de snapshot.',
-        conflict: true,
-        updatedAt: null,
-      };
-    }
-    return {
-      error: err instanceof Error ? err.message : 'Falha ao sincronizar atendimento.',
-      conflict: false,
-      updatedAt: null,
-    };
-  }
-}
-
 export async function syncAtendimentoComandoDesktop(input: {
   comandoPatch: Record<string, unknown>;
   patch: Record<string, unknown>;
@@ -139,7 +108,12 @@ export async function syncAtendimentoComandoDesktop(input: {
   idempotencyKey: string;
 }): Promise<AtendimentoDesktopSyncOutcome> {
   if (input.baselineUpdatedAt == null) {
-    return syncAtendimentoPatchFallback(input);
+    // Sem baseline: patch completo demora 40–60s em obra grande — falha rapida.
+    return {
+      error: 'Nao foi possivel alinhar a versao da nuvem. Recarregue a pagina (Ctrl+F5) e tente de novo.',
+      conflict: false,
+      updatedAt: null,
+    };
   }
 
   const ehEstorno =
@@ -157,15 +131,14 @@ export async function syncAtendimentoComandoDesktop(input: {
         atendimentoCloudBaselineCursor = result.updatedAt;
         return { error: null, conflict: false, updatedAt: result.updatedAt };
       }
-      // Estorno: nao cair no patch_snapshot pesado (historico/atendimentos inteiros) —
-      // em obra grande isso estoura timeout e parece que o estorno "nao funciona".
-      if (ehEstorno) {
-        return {
-          error: 'Nao foi possivel gravar o estorno na nuvem (comando indisponivel). Tente de novo.',
-          conflict: false,
-          updatedAt: null,
-        };
-      }
+      // Baixa e estorno: nao cair no patch_snapshot pesado (historico inteiro → 40–60s).
+      return {
+        error: ehEstorno
+          ? 'Nao foi possivel gravar o estorno na nuvem (comando indisponivel). Tente de novo.'
+          : 'Nao foi possivel gravar a retirada na nuvem (comando indisponivel). Recarregue e tente de novo.',
+        conflict: false,
+        updatedAt: null,
+      };
     } catch (err) {
       if (isIsoProSnapshotConflictError(err)) {
         return {
@@ -186,15 +159,14 @@ export async function syncAtendimentoComandoDesktop(input: {
     return { error: null, conflict: false, updatedAt: input.baselineUpdatedAt };
   }
 
-  if (ehEstorno) {
-    return {
-      error: 'Nao foi possivel gravar o estorno na nuvem. Recarregue e tente de novo.',
-      conflict: false,
-      updatedAt: null,
-    };
-  }
-
-  return syncAtendimentoPatchFallback(input);
+  // Sem delta de comando: so estorno legado usava patch; baixa nova exige comando.
+  return {
+    error: ehEstorno
+      ? 'Nao foi possivel gravar o estorno na nuvem. Recarregue e tente de novo.'
+      : 'Nao foi possivel gravar a retirada na nuvem. Recarregue a pagina e tente de novo.',
+    conflict: false,
+    updatedAt: null,
+  };
 }
 
 /**

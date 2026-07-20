@@ -32,6 +32,7 @@ vi.mock('../../materiais/services/materiais.service', () => ({
 
 vi.mock('../services/atendimento.service', () => ({
   aquecerBaselineAtendimentoNuvem: vi.fn(() => Promise.resolve()),
+  aquecerSaldoOperacionalAtendimento: vi.fn(() => Promise.resolve()),
   listarDocumentosPendentesComMeta: mocks.listarDocumentosPendentesComMeta,
   listarHistoricoAtendimentosComMeta: mocks.listarHistoricoAtendimentosComMeta,
   montarExportacaoAtendimentosPacoteZip: vi.fn(() =>

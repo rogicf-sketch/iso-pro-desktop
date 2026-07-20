@@ -549,25 +549,80 @@ export async function sincronizarMateriaisNuvemParaArmazenamentoLocal(
 export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<ServiceResult<Material | null>> {
   const q = scan.trim();
   if (!q) return { success: true, data: null };
-  const base = await loadMateriaisBase();
   const qLower = q.toLowerCase();
-  for (const m of base) {
-    if (!m.ativo) continue;
-    if (m.codigo.trim().toLowerCase() === qLower) {
-      return { success: true, data: m };
-    }
-  }
   const digits = q.replace(/\D/g, '');
-  if (digits.length >= 8) {
-    for (const m of base) {
+
+  const matchLocal = (items: Material[]): Material | null => {
+    for (const m of items) {
       if (!m.ativo) continue;
-      const b = m.codigoBarras?.replace(/\D/g, '') ?? '';
-      if (b.length > 0 && b === digits) {
-        return { success: true, data: m };
+      if (m.codigo.trim().toLowerCase() === qLower) return m;
+    }
+    if (digits.length >= 8) {
+      for (const m of items) {
+        if (!m.ativo) continue;
+        const b = m.codigoBarras?.replace(/\D/g, '') ?? '';
+        if (b.length > 0 && b === digits) return m;
       }
     }
+    return null;
+  };
+
+  // 1) Cache em memoria (apos 1.a carga da lista) — instantaneo.
+  if (materiaisBaseCache) {
+    return { success: true, data: matchLocal(materiaisBaseCache) };
   }
-  return { success: true, data: null };
+
+  // 2) Copia local do cadastro — sem paginar a tabela inteira no bipe.
+  const localHit = matchLocal(readAll({ silenciarAvisoCorrupto: true }));
+  if (localHit) return { success: true, data: localHit };
+
+  // 3) Materiais na nuvem: 1–2 queries indexadas (codigo / codigo_barras), nao listRemoteMaterials.
+  if (shouldUseCloudMaterials() && hasSupabaseConfig()) {
+    try {
+      const supabase = getSupabase();
+      if (supabase) {
+        const tenantId = getActiveTenantId();
+        const selectCols = 'id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo';
+        const { data: byCode, error: errCode } = await supabase
+          .from('materiais')
+          .select(selectCols)
+          .eq('tenant_id', tenantId)
+          .ilike('codigo', q)
+          .limit(5);
+        if (errCode) throw new Error(errCode.message);
+        let rows = (byCode ?? []) as RemoteMaterialRow[];
+        if (!rows.length && digits.length >= 8) {
+          const { data: byBar, error: errBar } = await supabase
+            .from('materiais')
+            .select(selectCols)
+            .eq('tenant_id', tenantId)
+            .eq('codigo_barras', digits)
+            .limit(5);
+          if (errBar) throw new Error(errBar.message);
+          rows = (byBar ?? []) as RemoteMaterialRow[];
+        }
+        const mapped = rows.map(mapRemoteMaterial);
+        const hit = matchLocal(mapped);
+        if (hit) return { success: true, data: hit };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+      };
+    }
+  }
+
+  // 4) Ultimo recurso: cadastro completo (pode demorar) — so se nada acima achou.
+  try {
+    const base = await loadMateriaisBase();
+    return { success: true, data: matchLocal(base) };
+  } catch (error) {
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+    };
+  }
 }
 
 /** Codigo do material (trim + lower) -> peso unitario (kg) no cadastro. Usado em recebimentos para preencher peso quando a linha esta zerada. */

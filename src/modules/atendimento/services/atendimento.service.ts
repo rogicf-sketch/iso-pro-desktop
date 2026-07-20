@@ -7,7 +7,6 @@ import {
   readIsoProSnapshotSlicesForWrite,
   readIsoProSnapshotStats,
   SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
-  SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS,
   SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
   SNAPSHOT_OPERATIONAL_SLICE_KEYS,
@@ -428,10 +427,6 @@ async function mesclarAtendimentoDesktopComNuvem(): Promise<'ok' | 'skip' | 'fai
 
 async function readSnapshotPayload(): Promise<SnapshotPayload> {
   return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_OPERATIONAL_SLICE_KEYS);
-}
-
-async function readSnapshotPayloadLight(): Promise<SnapshotPayload> {
-  return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_LIGHT_SLICE_KEYS);
 }
 
 /** Recebimento sintetico equivalente ao agregado do servidor — buildSaldoMap soma `quantidade` no modo direto. */
@@ -920,47 +915,82 @@ export async function enrichMateriaisSaldoFromLocalMovement(
  * Validacao final de saldo acontece na gravacao; aqui o saldo orienta a UI do leitor/busca.
  */
 let saldoOperacionalCache: { map: Map<string, number>; at: number } | null = null;
+let saldoOperacionalInflight: Promise<Map<string, number>> | null = null;
 const SALDO_OPERACIONAL_CACHE_TTL_MS = 45_000;
+/** Apos TTL: serve stale de imediato e refresca em fundo (evita bipe de 40s). */
+const SALDO_OPERACIONAL_STALE_MAX_MS = 10 * 60_000;
 
 export function invalidateSaldoOperacionalCache(): void {
-  saldoOperacionalCache = null;
+  // Mantem o mapa em memoria para o proximo bipe (SWR); so marca como stale.
+  if (saldoOperacionalCache) {
+    saldoOperacionalCache = { map: saldoOperacionalCache.map, at: 0 };
+  }
+}
+
+async function carregarSaldoMapOperacionalNuvem(): Promise<Map<string, number>> {
+  const [recebidoPorCodigo, atendidoPorCodigo] = await Promise.all([
+    fetchQuantidadeRecebidaPorCodigo().catch(() => null),
+    fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
+  ]);
+  let saldoMap: Map<string, number>;
+  if (recebidoPorCodigo != null) {
+    // Agregados do servidor: so materiais + ajustes (~KB) em vez de recebimentos (~1 MB).
+    const parcial = await withRemoteReadTimeout(() =>
+      readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS),
+    );
+    saldoMap = buildSaldoMap({
+      ...parcial,
+      recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo),
+      documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+    } satisfies SnapshotPayload);
+  } else {
+    // RPC de recebido ausente: NUNCA baixar recebimentos/historico (caminho de 40–60s).
+    // Usa so materiais+ajustes; saldo pode ficar incompleto ate a RPC existir — UI do leitor
+    // ainda tem quantidadePendente do desenho.
+    const parcial = await withRemoteReadTimeout(() =>
+      readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS),
+    );
+    saldoMap = buildSaldoMap({
+      ...parcial,
+      documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+    } satisfies SnapshotPayload);
+  }
+  saldoOperacionalCache = { map: new Map(saldoMap), at: Date.now() };
+  return saldoMap;
 }
 
 /** Saldo recebimentos − já atendido (+ ajustes), igual ao mobile e à lista de Materiais após recálculo. */
 async function obterSaldoMapOperacional(): Promise<Map<string, number>> {
   if (shouldTryRemoteRead()) {
-    if (saldoOperacionalCache && Date.now() - saldoOperacionalCache.at <= SALDO_OPERACIONAL_CACHE_TTL_MS) {
+    const now = Date.now();
+    if (saldoOperacionalCache && now - saldoOperacionalCache.at <= SALDO_OPERACIONAL_CACHE_TTL_MS) {
       return new Map(saldoOperacionalCache.map);
     }
-    try {
-      const [recebidoPorCodigo, atendidoPorCodigo] = await Promise.all([
-        fetchQuantidadeRecebidaPorCodigo().catch(() => null),
-        fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
-      ]);
-      let saldoMap: Map<string, number>;
-      if (recebidoPorCodigo != null) {
-        // Agregados do servidor: so materiais + ajustes (~KB) em vez de recebimentos (~1 MB).
-        const parcial = await withRemoteReadTimeout(() =>
-          readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS),
-        );
-        saldoMap = buildSaldoMap({
-          ...parcial,
-          recebimentos: recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo),
-          documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
-        } satisfies SnapshotPayload);
-      } else {
-        const payloadLight = await withRemoteReadTimeout(() => readSnapshotPayloadLight());
-        saldoMap =
-          atendidoPorCodigo.size > 0
-            ? buildSaldoMap({
-                ...payloadLight,
-                documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
-              } satisfies SnapshotPayload)
-            : // Nunca cair no snapshot completo com documentos[] (timeout ~20s no boot).
-              buildSaldoMap(payloadLight);
+    // Stale-while-revalidate: bipe nao espera o refresh.
+    if (
+      saldoOperacionalCache &&
+      saldoOperacionalCache.map.size > 0 &&
+      now - saldoOperacionalCache.at <= SALDO_OPERACIONAL_STALE_MAX_MS
+    ) {
+      if (!saldoOperacionalInflight) {
+        saldoOperacionalInflight = carregarSaldoMapOperacionalNuvem()
+          .catch(() => saldoOperacionalCache!.map)
+          .finally(() => {
+            saldoOperacionalInflight = null;
+          });
       }
-      saldoOperacionalCache = { map: new Map(saldoMap), at: Date.now() };
-      return saldoMap;
+      return new Map(saldoOperacionalCache.map);
+    }
+    if (saldoOperacionalInflight) {
+      return new Map(await saldoOperacionalInflight);
+    }
+    saldoOperacionalInflight = carregarSaldoMapOperacionalNuvem()
+      .catch(() => new Map<string, number>())
+      .finally(() => {
+        saldoOperacionalInflight = null;
+      });
+    try {
+      return new Map(await saldoOperacionalInflight);
     } catch {
       return new Map();
     }
@@ -1497,6 +1527,16 @@ export async function buscarDocumentosPendentesNuvem(busca: string): Promise<Ate
     /* busca é auxiliar — sem erro visível */
   }
   return [];
+}
+
+/** Pre-aquece saldo do leitor ao abrir Atendimento (1.o bipe nao espera). */
+export async function aquecerSaldoOperacionalAtendimento(): Promise<void> {
+  if (!shouldTryRemoteRead()) return;
+  try {
+    await obterSaldoMapOperacional();
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
