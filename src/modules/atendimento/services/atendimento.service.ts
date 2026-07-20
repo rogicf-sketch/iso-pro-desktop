@@ -10,6 +10,7 @@ import {
   SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS,
   SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
   SNAPSHOT_OPERATIONAL_SLICE_KEYS,
+  isIsoProSnapshotConflictError,
 } from '../../../lib/isoProSnapshot';
 import {
   fetchQuantidadeAtendidaPorCodigo,
@@ -29,6 +30,7 @@ import {
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite } from '../../../lib/service-result';
+import { captureOperationalEvent } from '../../../lib/errorReporting';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { ServiceResult } from '../../../types/common.types';
 import {
@@ -927,6 +929,12 @@ export function invalidateSaldoOperacionalCache(): void {
   }
 }
 
+/** Snapshot sincrono do saldo em cache (sem rede). Usado no bipe para nao esperar 40s. */
+export function peekSaldoMapOperacionalCached(): Map<string, number> | null {
+  if (!saldoOperacionalCache || saldoOperacionalCache.map.size === 0) return null;
+  return new Map(saldoOperacionalCache.map);
+}
+
 async function carregarSaldoMapOperacionalNuvem(): Promise<Map<string, number>> {
   const [recebidoPorCodigo, atendidoPorCodigo] = await Promise.all([
     fetchQuantidadeRecebidaPorCodigo().catch(() => null),
@@ -1445,6 +1453,8 @@ function validateRequestedItems(items: Array<{ documentoItemId: string; quantida
 function mapDocumentosPendentesWire(
   docs: Awaited<ReturnType<typeof listDocumentosPendentesAtendimentoFromCloud>>['documentos'],
   saldoMap: Map<string, number>,
+  /** Se true e o codigo nao esta no mapa, usa quantidadePendente (bipe nao bloqueia por saldo frio). */
+  fallbackSaldoParaPendente = false,
 ): AtendimentoDocumento[] {
   return docs
     .map((doc) => {
@@ -1468,6 +1478,13 @@ function mapDocumentosPendentesWire(
             const quantidadeProjeto = Number(item.quantidade ?? 0) || 0;
             const quantidadeAtendida = Number(item.quantidadeAtendida ?? 0) || 0;
             const pendente = Math.max(0, quantidadeProjeto - quantidadeAtendida);
+            const saldoCached = saldoMap.get(key);
+            const saldoDisponivel =
+              saldoCached != null
+                ? saldoCached
+                : fallbackSaldoParaPendente
+                  ? pendente
+                  : 0;
             return {
               documentoItemId: String(item.id ?? ''),
               materialId: null as string | null,
@@ -1477,7 +1494,7 @@ function mapDocumentosPendentesWire(
               quantidadeProjeto,
               quantidadeAtendida,
               quantidadePendente: pendente,
-              saldoDisponivel: saldoMap.get(key) ?? 0,
+              saldoDisponivel,
               quantidadeNestaOperacao: 0,
             };
           })
@@ -1553,8 +1570,10 @@ export async function buscarDocumentosPendentesPorCodigoMaterialNuvem(
       listDocumentosPendentesPorCodigoMaterialFromCloud(codigo),
     );
     if (!cloud.error && cloud.documentos.length > 0) {
-      const saldoMap = await obterSaldoMapOperacional();
-      return mapDocumentosPendentesWire(cloud.documentos, saldoMap);
+      // Nunca espera saldo frio no bipe: usa cache ou pendente do desenho.
+      const saldoMap = peekSaldoMapOperacionalCached() ?? new Map<string, number>();
+      void aquecerSaldoOperacionalAtendimento();
+      return mapDocumentosPendentesWire(cloud.documentos, saldoMap, true);
     }
   } catch {
     /* busca é auxiliar — sem erro visível */
@@ -2058,7 +2077,11 @@ export async function registrarAtendimentosSessao(
   if (shouldTryRemoteRead()) {
     const emFalta = docIds.filter((id) => !documentos.some((d) => d.id === id));
     if (emFalta.length) {
-      const docsLidos = await Promise.all(emFalta.map((id) => carregarDocumentoStoredDaNuvem(id)));
+      const docsLidos = await Promise.all(
+        emFalta.map((id) =>
+          withRemoteReadTimeout(() => carregarDocumentoStoredDaNuvem(id), 5_000).catch(() => null),
+        ),
+      );
       for (const doc of docsLidos) {
         if (doc) documentos.push(doc);
       }
@@ -2210,21 +2233,71 @@ export async function registrarAtendimentosSessao(
       atendimentosLength: atendimentos.length,
     });
     if (bloqueioAtendimento) return { success: false, error: bloqueioAtendimento };
-    return executeWrite({
-      shouldWriteRemote: true,
-      writeRemote: () =>
-        writeSnapshotAtendimentoPatch({
-          documentos: documentosPatch,
-          atendimentos: novosAtendimentos,
-        }),
-      writeLocal: () => {
-        writeJson(documentosKeyAtendimento(), documentos);
-        if (materiaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
-        writeJson(atendimentosStorageKey(), atendimentos);
-      },
-      successData: novosAtendimentos,
-      fallbackMessage: 'Falha ao salvar sessao de atendimento no Supabase.',
+
+    // Igual mobile: se a nuvem demorar >4s, grava local e libera a UI; sync continua.
+    // Em conflito/erro rapido: nao confirma sucesso (evita lote so no PC).
+    const persistLocal = () => {
+      writeJson(documentosKeyAtendimento(), documentos);
+      if (materiaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
+      writeJson(atendimentosStorageKey(), atendimentos);
+    };
+
+    const cloudPromise = writeSnapshotAtendimentoPatch({
+      documentos: documentosPatch,
+      atendimentos: novosAtendimentos,
     });
+
+    try {
+      const raced = await Promise.race([
+        cloudPromise.then(() => 'ok' as const),
+        new Promise<'pending'>((resolve) => {
+          setTimeout(() => resolve('pending'), 4_000);
+        }),
+      ]);
+
+      if (raced === 'ok') {
+        persistLocal();
+        return {
+          success: true,
+          data: novosAtendimentos,
+          meta: { source: 'supabase' },
+        };
+      }
+
+      persistLocal();
+      void cloudPromise.catch((error: unknown) => {
+        const message = traduzirErroOperacionalIsoPro(
+          error instanceof Error ? error.message : 'Falha ao sincronizar atendimento na nuvem.',
+        );
+        captureOperationalEvent('atendimento_sync_background_fail', { message }, 'warning');
+      });
+
+      return {
+        success: true,
+        data: novosAtendimentos,
+        meta: {
+          source: 'local',
+          fallbackReason: 'Retirada gravada no PC; sincronizacao com a nuvem em curso.',
+        },
+      };
+    } catch (error) {
+      const message = traduzirErroOperacionalIsoPro(
+        error instanceof Error ? error.message : 'Falha ao salvar sessao de atendimento no Supabase.',
+      );
+      const snapshotConflict = isIsoProSnapshotConflictError(error);
+      if (snapshotConflict) {
+        captureOperationalEvent('snapshot_conflict', { message }, 'warning');
+      }
+      return {
+        success: false,
+        error: message,
+        meta: {
+          source: 'local',
+          fallbackReason: message,
+          snapshotConflict,
+        },
+      };
+    }
   }
   const blockedSalvar = whenBusinessWriteBlockedResult<Atendimento[]>();
   if (blockedSalvar) return blockedSalvar;
