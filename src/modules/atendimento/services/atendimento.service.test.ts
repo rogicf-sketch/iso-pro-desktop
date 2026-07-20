@@ -966,6 +966,107 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
     expect(pedidosHistorico).toHaveLength(0);
   });
 
+  it('confirmar rele a nuvem e nao usa cache local frio de quantidadeAtendida', async () => {
+    mockReadPayload.mockResolvedValue(snapshotAtendimentoBase());
+    mockReadForWrite.mockResolvedValue({
+      payload: {},
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    const snap = snapshotAtendimentoBase();
+    // Cache local “frio”: linha ja marcada como totalmente atendida (falso).
+    store[DOCUMENTOS_KEY] = JSON.stringify([
+      {
+        id: 'doc-atd',
+        numero: 'D1',
+        revisao: 'A',
+        descricao: 'Doc teste',
+        responsavel: 'Resp',
+        status: 'atendido',
+        itens: [
+          {
+            id: 'doc-atd-item-1',
+            codigoMaterial: 'M1',
+            descricaoMaterial: 'Material 1',
+            unidade: 'UN',
+            quantidadeProjeto: 10,
+            quantidadeAtendida: 10,
+          },
+        ],
+      },
+    ]);
+    store[MATERIAIS_KEY] = JSON.stringify(
+      (snap.materiais ?? []).map((m) => ({
+        id: m.id,
+        codigo: m.codigo,
+        descricao: m.descricao,
+        unidade: m.unidade,
+        saldoAtual: m.saldoAtual,
+      })),
+    );
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await registrarAtendimentosSessao({
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: '',
+      documentos: [{ documentoId: 'doc-atd', itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }] }],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toHaveLength(1);
+  });
+
+  it('confirmar falha com mensagem clara se a nuvem nao responder a tempo', async () => {
+    mockReadPayload.mockResolvedValue({ documentos: [], materiais: [], atendimentos: [] });
+    const snap = snapshotAtendimentoBase();
+    store[DOCUMENTOS_KEY] = JSON.stringify([
+      {
+        id: 'doc-atd',
+        numero: 'D1',
+        revisao: 'A',
+        descricao: 'Doc teste',
+        responsavel: 'Resp',
+        status: 'pendente',
+        itens: [
+          {
+            id: 'doc-atd-item-1',
+            codigoMaterial: 'M1',
+            descricaoMaterial: 'Material 1',
+            unidade: 'UN',
+            quantidadeProjeto: 10,
+            quantidadeAtendida: 0,
+          },
+        ],
+      },
+    ]);
+    store[MATERIAIS_KEY] = JSON.stringify(
+      (snap.materiais ?? []).map((m) => ({
+        id: m.id,
+        codigo: m.codigo,
+        descricao: m.descricao,
+        unidade: m.unidade,
+        saldoAtual: m.saldoAtual,
+      })),
+    );
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await registrarAtendimentosSessao({
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: '',
+      documentos: [{ documentoId: 'doc-atd', itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }] }],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/nuvem a tempo/i);
+  });
+
   it('nao registra atendimento quando nao ha quantidade pendente nas linhas do documento', async () => {
     mockReadPayload.mockResolvedValue(snapshotDocumentoSemSaldoPendente());
 

@@ -2071,20 +2071,34 @@ export async function registrarAtendimentosSessao(
 
   const docIds = gruposValidados.map((g) => g.documentoId);
   // Local-first (igual mobile): sem agregados/fatias pesadas no Confirmar.
-  // So busca na nuvem documentos que ainda nao estao no PC (1 RPC cada, sem retry duplo).
+  // Sempre relê os desenhos desta retirada na nuvem antes de validar pendente —
+  // senao o PC usa cache frio e pode acusar "maior que o pendente" a falso.
   const localState = loadLocalState();
   const documentos = [...localState.documentos];
   if (shouldTryRemoteRead()) {
-    const emFalta = docIds.filter((id) => !documentos.some((d) => d.id === id));
-    if (emFalta.length) {
-      const docsLidos = await Promise.all(
-        emFalta.map((id) =>
-          withRemoteReadTimeout(() => carregarDocumentoStoredDaNuvem(id), 5_000).catch(() => null),
-        ),
-      );
-      for (const doc of docsLidos) {
-        if (doc) documentos.push(doc);
+    const docsLidos = await Promise.all(
+      docIds.map((id) =>
+        withRemoteReadTimeout(() => carregarDocumentoStoredDaNuvem(id), 5_000).catch(() => null),
+      ),
+    );
+    const semNuvem: string[] = [];
+    for (let i = 0; i < docIds.length; i += 1) {
+      const id = docIds[i]!;
+      const remoto = docsLidos[i];
+      if (!remoto) {
+        semNuvem.push(id);
+        continue;
       }
+      const idx = documentos.findIndex((d) => d.id === id);
+      if (idx >= 0) documentos[idx] = remoto;
+      else documentos.push(remoto);
+    }
+    if (semNuvem.length) {
+      return {
+        success: false,
+        error:
+          'Nao foi possivel ler o desenho atualizado na nuvem a tempo. Aguarde 2–3 segundos e confirme de novo (evita validar quantidade com cache frio).',
+      };
     }
   }
   const materiaisLocais = localState.materiais.length > 0;
