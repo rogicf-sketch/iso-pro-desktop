@@ -14,6 +14,8 @@ export type ImageCompressOptions = {
   minQuality?: number;
   /** Fator multiplicativo do lado quando ainda excede maxBytes (ex.: 0,92). */
   scaleStep?: number;
+  /** Menor lado permitido ao reduzir escala para caber em maxBytes. */
+  minEdgePx?: number;
 };
 
 const DEFAULTS: Required<ImageCompressOptions> = {
@@ -22,6 +24,20 @@ const DEFAULTS: Required<ImageCompressOptions> = {
   initialQuality: 0.82,
   minQuality: 0.48,
   scaleStep: 0.9,
+  minEdgePx: 320,
+};
+
+/**
+ * Evidências de relatório (RF / RNC): comprime automático sem estragar qualidade.
+ * Foto grande (ex. 25 MB) entra e sai tipicamente ~200–320 KB JPEG, nítida para impressão.
+ */
+export const EVIDENCIA_FOTO_COMPRESS_OPTS: Required<ImageCompressOptions> = {
+  maxEdgePx: 1600,
+  maxBytes: 320 * 1024,
+  initialQuality: 0.8,
+  minQuality: 0.55,
+  scaleStep: 0.9,
+  minEdgePx: 480,
 };
 
 /** Calcula dimensões contidas com maior lado = maxEdge (exportado para testes). */
@@ -97,9 +113,9 @@ export async function compressImageFileToJpeg(
     blob = await tryEncode(tw, th, quality);
   }
 
-  while (blob && blob.size > opts.maxBytes && (tw > 320 || th > 320)) {
-    tw = Math.max(320, Math.round(tw * opts.scaleStep));
-    th = Math.max(320, Math.round(th * opts.scaleStep));
+  while (blob && blob.size > opts.maxBytes && (tw > opts.minEdgePx || th > opts.minEdgePx)) {
+    tw = Math.max(opts.minEdgePx, Math.round(tw * opts.scaleStep));
+    th = Math.max(opts.minEdgePx, Math.round(th * opts.scaleStep));
     quality = opts.initialQuality;
     blob = await tryEncode(tw, th, quality);
     while (blob && blob.size > opts.maxBytes && quality > opts.minQuality + 0.02) {

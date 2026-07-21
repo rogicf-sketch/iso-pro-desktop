@@ -7,7 +7,7 @@ import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { collectAllPages } from '../../../lib/collectAllPages';
 import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
-import { compressImageFileToJpeg } from '../../../lib/imageCompress';
+import { compressImageFileToJpeg, EVIDENCIA_FOTO_COMPRESS_OPTS } from '../../../lib/imageCompress';
 import { mediaBlobDelete } from '../../../lib/mediaBlobStore';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
@@ -363,12 +363,7 @@ export function RelatorioFotograficoPage() {
     try {
       for (const file of Array.from(files)) {
         if (next.length >= MAX_FOTOS) break;
-        const out = await compressImageFileToJpeg(file, {
-          maxEdgePx: 1440,
-          maxBytes: 420 * 1024,
-          initialQuality: 0.76,
-          minQuality: 0.42,
-        });
+        const out = await compressImageFileToJpeg(file, EVIDENCIA_FOTO_COMPRESS_OPTS);
         if (!out) {
           setMsg({ tone: 'info', text: 'Alguns ficheiros nao sao imagens suportadas (ex.: HEIC).' });
           continue;

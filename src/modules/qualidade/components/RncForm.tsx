@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/modalFormGuard';
 import { collectAllPages } from '../../../lib/collectAllPages';
 import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
-import { compressImageFileToJpeg } from '../../../lib/imageCompress';
+import { compressImageFileToJpeg, EVIDENCIA_FOTO_COMPRESS_OPTS } from '../../../lib/imageCompress';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -43,7 +43,6 @@ const CAMPOS_TIPO_OCORRENCIA = [
 ] as const;
 
 const MAX_FOTOS_POR_ITEM = 6;
-const MAX_BYTES_FOTO_ORIGINAL = 12 * 1024 * 1024;
 
 function textoBuscaRecebimentoInicial(iv: RncFormData): string {
   if (!iv.recebimentoId?.trim()) return '';
@@ -205,17 +204,8 @@ export function RncForm({
     const list = Array.from(files).filter((file) => file.type.startsWith('image/')).slice(0, restantes);
     const novas: string[] = [];
     for (const file of list) {
-      if (file.size > MAX_BYTES_FOTO_ORIGINAL) {
-        setError('Imagem muito grande (max. ~12 MB por arquivo antes da compressão).');
-        return;
-      }
       try {
-        const out = await compressImageFileToJpeg(file, {
-          maxEdgePx: 1440,
-          maxBytes: 420 * 1024,
-          initialQuality: 0.76,
-          minQuality: 0.42,
-        });
+        const out = await compressImageFileToJpeg(file, EVIDENCIA_FOTO_COMPRESS_OPTS);
         if (!out) {
           setError('Formato de imagem nao suportado (ex.: HEIC).');
           return;
