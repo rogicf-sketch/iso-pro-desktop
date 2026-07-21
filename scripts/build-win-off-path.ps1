@@ -16,9 +16,14 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy falhou com codigo $LASTEXITCODE" }
 Push-Location $BuildRoot
 try {
   npm install
+  if ($LASTEXITCODE -ne 0) { throw "npm install falhou com codigo $LASTEXITCODE" }
   npm run dist:win
+  if ($LASTEXITCODE -ne 0) { throw "npm run dist:win falhou com codigo $LASTEXITCODE" }
   $releaseSrc = Join-Path $BuildRoot 'release'
   $releaseDest = Join-Path $Src 'release'
+  if (-not (Test-Path -LiteralPath $releaseSrc)) {
+    throw "Pasta release ausente em $releaseSrc (build incompleto)."
+  }
   New-Item -ItemType Directory -Force -Path $releaseDest | Out-Null
   Copy-Item -Force (Join-Path $releaseSrc '*') $releaseDest
   Write-Host "Artefactos copiados para $releaseDest" -ForegroundColor Green
