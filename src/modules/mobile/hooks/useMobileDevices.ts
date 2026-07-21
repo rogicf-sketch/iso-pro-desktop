@@ -166,7 +166,7 @@ export function useMobileDevices() {
     } finally {
       setConfirmLoading(false);
     }
-  }, [pendingConfirm, invalidateMobileDevices, total, items.length, filters.page]);
+  }, [pendingConfirm, invalidateMobileDevices, total, items.length, filters.page, filters.status]);
 
   const updateFilters = useCallback((next: MobileDeviceFilter) => {
     setFilters(next);
