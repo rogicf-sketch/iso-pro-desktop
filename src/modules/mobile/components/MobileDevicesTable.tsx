@@ -94,7 +94,12 @@ export function MobileDevicesTable({ items, onAuthorize, onBlock, onUnblock, onR
                 ) : (
                   <ActionButton enabledLabel="Desbloquear" enabledTitle="Remover bloqueio e voltar para autorizado." onClick={() => onUnblock(item.id)} variant="ghost" />
                 )}
-                <ActionButton enabledLabel="Revogar" enabledTitle="Revogar o vinculo e exigir nova autorizacao." onClick={() => onRevoke(item.id)} variant="ghost" />
+                <ActionButton
+                  enabledLabel="Revogar"
+                  enabledTitle="Retira a autorizacao (fica pendente) e exige nova aprovacao no app."
+                  onClick={() => onRevoke(item.id)}
+                  variant="ghost"
+                />
               </div>
             ) : null,
         },

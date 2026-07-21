@@ -234,23 +234,6 @@ async function updateRemoteDeviceById(id: string, payload: { autorizado?: boolea
   }
 }
 
-async function deleteRemoteDeviceById(id: string) {
-  const supabase = getSupabase();
-  if (!supabase) {
-    throw new Error('Supabase nao configurado.');
-  }
-
-  const { error } = await supabase
-    .from('dispositivos_mobile')
-    .delete()
-    .eq('id', id)
-    .eq('tenant_id', getActiveTenantId());
-
-  if (error) {
-    throw new Error(error.message);
-  }
-}
-
 export async function listMobileDevices(filters: MobileDeviceFilter): Promise<ListResponse> {
   try {
     const remoteItems = hasSupabaseConfig() ? await listRemoteDevices() : sortDevices(readDevices());
@@ -334,22 +317,13 @@ export async function unblockMobileDevice(id: string) {
   await updateDeviceStatus(id, 'autorizado');
 }
 
+/**
+ * Revogar = retirar autorização (fica pendente), não apagar a linha.
+ * Assim o aparelho continua na lista para o admin voltar a autorizar;
+ * o mobile volta ao ecrã «Aguardando» sem precisar de reinstalar.
+ */
 export async function revokeMobileDevice(id: string) {
-  try {
-    if (hasSupabaseConfig()) {
-      await deleteRemoteDeviceById(id);
-      return;
-    }
-  } catch {
-    // fallback local logo abaixo
-  }
-
-  if (isBusinessLocalWriteBlocked()) {
-    return;
-  }
-
-  const items = readDevices().filter((item) => item.id !== id);
-  writeDevices(items);
+  await updateDeviceStatus(id, 'pendente');
 }
 
 /** Teste manual: leitura da tabela (mesma usada pelo app mobile). */

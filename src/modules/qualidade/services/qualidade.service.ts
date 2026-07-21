@@ -3,6 +3,7 @@ import { collectAllPages } from '../../../lib/collectAllPages';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
+import { STORAGE_REF_PREFIX } from '../../../lib/evidenciasStorage';
 import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
@@ -43,7 +44,8 @@ import {
   defaultRncPlanoLinhas,
   defaultRncTiposOcorrencia,
 } from '../types/qualidade.types';
-import { hydrateRncRegistro, persistRncRegistroFotosToIdb } from '../utils/rncFotoIdb';
+import { hydrateRncRegistro, persistRncRegistroFotosToIdb, persistRncRegistroFotosToStorage } from '../utils/rncFotoIdb';
+import { hydrateRirRegistroFromStorage, persistRirRegistroToStorage } from '../utils/rirPayloadStorage';
 import { rncLinhaTemConteudoOcorrencia } from '../utils/rncItensRecebimento';
 import { extrairDisciplinaProcedimento, resolverDisciplinaRir } from '../utils/rirDisciplina';
 
@@ -133,6 +135,7 @@ export function normalizeRirRegistro(item: RirRegistro): RirRegistro {
     status: item.status ?? 'aberto',
     acaoImediata: item.acaoImediata ?? '',
     observacoes: item.observacoes ?? '',
+    payloadStorageRef: String(item.payloadStorageRef ?? '').trim() || undefined,
   };
 }
 
@@ -210,7 +213,9 @@ function normalizeRncItemLinha(row: Partial<RncItemLinha> & { recebimentoItemId?
     descricaoDetalhada: String(row.descricaoDetalhada ?? '').trim(),
     fotosDataUrls: Array.isArray(row.fotosDataUrls)
       ? row.fotosDataUrls.filter(
-          (x) => typeof x === 'string' && (x.startsWith('data:') || x.startsWith(MEDIA_REF_PREFIX)),
+          (x) =>
+            typeof x === 'string' &&
+            (x.startsWith('data:') || x.startsWith(MEDIA_REF_PREFIX) || x.startsWith(STORAGE_REF_PREFIX)),
         )
       : [],
     fotosDeclaradasSemArquivo: !!row.fotosDeclaradasSemArquivo,
@@ -465,7 +470,8 @@ async function loadRir() {
     readRemote: readSnapshotRir,
     readLocal: () => readAll(rirStorageKey(), seedRir),
   });
-  return raw.map((item) => normalizeRirRegistro(item));
+  const normalized = raw.map((item) => normalizeRirRegistro(item));
+  return Promise.all(normalized.map((r) => hydrateRirRegistroFromStorage(r)));
 }
 
 async function loadRncFromLocalStorage(): Promise<RncRegistro[]> {
@@ -490,7 +496,9 @@ async function writeSnapshotQuality(nextData: { rirRegistros?: RirRegistro[]; rn
     const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(keys.length ? keys : ['rirRegistros']);
     const patch: Record<string, unknown> = { dataAtualizacao: new Date().toISOString() };
     if (nextData.rirRegistros) {
-      patch.rirRegistros = nextData.rirRegistros.map((item) => ({ ...item }));
+      patch.rirRegistros = await Promise.all(
+        nextData.rirRegistros.map(async (item) => persistRirRegistroToStorage(normalizeRirRegistro(item))),
+      );
     }
     if (nextData.rncRegistros) {
       patch.rncRegistros = nextData.rncRegistros.map((item) => ({ ...normalizeRncRegistro(item) }));
@@ -877,7 +885,10 @@ async function carregarRirRegistros(): Promise<{
 }> {
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotRir(),
+    loadRemote: async () => {
+      const rows = await readSnapshotRir();
+      return Promise.all(rows.map((r) => hydrateRirRegistroFromStorage(normalizeRirRegistro(r))));
+    },
     loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
     fallbackMessage: 'Falha ao consultar RIR no Supabase.',
   });
@@ -910,10 +921,13 @@ export async function listarRir(filtro: RirFiltro): Promise<ServiceResult<Pagina
         status: filtro.status,
       });
       if (page.source === 'tables' && !page.error) {
-        const items = page.registros.map((raw, index) =>
-          normalizeRirRegistro({
-            ...(raw as RirRegistro),
-            id: String((raw as RirRegistro).id ?? `rir-${index + 1}`),
+        const items = await Promise.all(
+          page.registros.map(async (raw, index) => {
+            const normalized = normalizeRirRegistro({
+              ...(raw as RirRegistro),
+              id: String((raw as RirRegistro).id ?? `rir-${index + 1}`),
+            });
+            return hydrateRirRegistroFromStorage(normalized);
           }),
         );
         return {
@@ -953,7 +967,9 @@ export async function obterRirPorId(rirId: string): Promise<ServiceResult<RirReg
   if (!id) return { success: true, data: null };
   const { items, meta } = await carregarRirRegistros();
   const found = items.find((r) => r.id === id);
-  return { success: true, data: found ? normalizeRirRegistro(found) : null, meta };
+  if (!found) return { success: true, data: null, meta };
+  const full = await hydrateRirRegistroFromStorage(normalizeRirRegistro(found));
+  return { success: true, data: full, meta };
 }
 
 /** Ordem de preferência para sugerir RIR no relatório fotográfico (menor = melhor). */
@@ -1574,7 +1590,7 @@ export async function salvarRnc(payload: RncFormData, currentId?: string): Promi
         const w = await executeWrite({
           shouldWriteRemote: true,
           writeRemote: async () => {
-            const rncForCloud = await Promise.all(items.map((r) => hydrateRncRegistro(r)));
+            const rncForCloud = await Promise.all(items.map((r) => persistRncRegistroFotosToStorage(r)));
             await writeSnapshotQuality({ rncRegistros: rncForCloud });
           },
           writeLocal: () => writeAll(rncStorageKey(), items),
@@ -1596,7 +1612,7 @@ export async function salvarRnc(payload: RncFormData, currentId?: string): Promi
       return executeWrite({
         shouldWriteRemote: true,
         writeRemote: async () => {
-          const rncForCloud = await Promise.all(items.map((r) => hydrateRncRegistro(r)));
+          const rncForCloud = await Promise.all(items.map((r) => persistRncRegistroFotosToStorage(r)));
           await writeSnapshotQuality({ rncRegistros: rncForCloud });
         },
         writeLocal: () => writeAll(rncStorageKey(), items),

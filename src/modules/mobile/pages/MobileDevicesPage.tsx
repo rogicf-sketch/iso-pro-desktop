@@ -59,7 +59,7 @@ export function MobileDevicesPage() {
             ? {
                 title: 'Revogar dispositivo',
                 message:
-                  'Confirma a revogacao deste dispositivo mobile? Sera necessaria nova autorizacao para voltar a usar o app neste aparelho.',
+                  'Confirma a revogacao? O aparelho fica pendente na lista e o app pede nova autorizacao — sem apagar o registo.',
               }
             : null;
 

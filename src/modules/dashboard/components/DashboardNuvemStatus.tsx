@@ -8,12 +8,15 @@ import {
 } from '../../../lib/escalaOutbox';
 import { getOperationalSloSummary } from '../../../lib/operationalSlo';
 import { getReleaseChannel } from '../../../lib/releaseChannel';
+import type { SupabaseQuotaUsage } from '../../../lib/supabaseQuotaUsage';
 import type { SnapshotSaudeNuvem } from '../../configuracoes/services/snapshotSaudeNuvem.service';
 import type { DashboardCloudPanel } from '../types/dashboard.types';
+import { DashboardRingGauge } from './DashboardRingGauge';
 
 type Props = {
   panel: DashboardCloudPanel;
   snapshotSaude: SnapshotSaudeNuvem | null;
+  quotaUsage: SupabaseQuotaUsage | null;
   lastRefreshLabel: string;
   refreshing?: boolean;
   onRefresh: () => void;
@@ -26,9 +29,14 @@ function snapshotTone(nivel: SnapshotSaudeNuvem['nivel'] | undefined): 'ok' | 'w
   return 'neutral';
 }
 
+function barWidth(pct: number): string {
+  return `${Math.min(100, Math.max(2, Math.round(pct)))}%`;
+}
+
 export function DashboardNuvemStatus({
   panel,
   snapshotSaude,
+  quotaUsage,
   lastRefreshLabel,
   refreshing,
   onRefresh,
@@ -80,6 +88,9 @@ export function DashboardNuvemStatus({
         : dualFailures.length > 0
           ? dualFailures.map((f) => f.domain).join(', ')
           : 'Tabelas de escala alinhadas';
+
+  const dbTone = quotaUsage?.databaseTone ?? 'neutral';
+  const stTone = quotaUsage?.storageTone ?? 'neutral';
 
   return (
     <section
@@ -162,6 +173,74 @@ export function DashboardNuvemStatus({
               {flushing ? 'A sincronizar…' : outboxPending > 0 || outboxFailed > 0 ? 'Sincronizar fila' : 'Limpar aviso'}
             </Button>
           ) : null}
+        </article>
+      </div>
+
+      <div className="dashboard-quota-row" aria-label="Cotas do plano Supabase">
+        <article className={`dashboard-quota-card dashboard-widget--${dbTone === 'warning' ? 'warn' : dbTone}`}>
+          <div className="dashboard-quota-card__main">
+            <span className="dashboard-widget__label">Base de dados · 8 GB</span>
+            <strong className="dashboard-widget__value dashboard-widget__value--mono">
+              {quotaUsage ? quotaUsage.databaseLabel : panel.status === 'ready' ? (refreshing ? '…' : '—') : '—'}
+            </strong>
+            <span className="dashboard-widget__meta">
+              Mesa Postgres (dados, tabelas, snapshot)
+              {quotaUsage ? ` · ${quotaUsage.databasePercent.toFixed(1)}%` : ''}
+            </span>
+            <div
+              className={`dashboard-widget__bar dashboard-widget__bar--${dbTone === 'warning' ? 'warn' : dbTone}`}
+              role="progressbar"
+              aria-valuenow={Math.round(quotaUsage?.databasePercent ?? 0)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label="Uso da base de dados"
+            >
+              <span style={{ width: quotaUsage ? barWidth(quotaUsage.databasePercent) : '4%' }} />
+            </div>
+          </div>
+          <DashboardRingGauge
+            percent={quotaUsage?.databasePercent ?? 0}
+            tone={dbTone}
+            size={72}
+            label={quotaUsage ? `${Math.round(quotaUsage.databasePercent)}%` : '—'}
+            sublabel="de 8 GB"
+          />
+        </article>
+
+        <article className={`dashboard-quota-card dashboard-widget--${stTone === 'warning' ? 'warn' : stTone}`}>
+          <div className="dashboard-quota-card__main">
+            <span className="dashboard-widget__label">Storage · 100 GB</span>
+            <strong className="dashboard-widget__value dashboard-widget__value--mono">
+              {quotaUsage ? quotaUsage.storageLabel : panel.status === 'ready' ? (refreshing ? '…' : '—') : '—'}
+            </strong>
+            <span className="dashboard-widget__meta">
+              Armário (fotos RF/RNC, RIR JSON, PDFs)
+              {quotaUsage
+                ? ` · evidências ${
+                    quotaUsage.evidenciasBytes >= 1024 * 1024
+                      ? `${(quotaUsage.evidenciasBytes / (1024 * 1024)).toFixed(1)} MB`
+                      : `${Math.round(quotaUsage.evidenciasBytes / 1024)} KB`
+                  } · ${quotaUsage.storagePercent.toFixed(1)}%`
+                : ''}
+            </span>
+            <div
+              className={`dashboard-widget__bar dashboard-widget__bar--${stTone === 'warning' ? 'warn' : stTone}`}
+              role="progressbar"
+              aria-valuenow={Math.round(quotaUsage?.storagePercent ?? 0)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label="Uso do Storage"
+            >
+              <span style={{ width: quotaUsage ? barWidth(quotaUsage.storagePercent) : '4%' }} />
+            </div>
+          </div>
+          <DashboardRingGauge
+            percent={quotaUsage?.storagePercent ?? 0}
+            tone={stTone}
+            size={72}
+            label={quotaUsage ? `${Math.round(quotaUsage.storagePercent)}%` : '—'}
+            sublabel="de 100 GB"
+          />
         </article>
       </div>
     </section>

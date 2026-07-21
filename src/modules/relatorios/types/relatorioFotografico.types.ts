@@ -1,12 +1,13 @@
 /**
  * Evidência fotográfica: JPEG comprimido.
- * Preferencialmente `imageRef` (IndexedDB) + `dataUrl` vazio no JSON local;
- * `dataUrl` preenchido após hidratar (UI / impressão / nuvem).
+ * Local: `imageRef` IndexedDB (`iso-media:`) + `dataUrl` vazio.
+ * Nuvem: `imageRef` Storage (`iso-storage:evidencias/...`) — binário no bucket de 100 GB.
+ * `dataUrl` só após hidratar (UI / impressão).
  */
 export type RelatorioFotograficoFoto = {
   id: string;
   dataUrl?: string;
-  /** Chave `iso-media:rf:...` no IndexedDB quando a foto não está inline. */
+  /** Chave `iso-media:rf:...` (IndexedDB) ou `iso-storage:evidencias/...` (Supabase Storage). */
   imageRef?: string;
   legenda: string;
   createdAt: string;

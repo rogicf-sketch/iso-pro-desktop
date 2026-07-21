@@ -152,7 +152,8 @@ export function useMobileDevices() {
           break;
       }
       setPendingConfirm(null);
-      if (kind === 'revoke') {
+      // Revogar deixa o aparelho como pendente (pode sumir do filtro «autorizado»).
+      if (kind === 'revoke' && filters.status === 'autorizado') {
         const nextPage = total > 1 && items.length === 1 && filters.page > 1 ? filters.page - 1 : filters.page;
         if (nextPage !== filters.page) {
           setFilters((prev) => ({ ...prev, page: nextPage }));

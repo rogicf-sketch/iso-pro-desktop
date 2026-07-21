@@ -1,4 +1,12 @@
 import { blobToDataUrl, dataUrlToBlob } from '../../../lib/mediaBlobCodec';
+import {
+  canUseEvidenciasStorage,
+  evidenciasPathRf,
+  isStorageRef,
+  resolveEvidenciaToBlob,
+  resolveEvidenciaToDataUrl,
+  uploadEvidenciaBlob,
+} from '../../../lib/evidenciasStorage';
 import { getScopedIsoProStorageKey, isStorageKeyForAmbienteAtivo } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { isMediaRefKey, mediaBlobDeleteByPrefix, mediaBlobGet, mediaBlobPut, MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
@@ -53,7 +61,6 @@ export function relatorioFotoBlobKey(reportId: string, fotoId: string): string {
 }
 
 export async function hydrateRelatorioFotograficoPayload(p: RelatorioFotograficoPayload): Promise<RelatorioFotograficoPayload> {
-  if (typeof indexedDB === 'undefined') return p;
   const rid = p.reportId.trim();
   if (!rid) return p;
   try {
@@ -64,7 +71,17 @@ export async function hydrateRelatorioFotograficoPayload(p: RelatorioFotografico
         fotos.push(f);
         continue;
       }
-      const ref = (f.imageRef && isMediaRefKey(f.imageRef) ? f.imageRef : relatorioFotoBlobKey(rid, f.id)) as string;
+      const pref = f.imageRef?.trim() ?? '';
+      if (isStorageRef(pref)) {
+        const dataUrl = await resolveEvidenciaToDataUrl(pref);
+        fotos.push({ ...f, dataUrl: dataUrl ?? '', imageRef: pref });
+        continue;
+      }
+      if (typeof indexedDB === 'undefined') {
+        fotos.push({ ...f, dataUrl: '', imageRef: pref || undefined });
+        continue;
+      }
+      const ref = (pref && isMediaRefKey(pref) ? pref : relatorioFotoBlobKey(rid, f.id)) as string;
       const blob = await mediaBlobGet(ref);
       if (!blob) {
         fotos.push({ ...f, dataUrl: '', imageRef: ref });
@@ -85,6 +102,10 @@ export async function persistRelatorioFotograficoFotosToIdb(p: RelatorioFotograf
   try {
     const fotos: RelatorioFotograficoFoto[] = [];
     for (const f of p.fotos) {
+      if (f.imageRef && isStorageRef(f.imageRef)) {
+        fotos.push({ ...f, dataUrl: '', imageRef: f.imageRef });
+        continue;
+      }
       const key =
         f.imageRef && isMediaRefKey(f.imageRef) ? f.imageRef : relatorioFotoBlobKey(rid, f.id);
       const du = f.dataUrl?.trim() ?? '';
@@ -103,6 +124,38 @@ export async function persistRelatorioFotograficoFotosToIdb(p: RelatorioFotograf
   } catch {
     return p;
   }
+}
+
+/**
+ * Envia fotos para o bucket Storage `evidencias` e devolve payload sem base64
+ * (só `imageRef` = `iso-storage:...`) para gravar no JSON da base (8 GB).
+ */
+export async function persistRelatorioFotograficoFotosToStorage(
+  p: RelatorioFotograficoPayload,
+): Promise<RelatorioFotograficoPayload> {
+  if (!canUseEvidenciasStorage()) {
+    return hydrateRelatorioFotograficoPayload(p);
+  }
+  const rid = p.reportId.trim();
+  if (!rid) return p;
+  const fotos: RelatorioFotograficoFoto[] = [];
+  for (const f of p.fotos) {
+    const existing = f.imageRef?.trim() ?? '';
+    if (isStorageRef(existing)) {
+      fotos.push({ ...f, dataUrl: '', imageRef: existing });
+      continue;
+    }
+    const source = f.dataUrl?.trim() || existing;
+    const blob = source ? await resolveEvidenciaToBlob(source) : null;
+    if (!blob) {
+      fotos.push({ ...f, dataUrl: '', imageRef: existing || undefined });
+      continue;
+    }
+    const path = evidenciasPathRf(rid, f.id);
+    const storageRef = await uploadEvidenciaBlob(path, blob);
+    fotos.push({ ...f, dataUrl: '', imageRef: storageRef });
+  }
+  return { ...p, fotos };
 }
 
 export function createEmptyRelatorioFotograficoPayload(): RelatorioFotograficoPayload {
@@ -177,7 +230,7 @@ export function normalizeRelatorioFotograficoPayload(raw: unknown): RelatorioFot
     if (!id) continue;
     const dataUrl = String(item.dataUrl ?? '').trim();
     const imageRef = String(item.imageRef ?? '').trim();
-    if (imageRef.startsWith(MEDIA_REF_PREFIX)) {
+    if (imageRef.startsWith(MEDIA_REF_PREFIX) || isStorageRef(imageRef)) {
       fotos.push({
         id,
         dataUrl: dataUrl.startsWith('data:image/') ? dataUrl : '',
@@ -588,10 +641,14 @@ export async function salvarRelatorioFotografico(
   try {
     await writePayloadToStorage(next);
     const stored = readPayloadFromKey(id) ?? next;
-    const forCloud = await hydrateRelatorioFotograficoPayload(stored);
+    const forCloud = await persistRelatorioFotograficoFotosToStorage(stored);
     const bundle = mergeReportIntoBundle(await readRemoteBundle(), forCloud);
     await writeRemoteBundle(bundle);
-    return { success: true, data: forCloud, meta: { source: 'supabase' } };
+    return {
+      success: true,
+      data: await hydrateRelatorioFotograficoPayload({ ...stored, fotos: forCloud.fotos }),
+      meta: { source: 'supabase' },
+    };
   } catch (error) {
     try {
       await writePayloadToStorage(next);

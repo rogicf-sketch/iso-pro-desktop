@@ -330,6 +330,30 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
     });
   }
 
+  try {
+    const { fetchSupabaseQuotaUsage } = await import('../../../lib/supabaseQuotaUsage');
+    const quota = await fetchSupabaseQuotaUsage();
+    if (quota) {
+      if (quota.databaseTone === 'danger' || quota.storageTone === 'danger') {
+        alerts.push({
+          severity: 'critical',
+          title: 'Cota Supabase quase esgotada',
+          detail: `Base ${quota.databaseLabel} (${quota.databasePercent.toFixed(0)}%) · Storage ${quota.storageLabel} (${quota.storagePercent.toFixed(0)}%).`,
+          route: '/configuracoes',
+        });
+      } else if (quota.databaseTone === 'warning' || quota.storageTone === 'warning') {
+        alerts.push({
+          severity: 'warning',
+          title: 'Cota Supabase em atenção',
+          detail: `Base ${quota.databasePercent.toFixed(0)}% de 8 GB · Storage ${quota.storagePercent.toFixed(0)}% de 100 GB.`,
+          route: '/configuracoes',
+        });
+      }
+    }
+  } catch {
+    /* painel continua sem quota */
+  }
+
   alerts.sort((a, b) => ALERT_SEVERITY_ORDER[a.severity] - ALERT_SEVERITY_ORDER[b.severity]);
   return alerts;
 }

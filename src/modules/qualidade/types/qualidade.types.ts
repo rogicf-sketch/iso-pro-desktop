@@ -72,6 +72,11 @@ export type RirRegistro = {
   status: RirStatus;
   acaoImediata: string;
   observacoes: string;
+  /**
+   * Quando preenchido (`iso-storage:evidencias/.../rir/{id}.json`), o corpo completo
+   * (itens, textos longos) está no Storage 100 GB; este objecto na base é só índice.
+   */
+  payloadStorageRef?: string;
 };
 
 export type RncLocalArmazenagem = '' | 'almoxarifado' | 'quarentena' | 'outro';
@@ -127,6 +132,7 @@ export type RncItemLinha = {
   tiposOcorrencia: RncTiposOcorrencia;
   descricaoDetalhada: string;
   /** Fotos em data URL (persistencia local / snapshot). */
+  /** data:image, `iso-media:` (IndexedDB) ou `iso-storage:evidencias/...` (bucket Storage 100 GB). */
   fotosDataUrls: string[];
   /** Quando a evidencia existe fora do sistema (pasta fisica, e-mail, etc.). */
   fotosDeclaradasSemArquivo: boolean;

@@ -94,6 +94,24 @@ vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
 }));
 
+vi.mock('../utils/rirPayloadStorage', () => ({
+  persistRirRegistroToStorage: async (reg: RirRegistro) => ({
+    ...reg,
+    payloadStorageRef: `iso-storage:evidencias/test/rir/${reg.id}.json`,
+    itensRir: [],
+  }),
+  hydrateRirRegistroFromStorage: async (reg: RirRegistro) => reg,
+  isRirPayloadOffloaded: (reg: RirRegistro) => Boolean(reg.payloadStorageRef),
+  slimRirForCloudIndex: (reg: RirRegistro, ref: string) => ({ ...reg, payloadStorageRef: ref, itensRir: [] }),
+}));
+
+vi.mock('../utils/rncFotoIdb', () => ({
+  persistRncRegistroFotosToIdb: async (reg: unknown) => reg,
+  persistRncRegistroFotosToStorage: async (reg: unknown) => reg,
+  hydrateRncRegistro: async (reg: unknown) => reg,
+  deleteRncFotosFromIdb: async () => undefined,
+}));
+
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../lib/isoProSnapshot')>();
   return {

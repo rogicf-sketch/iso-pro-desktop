@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { APP_VERSION } from '../../../appMeta';
 import { readEstadoAmbientes } from '../../../lib/isoProAmbiente';
 import { getStorageHealthSnapshot, type StorageHealthSnapshot } from '../../../lib/storageHealth';
+import { fetchSupabaseQuotaUsage, type SupabaseQuotaUsage } from '../../../lib/supabaseQuotaUsage';
 import { DashboardAlertas } from '../components/DashboardAlertas';
 import { DashboardCards } from '../components/DashboardCards';
 import { DashboardNuvemStatus } from '../components/DashboardNuvemStatus';
@@ -30,6 +31,7 @@ export function DashboardPage() {
   const [alerts, setAlerts] = useState<DashboardAlert[]>([]);
   const [cloudPanel, setCloudPanel] = useState<DashboardCloudPanel>(() => getDashboardCloudPanel());
   const [snapshotSaude, setSnapshotSaude] = useState<SnapshotSaudeNuvem | null>(null);
+  const [quotaUsage, setQuotaUsage] = useState<SupabaseQuotaUsage | null>(null);
   const [sistemaSnapshot, setSistemaSnapshot] = useState<StorageHealthSnapshot | null>(null);
   const [sistemaLoading, setSistemaLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -45,16 +47,18 @@ export function DashboardPage() {
     setRefreshing(true);
     setSistemaLoading(true);
     try {
-      const [ind, al, snap, saudeNuvem] = await Promise.all([
+      const [ind, al, snap, saudeNuvem, quota] = await Promise.all([
         getDashboardIndicators(),
         getDashboardAlerts(),
         getStorageHealthSnapshot(),
         avaliarSaudeSnapshotNuvem().then((r) => (r.success ? (r.data ?? null) : null)).catch(() => null),
+        fetchSupabaseQuotaUsage().catch(() => null),
       ]);
       setIndicators(ind);
       setAlerts(al);
       setSistemaSnapshot(snap);
       setSnapshotSaude(saudeNuvem);
+      setQuotaUsage(quota);
       setCloudPanel(getDashboardCloudPanel());
       setLastRefresh(new Date());
       void processarAlertaEstoqueEmailAutomatico();
@@ -161,6 +165,7 @@ export function DashboardPage() {
         lastRefreshLabel={formatRefreshLabel(lastRefresh)}
         onRefresh={() => void loadAll()}
         panel={cloudPanel}
+        quotaUsage={quotaUsage}
         refreshing={refreshing}
         snapshotSaude={snapshotSaude}
       />
