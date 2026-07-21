@@ -1,4 +1,4 @@
-import { blobToDataUrl, dataUrlToBlob } from '../../../lib/mediaBlobCodec';
+import { dataUrlToBlob } from '../../../lib/mediaBlobCodec';
 import {
   canUseEvidenciasStorage,
   evidenciasPathRnc,
