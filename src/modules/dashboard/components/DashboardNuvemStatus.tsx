@@ -91,6 +91,12 @@ export function DashboardNuvemStatus({
 
   const dbTone = quotaUsage?.databaseTone ?? 'neutral';
   const stTone = quotaUsage?.storageTone ?? 'neutral';
+  const dbIdle = !quotaUsage;
+  const stIdle = !quotaUsage;
+  const dbUsed =
+    quotaUsage?.databaseLabel ?? (panel.status === 'ready' ? (refreshing ? '…' : '—') : '—');
+  const stUsed =
+    quotaUsage?.storageLabel ?? (panel.status === 'ready' ? (refreshing ? '…' : '—') : '—');
 
   return (
     <section
@@ -177,69 +183,90 @@ export function DashboardNuvemStatus({
       </div>
 
       <div className="dashboard-quota-row" aria-label="Cotas do plano Supabase">
-        <article className={`dashboard-quota-card dashboard-widget--${dbTone === 'warning' ? 'warn' : dbTone}`}>
-          <div className="dashboard-quota-card__main">
-            <span className="dashboard-widget__label">Base de dados · 8 GB</span>
-            <strong className="dashboard-widget__value dashboard-widget__value--mono">
-              {quotaUsage ? quotaUsage.databaseLabel : panel.status === 'ready' ? (refreshing ? '…' : '—') : '—'}
-            </strong>
-            <span className="dashboard-widget__meta">
-              Mesa Postgres (dados, tabelas, snapshot)
-              {quotaUsage ? ` · ${quotaUsage.databasePercent.toFixed(1)}%` : ''}
-            </span>
+        <article className={`dashboard-quota dashboard-quota--${dbTone}${dbIdle ? ' dashboard-quota--idle' : ''}`}>
+          <div className="dashboard-quota__body">
+            <header className="dashboard-quota__head">
+              <span className="dashboard-quota__title">Base de dados</span>
+              <span className="dashboard-quota__cap">8 GB</span>
+            </header>
+            <p className="dashboard-quota__used">
+              <strong>{dbUsed}</strong>
+              <span className="dashboard-quota__of"> / 8 GB</span>
+            </p>
             <div
-              className={`dashboard-widget__bar dashboard-widget__bar--${dbTone === 'warning' ? 'warn' : dbTone}`}
+              className="dashboard-quota__track"
               role="progressbar"
               aria-valuenow={Math.round(quotaUsage?.databasePercent ?? 0)}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-label="Uso da base de dados"
             >
-              <span style={{ width: quotaUsage ? barWidth(quotaUsage.databasePercent) : '4%' }} />
+              <span
+                className="dashboard-quota__fill"
+                style={{ width: quotaUsage ? barWidth(quotaUsage.databasePercent) : '6%' }}
+              />
             </div>
+            {quotaUsage ? (
+              <span className="dashboard-quota__pct">{quotaUsage.databasePercent.toFixed(1)}% usado</span>
+            ) : (
+              <span className="dashboard-quota__pct dashboard-quota__pct--muted">
+                {refreshing ? 'A ler…' : 'Sem leitura'}
+              </span>
+            )}
           </div>
           <DashboardRingGauge
+            idle={dbIdle}
             percent={quotaUsage?.databasePercent ?? 0}
             tone={dbTone}
-            size={72}
-            label={quotaUsage ? `${Math.round(quotaUsage.databasePercent)}%` : '—'}
-            sublabel="de 8 GB"
+            size={84}
+            label={quotaUsage ? `${Math.round(quotaUsage.databasePercent)}%` : '···'}
+            sublabel="cota"
           />
         </article>
 
-        <article className={`dashboard-quota-card dashboard-widget--${stTone === 'warning' ? 'warn' : stTone}`}>
-          <div className="dashboard-quota-card__main">
-            <span className="dashboard-widget__label">Storage · 100 GB</span>
-            <strong className="dashboard-widget__value dashboard-widget__value--mono">
-              {quotaUsage ? quotaUsage.storageLabel : panel.status === 'ready' ? (refreshing ? '…' : '—') : '—'}
-            </strong>
-            <span className="dashboard-widget__meta">
-              Armário (fotos RF/RNC, RIR JSON, PDFs)
-              {quotaUsage
-                ? ` · evidências ${
-                    quotaUsage.evidenciasBytes >= 1024 * 1024
-                      ? `${(quotaUsage.evidenciasBytes / (1024 * 1024)).toFixed(1)} MB`
-                      : `${Math.round(quotaUsage.evidenciasBytes / 1024)} KB`
-                  } · ${quotaUsage.storagePercent.toFixed(1)}%`
-                : ''}
-            </span>
+        <article className={`dashboard-quota dashboard-quota--${stTone}${stIdle ? ' dashboard-quota--idle' : ''}`}>
+          <div className="dashboard-quota__body">
+            <header className="dashboard-quota__head">
+              <span className="dashboard-quota__title">Storage</span>
+              <span className="dashboard-quota__cap">100 GB</span>
+            </header>
+            <p className="dashboard-quota__used">
+              <strong>{stUsed}</strong>
+              <span className="dashboard-quota__of"> / 100 GB</span>
+            </p>
             <div
-              className={`dashboard-widget__bar dashboard-widget__bar--${stTone === 'warning' ? 'warn' : stTone}`}
+              className="dashboard-quota__track"
               role="progressbar"
               aria-valuenow={Math.round(quotaUsage?.storagePercent ?? 0)}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-label="Uso do Storage"
             >
-              <span style={{ width: quotaUsage ? barWidth(quotaUsage.storagePercent) : '4%' }} />
+              <span
+                className="dashboard-quota__fill"
+                style={{ width: quotaUsage ? barWidth(quotaUsage.storagePercent) : '6%' }}
+              />
             </div>
+            {quotaUsage ? (
+              <span className="dashboard-quota__pct">
+                {quotaUsage.evidenciasBytes >= 1024 * 1024
+                  ? `${(quotaUsage.evidenciasBytes / (1024 * 1024)).toFixed(1)} MB evidências`
+                  : `${Math.round(quotaUsage.evidenciasBytes / 1024)} KB evidências`}
+                {` · ${quotaUsage.storagePercent.toFixed(1)}%`}
+              </span>
+            ) : (
+              <span className="dashboard-quota__pct dashboard-quota__pct--muted">
+                {refreshing ? 'A ler…' : 'Sem leitura'}
+              </span>
+            )}
           </div>
           <DashboardRingGauge
+            idle={stIdle}
             percent={quotaUsage?.storagePercent ?? 0}
             tone={stTone}
-            size={72}
-            label={quotaUsage ? `${Math.round(quotaUsage.storagePercent)}%` : '—'}
-            sublabel="de 100 GB"
+            size={84}
+            label={quotaUsage ? `${Math.round(quotaUsage.storagePercent)}%` : '···'}
+            sublabel="cota"
           />
         </article>
       </div>
