@@ -1797,8 +1797,34 @@ body.theme-campo .dashboard-health-card__badge--danger {
 }
 
 .dashboard-widget__meta--danger {
-  color: #fca5a5;
+  color: #f87171;
   font-weight: 700;
+}
+
+.dashboard-materiais-flag {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+}
+
+.dashboard-materiais-flag--on {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.28);
+}
+
+.dashboard-materiais-flag--off {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(248, 113, 113, 0.55);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.22);
 }
 
 @media (max-width: 900px) {

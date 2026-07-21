@@ -122,7 +122,11 @@ export function DashboardNuvemStatus({
           <span className="dashboard-widget__label">Ligação</span>
           <strong className="dashboard-widget__value">{panel.title}</strong>
           <span
-            className={`dashboard-widget__meta${materiaisActivos ? '' : ' dashboard-widget__meta--danger'}`}
+            className={
+              materiaisActivos
+                ? 'dashboard-materiais-flag dashboard-materiais-flag--on'
+                : 'dashboard-materiais-flag dashboard-materiais-flag--off'
+            }
           >
             Materiais {materiaisActivos ? 'activos' : 'inactivos'}
           </span>
