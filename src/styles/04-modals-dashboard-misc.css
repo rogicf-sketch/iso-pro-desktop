@@ -1637,37 +1637,46 @@ body.theme-campo .dashboard-health-card__badge--danger {
 }
 
 .dashboard-quota {
-  --quota-accent: #7dd3fc;
+  --quota-accent: #38bdf8;
+  --quota-accent-end: #34d399;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 112px;
+  min-height: 118px;
   padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in srgb, var(--quota-accent) 28%, var(--surface-border));
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--quota-accent) 26%, var(--surface-border));
   background:
-    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--quota-accent) 18%, transparent), transparent 55%),
-    linear-gradient(165deg, color-mix(in srgb, #0f172a 55%, var(--surface-bg)), var(--surface-bg));
+    radial-gradient(90% 80% at 92% 18%, color-mix(in srgb, var(--quota-accent) 16%, transparent), transparent 52%),
+    linear-gradient(160deg, color-mix(in srgb, #0b1220 70%, var(--surface-bg)), var(--surface-bg));
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent),
-    0 8px 22px color-mix(in srgb, #000 22%, transparent);
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent),
+    0 10px 24px color-mix(in srgb, #000 24%, transparent);
 }
 
 .dashboard-quota--ok {
-  --quota-accent: #34d399;
+  --quota-accent: #22d3ee;
+  --quota-accent-end: #34d399;
 }
 
 .dashboard-quota--warning {
   --quota-accent: #fbbf24;
+  --quota-accent-end: #f59e0b;
 }
 
 .dashboard-quota--danger {
   --quota-accent: #f87171;
+  --quota-accent-end: #ef4444;
   box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent),
     0 0 0 1px color-mix(in srgb, #f87171 22%, transparent),
-    0 8px 22px color-mix(in srgb, #000 22%, transparent);
+    0 10px 24px color-mix(in srgb, #000 24%, transparent);
+}
+
+.dashboard-quota--neutral {
+  --quota-accent: #64748b;
+  --quota-accent-end: #94a3b8;
 }
 
 .dashboard-quota--idle {
@@ -1689,7 +1698,7 @@ body.theme-campo .dashboard-health-card__badge--danger {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .dashboard-quota__head {
@@ -1709,14 +1718,14 @@ body.theme-campo .dashboard-health-card__badge--danger {
 
 .dashboard-quota__cap {
   flex-shrink: 0;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
   font-size: 0.62rem;
   font-weight: 800;
   letter-spacing: 0.04em;
-  color: var(--quota-accent);
-  background: color-mix(in srgb, var(--quota-accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--quota-accent) 32%, transparent);
+  color: #e0f2fe;
+  background: color-mix(in srgb, var(--quota-accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--quota-accent) 42%, transparent);
 }
 
 .dashboard-quota__used {
@@ -1729,7 +1738,7 @@ body.theme-campo .dashboard-health-card__badge--danger {
 
 .dashboard-quota__used strong {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 1.35rem;
+  font-size: 1.4rem;
   font-weight: 800;
   letter-spacing: -0.03em;
   line-height: 1.1;
@@ -1743,9 +1752,9 @@ body.theme-campo .dashboard-health-card__badge--danger {
 }
 
 .dashboard-quota__track {
-  height: 6px;
+  height: 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--quota-accent) 12%, rgba(148, 163, 184, 0.18));
+  background: color-mix(in srgb, #94a3b8 16%, transparent);
   overflow: hidden;
 }
 
@@ -1753,33 +1762,37 @@ body.theme-campo .dashboard-health-card__badge--danger {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--quota-accent) 70%, #fff), var(--quota-accent));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--quota-accent) 45%, transparent);
+  background: linear-gradient(90deg, #38bdf8, var(--quota-accent-end));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--quota-accent) 40%, transparent);
   transition: width 0.65s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.dashboard-quota--live .dashboard-quota__fill {
+  background: linear-gradient(90deg, #38bdf8, var(--quota-accent-end, #34d399));
+}
+
 .dashboard-quota--idle .dashboard-quota__fill {
-  width: 18% !important;
-  opacity: 0.55;
+  width: 12% !important;
+  opacity: 0.5;
   animation: dashboard-quota-shimmer 1.8s ease-in-out infinite;
 }
 
 @keyframes dashboard-quota-shimmer {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 0.3;
     transform: translateX(0);
   }
   50% {
-    opacity: 0.85;
-    transform: translateX(12%);
+    opacity: 0.75;
+    transform: translateX(10%);
   }
 }
 
 .dashboard-quota__pct {
   font-size: 0.72rem;
   font-weight: 650;
-  color: color-mix(in srgb, var(--quota-accent) 55%, var(--muted));
+  color: color-mix(in srgb, var(--quota-accent) 45%, var(--muted));
 }
 
 .dashboard-quota__pct--muted {
@@ -1788,12 +1801,14 @@ body.theme-campo .dashboard-health-card__badge--danger {
 }
 
 .dashboard-quota--unavailable {
-  opacity: 0.92;
+  opacity: 0.94;
 }
 
 .dashboard-quota--unavailable .dashboard-quota__fill {
-  opacity: 0.25;
+  opacity: 0.2;
   animation: none;
+  background: color-mix(in srgb, #94a3b8 55%, transparent);
+  box-shadow: none;
 }
 
 .dashboard-widget__meta--danger {
@@ -2579,20 +2594,37 @@ body.theme-verde .dashboard-nuvem__metric {
   display: block;
 }
 
+.dashboard-ring__tick {
+  stroke: color-mix(in srgb, #94a3b8 42%, transparent);
+  stroke-width: 1.2;
+}
+
+.dashboard-ring--ok .dashboard-ring__tick {
+  stroke: color-mix(in srgb, #22d3ee 38%, transparent);
+}
+
+.dashboard-ring--warning .dashboard-ring__tick {
+  stroke: color-mix(in srgb, #fbbf24 40%, transparent);
+}
+
+.dashboard-ring--danger .dashboard-ring__tick {
+  stroke: color-mix(in srgb, #f87171 42%, transparent);
+}
+
 .dashboard-ring__track {
-  stroke: rgba(148, 163, 184, 0.22);
+  stroke: rgba(148, 163, 184, 0.2);
 }
 
 .dashboard-ring--ok .dashboard-ring__track {
-  stroke: color-mix(in srgb, #34d399 22%, rgba(148, 163, 184, 0.18));
+  stroke: color-mix(in srgb, #22d3ee 20%, rgba(148, 163, 184, 0.16));
 }
 
 .dashboard-ring--warning .dashboard-ring__track {
-  stroke: color-mix(in srgb, #fbbf24 22%, rgba(148, 163, 184, 0.18));
+  stroke: color-mix(in srgb, #fbbf24 22%, rgba(148, 163, 184, 0.16));
 }
 
 .dashboard-ring--danger .dashboard-ring__track {
-  stroke: color-mix(in srgb, #f87171 24%, rgba(148, 163, 184, 0.18));
+  stroke: color-mix(in srgb, #f87171 24%, rgba(148, 163, 184, 0.16));
 }
 
 .dashboard-ring__fill--animated {
@@ -2601,18 +2633,13 @@ body.theme-verde .dashboard-nuvem__metric {
 
 .dashboard-ring__spin {
   transform-origin: center;
-  animation: dashboard-ring-spin 2.8s linear infinite;
+  animation: dashboard-ring-spin 1.6s linear infinite;
 }
 
 @keyframes dashboard-ring-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-.dashboard-ring--idle .dashboard-ring__value {
-  letter-spacing: 0.12em;
-  color: #7dd3fc;
 }
 
 .dashboard-ring__center {
@@ -2623,6 +2650,16 @@ body.theme-verde .dashboard-nuvem__metric {
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  gap: 1px;
+}
+
+.dashboard-ring__kicker {
+  font-size: 0.58rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
 }
 
 .dashboard-ring__value {
@@ -2630,6 +2667,15 @@ body.theme-verde .dashboard-nuvem__metric {
   font-weight: 800;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
+}
+
+.dashboard-ring--empty .dashboard-ring__value {
+  color: var(--muted);
+}
+
+.dashboard-ring--waiting .dashboard-ring__value {
+  color: #7dd3fc;
+  letter-spacing: 0.08em;
 }
 
 .dashboard-ring__sub {

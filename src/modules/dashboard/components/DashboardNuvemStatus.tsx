@@ -9,6 +9,7 @@ import {
 import { getOperationalSloSummary } from '../../../lib/operationalSlo';
 import { getReleaseChannel } from '../../../lib/releaseChannel';
 import type { SupabaseQuotaUsage } from '../../../lib/supabaseQuotaUsage';
+import { formatQuotaBytes } from '../../../lib/supabaseQuotaUsage';
 import type { SnapshotSaudeNuvem } from '../../configuracoes/services/snapshotSaudeNuvem.service';
 import type { DashboardCloudPanel } from '../types/dashboard.types';
 import { DashboardRingGauge } from './DashboardRingGauge';
@@ -91,10 +92,19 @@ export function DashboardNuvemStatus({
 
   const dbTone = quotaUsage?.databaseTone ?? 'neutral';
   const stTone = quotaUsage?.storageTone ?? 'neutral';
-  const quotaWaiting = !quotaUsage && refreshing;
+  const quotaWaiting = !quotaUsage && Boolean(refreshing);
   const quotaUnavailable = !quotaUsage && !refreshing;
-  const dbUsed = quotaUsage?.databaseLabel ?? (quotaWaiting ? '…' : '—');
-  const stUsed = quotaUsage?.storageLabel ?? (quotaWaiting ? '…' : '—');
+  const hasQuota = Boolean(quotaUsage);
+  const dbUsed = hasQuota
+    ? formatQuotaBytes(quotaUsage!.databaseBytes)
+    : quotaWaiting
+      ? '…'
+      : '—';
+  const stUsed = hasQuota
+    ? formatQuotaBytes(quotaUsage!.storageBytes)
+    : quotaWaiting
+      ? '…'
+      : '—';
   const materiaisActivos = panel.materiaisNuvem;
 
   return (
@@ -189,7 +199,7 @@ export function DashboardNuvemStatus({
 
       <div className="dashboard-quota-row" aria-label="Cotas do plano Supabase">
         <article
-          className={`dashboard-quota dashboard-quota--${dbTone}${quotaWaiting ? ' dashboard-quota--idle' : ''}${quotaUnavailable ? ' dashboard-quota--unavailable' : ''}`}
+          className={`dashboard-quota dashboard-quota--${dbTone}${quotaWaiting ? ' dashboard-quota--idle' : ''}${quotaUnavailable ? ' dashboard-quota--unavailable' : ''}${hasQuota ? ' dashboard-quota--live' : ''}`}
         >
           <div className="dashboard-quota__body">
             <header className="dashboard-quota__head">
@@ -203,18 +213,18 @@ export function DashboardNuvemStatus({
             <div
               className="dashboard-quota__track"
               role="progressbar"
-              aria-valuenow={Math.round(quotaUsage?.databasePercent ?? 0)}
+              aria-valuenow={hasQuota ? Math.round(quotaUsage!.databasePercent) : 0}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-label="Uso da base de dados"
             >
               <span
                 className="dashboard-quota__fill"
-                style={{ width: quotaUsage ? barWidth(quotaUsage.databasePercent) : '4%' }}
+                style={{ width: hasQuota ? barWidth(quotaUsage!.databasePercent) : '3%' }}
               />
             </div>
-            {quotaUsage ? (
-              <span className="dashboard-quota__pct">{quotaUsage.databaseDetail}</span>
+            {hasQuota ? (
+              <span className="dashboard-quota__pct">{quotaUsage!.databaseDetail}</span>
             ) : (
               <span className="dashboard-quota__pct dashboard-quota__pct--muted">
                 {quotaWaiting ? 'A ler…' : 'Migração de cota em falta'}
@@ -222,17 +232,16 @@ export function DashboardNuvemStatus({
             )}
           </div>
           <DashboardRingGauge
-            idle={quotaWaiting}
+            hasData={hasQuota}
+            waiting={quotaWaiting}
             percent={quotaUsage?.databasePercent ?? 0}
             tone={dbTone}
-            size={84}
-            label={quotaUsage ? `${Math.round(quotaUsage.databasePercent)}%` : quotaWaiting ? '…' : '—'}
-            sublabel="cota"
+            size={96}
           />
         </article>
 
         <article
-          className={`dashboard-quota dashboard-quota--${stTone}${quotaWaiting ? ' dashboard-quota--idle' : ''}${quotaUnavailable ? ' dashboard-quota--unavailable' : ''}`}
+          className={`dashboard-quota dashboard-quota--${stTone}${quotaWaiting ? ' dashboard-quota--idle' : ''}${quotaUnavailable ? ' dashboard-quota--unavailable' : ''}${hasQuota ? ' dashboard-quota--live' : ''}`}
         >
           <div className="dashboard-quota__body">
             <header className="dashboard-quota__head">
@@ -246,18 +255,18 @@ export function DashboardNuvemStatus({
             <div
               className="dashboard-quota__track"
               role="progressbar"
-              aria-valuenow={Math.round(quotaUsage?.storagePercent ?? 0)}
+              aria-valuenow={hasQuota ? Math.round(quotaUsage!.storagePercent) : 0}
               aria-valuemin={0}
               aria-valuemax={100}
               aria-label="Uso do Storage"
             >
               <span
                 className="dashboard-quota__fill"
-                style={{ width: quotaUsage ? barWidth(quotaUsage.storagePercent) : '4%' }}
+                style={{ width: hasQuota ? barWidth(quotaUsage!.storagePercent) : '3%' }}
               />
             </div>
-            {quotaUsage ? (
-              <span className="dashboard-quota__pct">{quotaUsage.storageDetail}</span>
+            {hasQuota ? (
+              <span className="dashboard-quota__pct">{quotaUsage!.storageDetail}</span>
             ) : (
               <span className="dashboard-quota__pct dashboard-quota__pct--muted">
                 {quotaWaiting ? 'A ler…' : 'Migração de cota em falta'}
@@ -265,12 +274,11 @@ export function DashboardNuvemStatus({
             )}
           </div>
           <DashboardRingGauge
-            idle={quotaWaiting}
+            hasData={hasQuota}
+            waiting={quotaWaiting}
             percent={quotaUsage?.storagePercent ?? 0}
             tone={stTone}
-            size={84}
-            label={quotaUsage ? `${Math.round(quotaUsage.storagePercent)}%` : quotaWaiting ? '…' : '—'}
-            sublabel="cota"
+            size={96}
           />
         </article>
       </div>
