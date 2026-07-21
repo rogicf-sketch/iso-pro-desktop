@@ -24,16 +24,13 @@ Projecto prod: `huvktaxsosxrfpvdigxq` (`rogicf-iso-pro`)
 
 ```powershell
 cd "C:\Sistema I.S.O PRO GESTÃO DE MATERIAIS\iso-pro-desktop"
-npm run staging:link -- -ProjectRef "COLE_O_REF"
-# Preencher .env.staging (URL + anon key do projecto novo)
-# Smoke:
-#   copy .env.staging values → temporário ou:
-$env:VITE_SUPABASE_URL="https://REF.supabase.co"
-$env:VITE_SUPABASE_ANON_KEY="..."
-npm run ops:smoke-diario
+# Um comando: link + .env.staging + db push + smoke
+npm run staging:bootstrap -- -ProjectRef "COLE_O_REF" -AnonKey "COLE_A_ANON_KEY"
 ```
 
-Marcar: `docs/CHECKLIST-RESTAURO-BACKUP.md` secção Restauro + Fecho.
+Alternativa manual: `npm run staging:link -- -ProjectRef "COLE_O_REF"` + preencher `.env.staging` + `npm run ops:smoke-diario`.
+
+Marcar: `docs/CHECKLIST-RESTAURO-BACKUP.md` secção Restauro + Fecho. · Cutover: `docs/GUIA-JWT-CUTOVER.md`.
 
 ---
 

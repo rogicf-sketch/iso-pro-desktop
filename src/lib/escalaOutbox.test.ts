@@ -13,6 +13,7 @@ vi.mock('./errorReporting', () => ({
 
 afterEach(() => {
   rpc.mockReset();
+  vi.resetModules();
 });
 
 describe('escalaOutbox', () => {
@@ -46,5 +47,20 @@ describe('escalaOutbox', () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'PGRST202 could not find the function' } });
     const { flushEscalaOutboxBestEffort } = await import('./escalaOutbox');
     await expect(flushEscalaOutboxBestEffort()).resolves.toBeUndefined();
+  });
+
+  it('ensureEscalaOutboxPendingBestEffort chama ensure + flush', async () => {
+    rpc.mockResolvedValue({ data: { ok: true }, error: null });
+    const { ensureEscalaOutboxPendingBestEffort } = await import('./escalaOutbox');
+    await ensureEscalaOutboxPendingBestEffort('documentos', 'test');
+    expect(rpc).toHaveBeenCalledWith('iso_pro_escala_outbox_ensure_pending', {
+      p_tenant_id: '00000000-0000-0000-0000-000000000001',
+      p_domain: 'documentos',
+      p_reason: 'test',
+    });
+    expect(rpc).toHaveBeenCalledWith('iso_pro_flush_escala_outbox', {
+      p_tenant_id: '00000000-0000-0000-0000-000000000001',
+      p_max: 8,
+    });
   });
 });

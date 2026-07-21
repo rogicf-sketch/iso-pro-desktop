@@ -22,6 +22,36 @@ try {
   New-Item -ItemType Directory -Force -Path $releaseDest | Out-Null
   Copy-Item -Force (Join-Path $releaseSrc '*') $releaseDest
   Write-Host "Artefactos copiados para $releaseDest" -ForegroundColor Green
+
+  # Organiza: só a revisão corrente em installers\atuais; resto em anteriores
+  $pkg = Get-Content (Join-Path $BuildRoot 'package.json') -Raw | ConvertFrom-Json
+  $ver = [string]$pkg.version
+  $atuais = Join-Path $releaseDest 'installers\atuais'
+  $anteriores = Join-Path $releaseDest 'installers\anteriores'
+  New-Item -ItemType Directory -Force -Path $atuais, $anteriores | Out-Null
+
+  Get-ChildItem -LiteralPath $releaseDest -File | Where-Object {
+    $_.Name -like 'I.S.O PRO Setup *' -or $_.Name -like 'I.S.O PRO-*-portable.exe' -or $_.Name -like 'I.S.O PRO Setup *.blockmap'
+  } | ForEach-Object {
+    if ($_.Name -like "*$ver*" -and $_.Extension -ne '.blockmap') {
+      Copy-Item -LiteralPath $_.FullName -Destination $atuais -Force
+    }
+    Move-Item -LiteralPath $_.FullName -Destination $anteriores -Force
+  }
+
+  $dbg = Join-Path $releaseDest 'builder-debug.yml'
+  if (Test-Path -LiteralPath $dbg) { Move-Item -LiteralPath $dbg -Destination $atuais -Force }
+  $sumsRoot = Join-Path $releaseDest 'SHA256SUMS.txt'
+  if (Test-Path -LiteralPath $sumsRoot) { Remove-Item -LiteralPath $sumsRoot -Force }
+
+  Push-Location $atuais
+  $setupName = "I.S.O PRO Setup $ver.exe"
+  $portableName = "I.S.O PRO-$ver-portable.exe"
+  Get-FileHash -Algorithm SHA256 @($setupName, $portableName) |
+    ForEach-Object { "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)" } |
+    Set-Content -Encoding ascii SHA256SUMS.txt
+  Pop-Location
+  Write-Host "installers\atuais actualizado para v$ver" -ForegroundColor Green
 } finally {
   Pop-Location
 }

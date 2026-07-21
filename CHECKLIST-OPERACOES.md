@@ -31,8 +31,8 @@ Aplica-se ao **iso-pro-desktop** e ao **iso_pro_mobile** no mesmo projecto Supab
 | **Supabase Storage** (se usarem ficheiros): permissões alinhadas + caminho único por documento | [ ] | |
 | Plano do projecto com **backups automáticos** activos | [x] | 2026-07-11 — físicos diários OK; último `11 Jul 2026 07:35:06 UTC` |
 | **Teste de restauração** feito ao menos uma vez (registar data) | [x] | 2026-07-11 — smoke OK; projecto `iso-pro-staging-teste` **apagado** no mesmo dia |
-| Ambiente **staging** separado de produção (recomendado) | [ ] | Ver secção 2b + `docs/NIVEL-MUNDIAL-PROXIMOS.md` |
-| Retenção outbox / comandos (pruning) | [ ] | Migration `20260711160000` + `npm run ops:prune-retencao` |
+| Ambiente **staging** separado de produção (recomendado) | [ ] | Tooling pronto (`staging:bootstrap`); falta Restore-to-new-project + Ref — `docs/GUIA-RESTAURO-STAGING.md` |
+| Retenção outbox / comandos (pruning) | [x] | Migration `20260711160000`; `ops:prune-retencao` (service role) — 2026-07-21 |
 | Smoke diário automatizado | [x] | Secrets GH + workflow OK 2026-07-11 — run #3 verde (`0e98b99`); cron 07:00 UTC |
 | Alertas infra Supabase (CPU/disco/pool ≥80%) | [ ] | `docs/CHECKLIST-ALERTAS-INFRA-SUPABASE.md`
 
@@ -42,18 +42,14 @@ Hoje só existe produção (`huvktaxsosxrfpvdigxq`). Staging evita testar migrat
 
 | # | Passo | Feito? |
 |---|-------|--------|
-| 1 | Dashboard Supabase → **New project** (ex.: `iso-pro-staging`) | [ ] |
-| 2 | Anotar `project-ref`, URL e anon key (nunca misturar com prod no mesmo `.env` de build) | [ ] |
-| 3 | `npx supabase link --project-ref <STAGING_REF>` | [ ] |
-| 4 | `npx supabase db push` + `npx supabase config push` | [ ] |
-| 5 | Deploy edges necessárias (`iso_pro_link_auth_user`, pdf_*, etc.) | [ ] |
-| 6 | Seed mínimo: 1 tenant + admin piloto (ou export sanitizado de prod) | [ ] |
-| 7 | Builds TI usam `.env.staging` / `deploy-web` staging — **nunca** apontar APK de campo para staging | [ ] |
+| 1 | Dashboard → backups prod → **Restore to new project** (`iso-pro-staging`) — `docs/GUIA-RESTAURO-STAGING.md` | [ ] |
+| 2 | Anotar `project-ref` + anon key (nunca misturar com prod no mesmo `.env` de build) | [ ] |
+| 3–6 | `npm run staging:bootstrap -- -ProjectRef <REF> -AnonKey "<key>"` (link + `.env.staging` + db push + smoke) | [ ] |
+| 7 | Builds TI usam `.env.staging` — **nunca** apontar APK de campo para staging | [ ] |
 
-Modelo de variáveis: `.env.staging.example`  
-Link CLI (protege contra ligar produção por engano): `powershell -File scripts/link-staging.ps1 -ProjectRef <STAGING_REF>`
+Modelo: `.env.staging.example` · Cutover JWT: `docs/GUIA-JWT-CUTOVER.md`
 
-*Até existir staging: usar tenant piloto + backups antes de cada migration em prod.*
+*Até existir staging: usar tenant piloto + backups antes de cada migration arriscada em prod.*
 
 ---
 

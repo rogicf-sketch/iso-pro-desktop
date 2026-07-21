@@ -13,6 +13,7 @@ import {
   validateCurrentSession,
 } from '../modules/auth/services/auth.service';
 import { clearIsoProJwtSession } from '../lib/isoProJwtSession';
+import { startEscalaOutboxIdleFlush } from '../lib/escalaOutbox';
 import { aplicarTemaEfetivoNaSessao } from '../modules/configuracoes/services/configuracoes.service';
 import type { AuthUser } from '../modules/auth/types/auth.types';
 import { AuthContext, type AuthContextValue } from './authContext';
@@ -23,6 +24,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     aplicarTemaEfetivoNaSessao();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    return startEscalaOutboxIdleFlush({ intervalMs: 60_000, maxJobs: 5 });
   }, [user]);
 
   useEffect(() => {

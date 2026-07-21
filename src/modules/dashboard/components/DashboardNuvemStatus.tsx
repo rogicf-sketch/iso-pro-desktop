@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { clearDualWriteFailures, listDualWriteFailures } from '../../../lib/dualWriteEscala';
 import {
+  ensureEscalaOutboxPendingBestEffort,
   fetchEscalaOutboxStatus,
   flushEscalaOutboxBestEffort,
+  type EscalaOutboxDomain,
   type EscalaOutboxStatus,
 } from '../../../lib/escalaOutbox';
 import { getOperationalSloSummary } from '../../../lib/operationalSlo';
@@ -179,14 +181,38 @@ export function DashboardNuvemStatus({
               disabled={flushing}
               onClick={() => {
                 setFlushing(true);
-                void flushEscalaOutboxBestEffort(8)
-                  .then(() => fetchEscalaOutboxStatus())
-                  .then((status) => setOutbox(status))
-                  .finally(() => {
-                    if (dualFailures.length > 0) clearDualWriteFailures();
-                    setFlushing(false);
-                    onRefresh();
-                  });
+                const domains = new Set<EscalaOutboxDomain>();
+                for (const f of dualFailures) domains.add(f.domain);
+                for (const f of outbox?.failures ?? []) {
+                  const d = String(f.domain ?? '');
+                  if (
+                    d === 'documentos' ||
+                    d === 'recebimentos' ||
+                    d === 'inventarios' ||
+                    d === 'rir' ||
+                    d === 'rnc'
+                  ) {
+                    domains.add(d);
+                  }
+                }
+                void (async () => {
+                  const list =
+                    domains.size > 0
+                      ? [...domains]
+                      : outboxFailed > 0
+                        ? (['documentos', 'recebimentos', 'inventarios', 'rir', 'rnc'] as EscalaOutboxDomain[])
+                        : [];
+                  for (const domain of list) {
+                    await ensureEscalaOutboxPendingBestEffort(domain, 'dashboard_resync');
+                  }
+                  if (list.length === 0) await flushEscalaOutboxBestEffort(8);
+                  const status = await fetchEscalaOutboxStatus();
+                  setOutbox(status);
+                })().finally(() => {
+                  if (dualFailures.length > 0) clearDualWriteFailures();
+                  setFlushing(false);
+                  onRefresh();
+                });
               }}
               type="button"
               variant="ghost"

@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22"
   },
-  "version": "0.1.152",
+  "version": "0.1.153",
   "type": "module",
   "main": "dist-electron/main.mjs",
   "scripts": {
@@ -57,9 +57,12 @@
     "sentry:ativar": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/ativar-sentry-dsn.ps1",
     "sentry:smoke-test": "node scripts/sentry-smoke-test.mjs",
     "staging:link": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/link-staging.ps1",
+    "staging:bootstrap": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/bootstrap-staging.ps1",
     "ops:verificar-backup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verificar-backup-supabase.ps1 -OpenDashboard",
     "ops:smoke-diario": "node scripts/smoke-diario-ops.mjs",
     "ops:prune-retencao": "node scripts/prune-retencao-ops.mjs",
+    "jwt:cutover:guia": "powershell -NoProfile -Command \"Start-Process 'docs\\\\GUIA-JWT-CUTOVER.md'\"",
+
     "ops:activar-secrets-smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/activar-secrets-smoke-github.ps1",
     "ops:abrir-dashboards": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/abrir-dashboards-nivel-mundial.ps1",
     "clean": "node scripts/clean.mjs",

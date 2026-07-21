@@ -125,25 +125,30 @@ const hostRef = host.replace(/\.supabase\.co$/i, '');
 console.log(`host:   ${host}`);
 console.log(`anon:   len=${anon.length} role=${jwtRole ?? '?'} ref=${jwtRef ?? '?'} prefix=${anon.slice(0, 6)}…`);
 
-if (!anon.startsWith('eyJ')) {
+const isPublishable = anon.startsWith('sb_publishable_');
+const isLegacyJwt = anon.startsWith('eyJ');
+if (!isPublishable && !isLegacyJwt) {
   fail(
     'env_anon',
-    'VITE_SUPABASE_ANON_KEY deve ser JWT legacy (eyJ...), nao sb_publishable_/sb_secret_',
+    'VITE_SUPABASE_ANON_KEY deve ser JWT legacy (eyJ...) ou sb_publishable_...',
   );
   process.exit(1);
 }
-if (jwtRole && jwtRole !== 'anon') {
+if (isLegacyJwt && jwtRole && jwtRole !== 'anon') {
   fail('env_anon', `Esperado role=anon, veio role=${jwtRole}`);
   process.exit(1);
 }
-if (jwtRef && hostRef && jwtRef !== hostRef) {
+if (isLegacyJwt && jwtRef && hostRef && jwtRef !== hostRef) {
   fail(
     'env_mismatch',
     `URL host ref="${hostRef}" nao bate com JWT ref="${jwtRef}". Corrige VITE_SUPABASE_URL ou ANON_KEY.`,
   );
   process.exit(1);
 }
-pass('env_keys', `host/ref alinhados (${hostRef})`);
+pass(
+  'env_keys',
+  isPublishable ? `host=${hostRef} key=sb_publishable` : `host/ref alinhados (${hostRef})`,
+);
 
 const supabase = createClient(url, anon, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -218,13 +223,27 @@ try {
     else fail('outbox_status', error.message);
   } else {
     const row = data && typeof data === 'object' ? data : {};
+    const pendingJobs = Number(row.pending ?? 0) + Number(row.processing ?? 0);
     const failedJobs = Number(row.failed ?? 0);
+    const maxFailed = Number(process.env.ISO_PRO_SMOKE_OUTBOX_FAILED_MAX ?? 5);
+    const maxPending = Number(process.env.ISO_PRO_SMOKE_OUTBOX_PENDING_MAX ?? 50);
     pass(
       'outbox_status',
       `pending=${row.pending ?? 0} processing=${row.processing ?? 0} failed=${failedJobs}`,
     );
-    if (failedJobs > 20) {
-      warn('outbox_failed_high', `${failedJobs} jobs failed — ver Painel Escala`);
+    if (failedJobs > maxFailed) {
+      fail(
+        'outbox_failed_threshold',
+        `${failedJobs} failed > limite ${maxFailed} (ISO_PRO_SMOKE_OUTBOX_FAILED_MAX)`,
+      );
+    } else if (failedJobs > 0) {
+      warn('outbox_failed', `${failedJobs} jobs failed — ver Painel Escala / flush`);
+    }
+    if (pendingJobs > maxPending) {
+      fail(
+        'outbox_pending_threshold',
+        `${pendingJobs} pending+processing > limite ${maxPending} (ISO_PRO_SMOKE_OUTBOX_PENDING_MAX)`,
+      );
     }
   }
 }

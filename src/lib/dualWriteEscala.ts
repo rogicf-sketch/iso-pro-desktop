@@ -1,10 +1,11 @@
 import { captureOperationalEvent } from './errorReporting';
+import { ensureEscalaOutboxPendingBestEffort } from './escalaOutbox';
 
 /**
  * Dual-write snapshot → tabelas de escala: falhas deixam de ser silenciosas.
  * Contrato Estorno V2: tabelas de planejamento sao a fonte de verdade das
  * quantidades atendidas; snapshot/coluna documentos e projecao/cache compatível.
- * A falha fica registada para o painel.
+ * A falha fica registada para o painel e a outbox servidor é rearmada.
  */
 
 export type DualWriteDomain =
@@ -97,6 +98,7 @@ export async function runDualWriteBestEffort(
         return { ok: false, error: err, skippedMissingRpc: true };
       }
       recordDualWriteFailure(domain, err);
+      void ensureEscalaOutboxPendingBestEffort(domain, `dual_write:${err.slice(0, 200)}`);
       return { ok: false, error: err };
     }
     recordDualWriteSuccess(domain);
@@ -107,6 +109,7 @@ export async function runDualWriteBestEffort(
       return { ok: false, error: message, skippedMissingRpc: true };
     }
     recordDualWriteFailure(domain, message);
+    void ensureEscalaOutboxPendingBestEffort(domain, `dual_write:${message.slice(0, 200)}`);
     return { ok: false, error: message };
   }
 }

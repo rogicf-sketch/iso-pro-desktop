@@ -48,6 +48,46 @@ export async function flushEscalaOutboxBestEffort(maxJobs = 5): Promise<void> {
   }
 }
 
+/**
+ * Garante job pending (reabre failed) para um domínio e faz flush.
+ * Usado quando o dual-write directo falha — recuperação via outbox servidor.
+ */
+export async function ensureEscalaOutboxPendingBestEffort(
+  domain: EscalaOutboxDomain,
+  reason = 'dual_write_recovery',
+): Promise<void> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const { error } = await supabase.rpc('iso_pro_escala_outbox_ensure_pending', {
+      p_tenant_id: getActiveTenantId(),
+      p_domain: domain,
+      p_reason: reason,
+    });
+    if (error) {
+      if (isRpcMissingError(error.message)) {
+        /* migration ainda não aplicada — flush cobre pending do trigger */
+        await flushEscalaOutboxBestEffort(8);
+        return;
+      }
+      console.warn('[escala-outbox] ensure_pending:', error.message);
+      captureOperationalEvent(
+        'dual_write_failure',
+        { source: 'outbox_ensure_pending', domain, error: error.message },
+        'warning',
+      );
+    }
+    await flushEscalaOutboxBestEffort(8);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isRpcMissingError(message)) {
+      await flushEscalaOutboxBestEffort(8);
+      return;
+    }
+    console.warn('[escala-outbox] ensure_pending:', message);
+  }
+}
+
 export async function fetchEscalaOutboxStatus(): Promise<EscalaOutboxStatus | null> {
   try {
     const supabase = getSupabase();
@@ -72,4 +112,47 @@ export async function fetchEscalaOutboxStatus(): Promise<EscalaOutboxStatus | nu
   } catch {
     return null;
   }
+}
+
+let idleFlushStarted = false;
+
+/**
+ * Flush automático no boot + intervalo + online/visibility.
+ * Idempotente: só uma vez por sessão de página.
+ */
+export function startEscalaOutboxIdleFlush(opts?: {
+  intervalMs?: number;
+  maxJobs?: number;
+}): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  if (idleFlushStarted) return () => undefined;
+  idleFlushStarted = true;
+
+  const intervalMs = opts?.intervalMs ?? 60_000;
+  const maxJobs = opts?.maxJobs ?? 5;
+
+  const tick = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    void flushEscalaOutboxBestEffort(maxJobs);
+  };
+
+  tick();
+  const id = window.setInterval(tick, intervalMs);
+
+  function onOnline() {
+    tick();
+  }
+  function onVisibility() {
+    if (document.visibilityState === 'visible') tick();
+  }
+
+  window.addEventListener('online', onOnline);
+  document.addEventListener('visibilitychange', onVisibility);
+
+  return () => {
+    idleFlushStarted = false;
+    window.clearInterval(id);
+    window.removeEventListener('online', onOnline);
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
 }
