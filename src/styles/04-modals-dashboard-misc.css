@@ -1787,6 +1787,20 @@ body.theme-campo .dashboard-health-card__badge--danger {
   font-weight: 550;
 }
 
+.dashboard-quota--unavailable {
+  opacity: 0.92;
+}
+
+.dashboard-quota--unavailable .dashboard-quota__fill {
+  opacity: 0.25;
+  animation: none;
+}
+
+.dashboard-widget__meta--danger {
+  color: #fca5a5;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .dashboard-quota-row {
     grid-template-columns: 1fr;

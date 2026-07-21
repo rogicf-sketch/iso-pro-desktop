@@ -91,12 +91,11 @@ export function DashboardNuvemStatus({
 
   const dbTone = quotaUsage?.databaseTone ?? 'neutral';
   const stTone = quotaUsage?.storageTone ?? 'neutral';
-  const dbIdle = !quotaUsage;
-  const stIdle = !quotaUsage;
-  const dbUsed =
-    quotaUsage?.databaseLabel ?? (panel.status === 'ready' ? (refreshing ? '…' : '—') : '—');
-  const stUsed =
-    quotaUsage?.storageLabel ?? (panel.status === 'ready' ? (refreshing ? '…' : '—') : '—');
+  const quotaWaiting = !quotaUsage && refreshing;
+  const quotaUnavailable = !quotaUsage && !refreshing;
+  const dbUsed = quotaUsage?.databaseLabel ?? (quotaWaiting ? '…' : '—');
+  const stUsed = quotaUsage?.storageLabel ?? (quotaWaiting ? '…' : '—');
+  const materiaisActivos = panel.materiaisNuvem;
 
   return (
     <section
@@ -122,8 +121,10 @@ export function DashboardNuvemStatus({
         <article className={`dashboard-widget dashboard-widget--${liveTone}`}>
           <span className="dashboard-widget__label">Ligação</span>
           <strong className="dashboard-widget__value">{panel.title}</strong>
-          <span className="dashboard-widget__meta">
-            Materiais {panel.materiaisNuvem ? 'activos' : 'inactivos'}
+          <span
+            className={`dashboard-widget__meta${materiaisActivos ? '' : ' dashboard-widget__meta--danger'}`}
+          >
+            Materiais {materiaisActivos ? 'activos' : 'inactivos'}
           </span>
         </article>
 
@@ -183,7 +184,9 @@ export function DashboardNuvemStatus({
       </div>
 
       <div className="dashboard-quota-row" aria-label="Cotas do plano Supabase">
-        <article className={`dashboard-quota dashboard-quota--${dbTone}${dbIdle ? ' dashboard-quota--idle' : ''}`}>
+        <article
+          className={`dashboard-quota dashboard-quota--${dbTone}${quotaWaiting ? ' dashboard-quota--idle' : ''}${quotaUnavailable ? ' dashboard-quota--unavailable' : ''}`}
+        >
           <div className="dashboard-quota__body">
             <header className="dashboard-quota__head">
               <span className="dashboard-quota__title">Base de dados</span>
@@ -203,28 +206,30 @@ export function DashboardNuvemStatus({
             >
               <span
                 className="dashboard-quota__fill"
-                style={{ width: quotaUsage ? barWidth(quotaUsage.databasePercent) : '6%' }}
+                style={{ width: quotaUsage ? barWidth(quotaUsage.databasePercent) : '4%' }}
               />
             </div>
             {quotaUsage ? (
-              <span className="dashboard-quota__pct">{quotaUsage.databasePercent.toFixed(1)}% usado</span>
+              <span className="dashboard-quota__pct">{quotaUsage.databaseDetail}</span>
             ) : (
               <span className="dashboard-quota__pct dashboard-quota__pct--muted">
-                {refreshing ? 'A ler…' : 'Sem leitura'}
+                {quotaWaiting ? 'A ler…' : 'Migração de cota em falta'}
               </span>
             )}
           </div>
           <DashboardRingGauge
-            idle={dbIdle}
+            idle={quotaWaiting}
             percent={quotaUsage?.databasePercent ?? 0}
             tone={dbTone}
             size={84}
-            label={quotaUsage ? `${Math.round(quotaUsage.databasePercent)}%` : '···'}
+            label={quotaUsage ? `${Math.round(quotaUsage.databasePercent)}%` : quotaWaiting ? '…' : '—'}
             sublabel="cota"
           />
         </article>
 
-        <article className={`dashboard-quota dashboard-quota--${stTone}${stIdle ? ' dashboard-quota--idle' : ''}`}>
+        <article
+          className={`dashboard-quota dashboard-quota--${stTone}${quotaWaiting ? ' dashboard-quota--idle' : ''}${quotaUnavailable ? ' dashboard-quota--unavailable' : ''}`}
+        >
           <div className="dashboard-quota__body">
             <header className="dashboard-quota__head">
               <span className="dashboard-quota__title">Storage</span>
@@ -244,28 +249,23 @@ export function DashboardNuvemStatus({
             >
               <span
                 className="dashboard-quota__fill"
-                style={{ width: quotaUsage ? barWidth(quotaUsage.storagePercent) : '6%' }}
+                style={{ width: quotaUsage ? barWidth(quotaUsage.storagePercent) : '4%' }}
               />
             </div>
             {quotaUsage ? (
-              <span className="dashboard-quota__pct">
-                {quotaUsage.evidenciasBytes >= 1024 * 1024
-                  ? `${(quotaUsage.evidenciasBytes / (1024 * 1024)).toFixed(1)} MB evidências`
-                  : `${Math.round(quotaUsage.evidenciasBytes / 1024)} KB evidências`}
-                {` · ${quotaUsage.storagePercent.toFixed(1)}%`}
-              </span>
+              <span className="dashboard-quota__pct">{quotaUsage.storageDetail}</span>
             ) : (
               <span className="dashboard-quota__pct dashboard-quota__pct--muted">
-                {refreshing ? 'A ler…' : 'Sem leitura'}
+                {quotaWaiting ? 'A ler…' : 'Migração de cota em falta'}
               </span>
             )}
           </div>
           <DashboardRingGauge
-            idle={stIdle}
+            idle={quotaWaiting}
             percent={quotaUsage?.storagePercent ?? 0}
             tone={stTone}
             size={84}
-            label={quotaUsage ? `${Math.round(quotaUsage.storagePercent)}%` : '···'}
+            label={quotaUsage ? `${Math.round(quotaUsage.storagePercent)}%` : quotaWaiting ? '…' : '—'}
             sublabel="cota"
           />
         </article>

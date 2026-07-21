@@ -13,6 +13,8 @@ export type SupabaseQuotaUsage = {
   storageBytes: number;
   evidenciasBytes: number;
   pdfsBytes: number;
+  storageObjectCount: number;
+  evidenciasObjectCount: number;
   databaseLimitBytes: number;
   storageLimitBytes: number;
   databasePercent: number;
@@ -21,6 +23,10 @@ export type SupabaseQuotaUsage = {
   storageTone: QuotaUsageTone;
   databaseLabel: string;
   storageLabel: string;
+  /** Ex.: "40% utilizado · 4.8 GB livre" */
+  databaseDetail: string;
+  /** Ex.: "2.438 arquivos · 13% usado" */
+  storageDetail: string;
   updatedAt: string;
 };
 
@@ -32,7 +38,8 @@ function formatBytes(bytes: number): string {
   const mb = kb / 1024;
   if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
   const gb = mb / 1024;
-  return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
+  const label = `${gb.toFixed(1)} GB`;
+  return label.replace(/\.0 GB$/, ' GB');
 }
 
 function percentOf(used: number, limit: number): number {
@@ -55,6 +62,32 @@ export function formatQuotaBytes(bytes: number): string {
   return formatBytes(bytes);
 }
 
+export function formatQuotaFileCount(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return '0';
+  return new Intl.NumberFormat('pt-BR').format(Math.round(count));
+}
+
+export function buildDatabaseQuotaDetail(usedBytes: number, limitBytes: number, percent: number): string {
+  const free = Math.max(0, limitBytes - usedBytes);
+  const pct = percent.toFixed(percent >= 10 ? 0 : 1);
+  return `${pct}% utilizado · ${formatBytes(free)} livre`;
+}
+
+export function buildStorageQuotaDetail(
+  objectCount: number,
+  percent: number,
+  evidenciasBytes: number,
+): string {
+  const pct = percent.toFixed(percent >= 10 ? 0 : 1);
+  if (objectCount > 0) {
+    return `${formatQuotaFileCount(objectCount)} arquivos · ${pct}% usado`;
+  }
+  if (evidenciasBytes > 0) {
+    return `${formatBytes(evidenciasBytes)} evidências · ${pct}% usado`;
+  }
+  return `${pct}% usado`;
+}
+
 export async function fetchSupabaseQuotaUsage(): Promise<SupabaseQuotaUsage | null> {
   if (!hasSupabaseConfig()) return null;
   const supabase = getSupabase();
@@ -70,6 +103,8 @@ export async function fetchSupabaseQuotaUsage(): Promise<SupabaseQuotaUsage | nu
   const storageBytes = asFiniteNumber(row.storageBytes);
   const evidenciasBytes = asFiniteNumber(row.evidenciasBytes);
   const pdfsBytes = asFiniteNumber(row.pdfsBytes);
+  const storageObjectCount = asFiniteNumber(row.storageObjectCount);
+  const evidenciasObjectCount = asFiniteNumber(row.evidenciasObjectCount);
   const databaseLimitBytes = asFiniteNumber(row.databaseLimitBytes, QUOTA_DATABASE_LIMIT_BYTES) || QUOTA_DATABASE_LIMIT_BYTES;
   const storageLimitBytes = asFiniteNumber(row.storageLimitBytes, QUOTA_STORAGE_LIMIT_BYTES) || QUOTA_STORAGE_LIMIT_BYTES;
 
@@ -81,6 +116,8 @@ export async function fetchSupabaseQuotaUsage(): Promise<SupabaseQuotaUsage | nu
     storageBytes,
     evidenciasBytes,
     pdfsBytes,
+    storageObjectCount,
+    evidenciasObjectCount,
     databaseLimitBytes,
     storageLimitBytes,
     databasePercent,
@@ -89,6 +126,12 @@ export async function fetchSupabaseQuotaUsage(): Promise<SupabaseQuotaUsage | nu
     storageTone: toneForPercent(storagePercent),
     databaseLabel: `${formatBytes(databaseBytes)} / ${formatBytes(databaseLimitBytes)}`,
     storageLabel: `${formatBytes(storageBytes)} / ${formatBytes(storageLimitBytes)}`,
+    databaseDetail: buildDatabaseQuotaDetail(databaseBytes, databaseLimitBytes, databasePercent),
+    storageDetail: buildStorageQuotaDetail(
+      storageObjectCount || evidenciasObjectCount,
+      storagePercent,
+      evidenciasBytes,
+    ),
     updatedAt: new Date().toISOString(),
   };
 }
