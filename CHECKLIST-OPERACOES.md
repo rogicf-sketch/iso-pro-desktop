@@ -31,7 +31,7 @@ Aplica-se ao **iso-pro-desktop** e ao **iso_pro_mobile** no mesmo projecto Supab
 | **Supabase Storage** (se usarem ficheiros): permissões alinhadas + caminho único por documento | [ ] | |
 | Plano do projecto com **backups automáticos** activos | [x] | 2026-07-11 — físicos diários OK; último `11 Jul 2026 07:35:06 UTC` |
 | **Teste de restauração** feito ao menos uma vez (registar data) | [x] | 2026-07-11 — smoke OK; projecto `iso-pro-staging-teste` **apagado** no mesmo dia |
-| Ambiente **staging** separado de produção (recomendado) | [ ] | Tooling pronto (`staging:bootstrap`); falta Restore-to-new-project + Ref — `docs/GUIA-RESTAURO-STAGING.md` |
+| Ambiente **staging** separado de produção (recomendado) | [x] | 2026-07-21 `iso-pro-staging` ref `blyrzngunpxxgpdmoypo` — cutover JWT staging OK |
 | Retenção outbox / comandos (pruning) | [x] | Migration `20260711160000`; `ops:prune-retencao` (service role) — 2026-07-21 |
 | Smoke diário automatizado | [x] | Secrets GH + workflow OK 2026-07-11 — run #3 verde (`0e98b99`); cron 07:00 UTC |
 | Alertas infra Supabase (CPU/disco/pool ≥80%) | [ ] | `docs/CHECKLIST-ALERTAS-INFRA-SUPABASE.md`

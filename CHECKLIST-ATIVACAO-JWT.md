@@ -34,7 +34,7 @@ Aplica-se ao **iso-pro-desktop** (Web **0.1.75+**, Windows **0.1.75+**) e **iso_
 | P1.3 | Mobile login prefer JWT | [x] | `69f875a` |
 | P1.4 | `npm run jwt:auditar-link` — listar `rpc_only` vs `jwt_ready` | [x] | 2026-07-12: admin + ceci `jwt_ready`; restantes activos ainda podem ser `rpc_only` |
 | P1.5 | Ligar restantes activos (Fase 4) até `rpc_only = 0` | [x] | 2026-07-21: activos=2 jwt_ready=2 rpc_only=0 (`ops-security-baseline`) |
-| P1.6 | Só então: staging + revogar EXECUTE anon em `iso_pro_autenticar_usuario` | [ ] | Snippets + `docs/GUIA-JWT-CUTOVER.md` prontos; **bloquear prod até staging verde** |
+| P1.6 | Só então: staging + revogar EXECUTE anon em `iso_pro_autenticar_usuario` | [x] | 2026-07-21 staging `anon_execute=false`; **prod ainda com fallback** |
 | P1.7 | Mobile APK com JWT-prefer + Sentry `auth_path` (`client: mobile`) | [x] | 2026-07-12: APK 1.0.61 — login OK + 1 atendimento OK |
 | P1.8 | Acompanhar Sentry `iso.auth_path` (web + mobile) ≥ alguns dias | [ ] | paths esperados: `jwt` / `rpc_fallback` / `rpc_only` |
 
@@ -43,7 +43,7 @@ Aplica-se ao **iso-pro-desktop** (Web **0.1.75+**, Windows **0.1.75+**) e **iso_
 | # | Verificação | OK? | Data |
 |---|-------------|-----|------|
 | 0.1 | Backups Supabase activos + **teste de restauro** já feito (registar data) | [ ] | |
-| 0.2 | Ambiente **staging** ou tenant de teste separado (recomendado para 1.º piloto) | [ ] | Tooling `staging:bootstrap` pronto; falta Ref |
+| 0.2 | Ambiente **staging** ou tenant de teste separado (recomendado para 1.º piloto) | [x] | 2026-07-21 `blyrzngunpxxgpdmoypo` |
 | 0.3 | `npm run ci` / releases **0.1.75** (PC) e **1.0.43** (mobile) instalados em campo piloto | [ ] | |
 | 0.4 | Equipa alinhada: **nuvem = referência** (`CHECKLIST-GO-LIVE.md` preenchido) | [ ] | |
 

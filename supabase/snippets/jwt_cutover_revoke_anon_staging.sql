@@ -1,12 +1,7 @@
 -- JWT-only cutover — STAGING ONLY
--- Revoga EXECUTE anon em iso_pro_autenticar_usuario (login deixa de funcionar sem Auth).
--- Pre-requisitos: rpc_only=0, smoke OK, backup recente.
+-- Revoga EXECUTE anon em iso_pro_autenticar_usuario (todas as assinaturas).
 -- Rollback: snippets/jwt_cutover_rollback_anon.sql
 
-BEGIN;
-
-REVOKE EXECUTE ON FUNCTION public.iso_pro_autenticar_usuario(text, text, uuid) FROM anon;
--- Variantes com assinaturas alternativas (se existirem no projecto):
 DO $$
 DECLARE
   r record;
@@ -19,12 +14,10 @@ BEGIN
       AND p.proname = 'iso_pro_autenticar_usuario'
   LOOP
     EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM anon', r.sig);
+    RAISE NOTICE 'revoked anon on %', r.sig;
   END LOOP;
 END $$;
 
-COMMIT;
-
--- Verificacao
 SELECT
   p.proname,
   pg_get_function_identity_arguments(p.oid) AS args,

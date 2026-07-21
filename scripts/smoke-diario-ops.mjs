@@ -42,7 +42,9 @@ const { tenant: TENANT, source: TENANT_SOURCE } = resolveTenantId();
 
 function loadEnv() {
   const out = { ...process.env };
-  for (const name of ['.env', '.env.staging']) {
+  const preferStaging = process.env.ISO_PRO_SMOKE_STAGING === '1';
+  const files = preferStaging ? ['.env.staging', '.env'] : ['.env', '.env.staging'];
+  for (const name of files) {
     const envPath = path.join(root, name);
     if (!fs.existsSync(envPath)) continue;
     for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
@@ -52,6 +54,10 @@ function loadEnv() {
       if (i <= 0) continue;
       const k = t.slice(0, i).trim();
       const v = t.slice(i + 1).trim().replace(/^['"]|['"]$/g, '');
+      if (preferStaging && name === '.env.staging') {
+        out[k] = v;
+        continue;
+      }
       if (out[k] === undefined || out[k] === '') out[k] = v;
     }
   }
