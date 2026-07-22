@@ -33,6 +33,7 @@ import { executeWrite } from '../../../lib/service-result';
 import { captureOperationalEvent } from '../../../lib/errorReporting';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { ServiceResult } from '../../../types/common.types';
+import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import {
   buscarColaboradorPorIdLocal,
   registrarRetiranteExterno,
@@ -2271,6 +2272,26 @@ export async function registrarAtendimentosSessao(
 
       if (raced === 'ok') {
         persistLocal();
+        appendAuthAuditEvent({
+          type: 'atendimento_registrado',
+          actorLogin: payload.atendente.trim() || 'desconhecido',
+          detail: `Atendimento(s) ${novosAtendimentos.map((a) => a.numero).join(', ')} — ${novosAtendimentos.length} lote(s), docs ${[...documentosMutados.values()].map((d) => d.numero).join(', ')}.`,
+          entityType: 'atendimento',
+          entityId: novosAtendimentos[0]?.id,
+          after: {
+            lotes: novosAtendimentos.map((a) => ({
+              id: a.id,
+              numero: a.numero,
+              documentoNumero: a.documentoNumero,
+              itens: a.itens.map((it) => ({
+                codigo: it.codigoMaterial,
+                quantidade: it.quantidadeAtendida,
+                documento: it.documentoNumero,
+              })),
+            })),
+            origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
+          },
+        });
         return {
           success: true,
           data: novosAtendimentos,
@@ -2279,6 +2300,22 @@ export async function registrarAtendimentosSessao(
       }
 
       persistLocal();
+      appendAuthAuditEvent({
+        type: 'atendimento_registrado',
+        actorLogin: payload.atendente.trim() || 'desconhecido',
+        detail: `Atendimento(s) ${novosAtendimentos.map((a) => a.numero).join(', ')} gravado(s) no PC; sync nuvem em curso.`,
+        entityType: 'atendimento',
+        entityId: novosAtendimentos[0]?.id,
+        after: {
+          lotes: novosAtendimentos.map((a) => ({
+            id: a.id,
+            numero: a.numero,
+            documentoNumero: a.documentoNumero,
+          })),
+          origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
+          sync: 'pending',
+        },
+      });
       void cloudPromise.catch((error: unknown) => {
         const message = traduzirErroOperacionalIsoPro(
           error instanceof Error ? error.message : 'Falha ao sincronizar atendimento na nuvem.',

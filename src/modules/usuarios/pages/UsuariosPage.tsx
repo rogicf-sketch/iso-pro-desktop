@@ -8,6 +8,7 @@ import { Select } from '../../../components/ui/Select';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { UsuariosAuditTable } from '../components/UsuariosAuditTable';
+import { UsuariosAuditNuvemTable } from '../components/UsuariosAuditNuvemTable';
 import { UsuarioForm } from '../components/UsuarioForm';
 import { UsuariosFilters } from '../components/UsuariosFilters';
 import { UsuariosTable } from '../components/UsuariosTable';
@@ -27,6 +28,11 @@ export function UsuariosPage() {
     auditActorFilter,
     auditTypeFilter,
     auditPeriodFilter,
+    cloudAuditItems,
+    cloudAuditTotal,
+    cloudAuditLoading,
+    cloudAuditError,
+    refreshCloudAudit,
     isModalOpen,
     selected,
     formInitialValue,
@@ -147,6 +153,8 @@ export function UsuariosPage() {
             <option value="documento_cancelado">Documento cancelado</option>
             <option value="documento_excluido_definitivamente">Documento excluido definitivamente</option>
             <option value="documentos_excluidos_definitivamente">Documentos excluidos definitivamente (massa)</option>
+            <option value="recebimento_conferencia_finalizada">Conferencia de recebimento finalizada</option>
+            <option value="atendimento_registrado">Atendimento registrado</option>
           </Select>
           <Select label="Periodo" onChange={(event) => setAuditPeriodFilter(event.target.value as typeof auditPeriodFilter)} value={auditPeriodFilter}>
             <option value="todos">Todo o periodo</option>
@@ -157,6 +165,30 @@ export function UsuariosPage() {
         </div>
         <UsuariosAuditTable items={auditItems} />
       </div>
+
+      {hasSupabaseConfig() ? (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-header panel-header--toolbar">
+            <div>
+              <p className="panel-kicker">Governanca</p>
+              <h3>Auditoria na nuvem</h3>
+              <p className="panel-copy">
+                Quem fez o que, de que IP/dispositivo — exclusoes, conferencias e atendimentos. Visivel em qualquer PC
+                da empresa (nao fica so neste computador).
+              </p>
+            </div>
+            <div className="panel-toolbar">
+              <Button onClick={() => void refreshCloudAudit()}>Atualizar</Button>
+            </div>
+          </div>
+          <UsuariosAuditNuvemTable
+            error={cloudAuditError}
+            items={cloudAuditItems}
+            loading={cloudAuditLoading}
+            total={cloudAuditTotal}
+          />
+        </div>
+      ) : null}
 
       <Modal onClose={closeModal} open={isModalOpen && canEdit} title={selected ? 'Editar usuario' : 'Novo usuario'} wide>
         <UsuarioForm

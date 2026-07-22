@@ -18,12 +18,16 @@ const authAuditEventTypeSchema = z.enum([
   'documentos_excluidos_definitivamente',
   'recebimento_excluido_definitivamente',
   'recebimento_destravado_correcao',
+  'recebimento_conferencia_finalizada',
   'recebimentos_excluidos_definitivamente',
   'materiais_excluidos_definitivamente',
   'materiais_copia_local_desde_nuvem',
+  'atendimento_registrado',
   'rir_destravado_correcao',
   'planejamento_limpeza_codigos_persistida',
   'planejamento_limpeza_codigos_bloqueada',
+  'planejamento_substituicao_limpou_historico',
+  'planejamento_gravacao_bloqueada_remocao_nuvem',
   'fabrica_backup_pacote_descarregado',
   'fabrica_limpeza_local_executada',
   'purga_nuvem_operacional_executada',
@@ -39,6 +43,10 @@ export const authAuditEventSchema = z.object({
   targetLogin: z.string().optional(),
   detail: z.string(),
   createdAt: z.string(),
+  entityType: z.string().optional(),
+  entityId: z.string().optional(),
+  before: z.unknown().optional(),
+  after: z.unknown().optional(),
 });
 
 export const authAuditEventsListSchema = z.array(authAuditEventSchema);

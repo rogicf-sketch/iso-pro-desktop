@@ -3,6 +3,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listOperationalAudit } from '../../../lib/operationalAudit';
+import { hasSupabaseConfig } from '../../../lib/supabase';
 import { exportAuthAuditEventsCsv, listAuthAuditEvents, type AuthAuditEvent } from '../../auth/services/authAudit.service';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { buscarUsuarioPorId, listarModulosDisponiveis, listarPerfisAcesso, listarUsuarios, salvarUsuario, toggleUsuarioStatus } from '../services/usuarios.service';
@@ -65,6 +67,13 @@ export function useUsuarios() {
         auditItems: listAuthAuditEvents(),
       };
     },
+  });
+
+  const cloudAuditQuery = useQuery({
+    queryKey: ['usuarios', 'audit-nuvem', user?.login],
+    enabled: hasSupabaseConfig(),
+    queryFn: async () => listOperationalAudit({ limit: 100 }),
+    staleTime: 30_000,
   });
 
   const items = listQuery.data?.items ?? [];
@@ -197,6 +206,11 @@ export function useUsuarios() {
     auditActorFilter,
     auditTypeFilter,
     auditPeriodFilter,
+    cloudAuditItems: cloudAuditQuery.data?.items ?? [],
+    cloudAuditTotal: cloudAuditQuery.data?.total ?? 0,
+    cloudAuditLoading: cloudAuditQuery.isLoading,
+    cloudAuditError: cloudAuditQuery.data?.error || (cloudAuditQuery.isError ? 'Falha ao ler auditoria da nuvem.' : ''),
+    refreshCloudAudit: () => cloudAuditQuery.refetch(),
     isModalOpen,
     selected,
     formInitialValue,

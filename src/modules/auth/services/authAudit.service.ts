@@ -1,4 +1,5 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { recordOperationalAuditBestEffort } from '../../../lib/operationalAudit';
 import { parseAuthAuditEventsList } from '../schemas/authAuditLocal.zod';
 
 type AuthAuditEventType =
@@ -19,9 +20,11 @@ type AuthAuditEventType =
   | 'documentos_excluidos_definitivamente'
   | 'recebimento_excluido_definitivamente'
   | 'recebimento_destravado_correcao'
+  | 'recebimento_conferencia_finalizada'
   | 'recebimentos_excluidos_definitivamente'
   | 'materiais_excluidos_definitivamente'
   | 'materiais_copia_local_desde_nuvem'
+  | 'atendimento_registrado'
   | 'rir_destravado_correcao'
   | 'planejamento_limpeza_codigos_persistida'
   | 'planejamento_limpeza_codigos_bloqueada'
@@ -41,6 +44,10 @@ export type AuthAuditEvent = {
   targetLogin?: string;
   detail: string;
   createdAt: string;
+  entityType?: string;
+  entityId?: string;
+  before?: unknown;
+  after?: unknown;
 };
 
 const AUTH_AUDIT_STORAGE_KEY_BASE = 'iso-pro-desktop-auth-audit';
@@ -86,6 +93,18 @@ export function appendAuthAuditEvent(event: Omit<AuthAuditEvent, 'id' | 'created
 
   const nextItems = [nextItem, ...items].slice(0, MAX_AUDIT_ITEMS);
   localStorage.setItem(authAuditStorageKey(), JSON.stringify(nextItems));
+
+  // Espelho na nuvem (who/when/IP/dispositivo) — nunca bloqueia a UI.
+  recordOperationalAuditBestEffort({
+    action: event.type,
+    actorLogin: event.actorLogin,
+    detail: event.detail,
+    targetLogin: event.targetLogin,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    before: event.before,
+    after: event.after,
+  });
 }
 
 export function listAuthAuditEvents(limit = 20) {

@@ -717,6 +717,7 @@ function auditarDestravarRecebimentoParaCorrecao(
     type: 'recebimento_destravado_correcao',
     actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
     detail: `Recebimento ${rec.notaFiscal || '-'} / ${rec.romaneio || '-'} (${rec.fornecedor}) destravado para correcao (mantem conferencia; volta a aguardar conferencia para edicao).`,
+    entityType: 'recebimento',
   });
 }
 
@@ -732,6 +733,12 @@ function auditarExclusaoDefinitivaRecebimento(
     type: 'recebimento_excluido_definitivamente',
     actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
     detail: `Recebimento ${rec.notaFiscal || '-'} / ${rec.romaneio || '-'} (${rec.fornecedor}) excluido definitivamente.`,
+    entityType: 'recebimento',
+    before: {
+      notaFiscal: rec.notaFiscal,
+      romaneio: rec.romaneio,
+      fornecedor: rec.fornecedor,
+    },
   });
 }
 
@@ -1351,15 +1358,51 @@ export async function finalizarConferenciaRecebimento(payload: {
   if (hasSupabaseConfig()) {
     const bloqueioConferencia = bloqueioLocalRecebimentos(items.length);
     if (bloqueioConferencia) return { success: false, error: bloqueioConferencia };
-    return executeWrite({
+    const result = await executeWrite({
       shouldWriteRemote: true,
       writeRemote: () => writeSnapshotRecebimentos({ upsert: [updated] }),
       writeLocal: () => writeAll(items),
       successData: updated,
       fallbackMessage: 'Falha ao finalizar conferencia no Supabase.',
     });
+    if (result.success) {
+      appendAuthAuditEvent({
+        type: 'recebimento_conferencia_finalizada',
+        actorLogin: payload.conferente.trim() || 'desconhecido',
+        detail: `Conferencia finalizada NF ${updated.notaFiscal || '-'} / ${updated.romaneio || '-'} (${updated.fornecedor}) status=${updated.status}.`,
+        entityType: 'recebimento',
+        entityId: updated.id,
+        before: {
+          status: current.status,
+          itens: current.itens.map((i) => ({
+            id: i.id,
+            codigo: i.codigoMaterial,
+            qtdRecebida: i.quantidadeRecebida,
+            qtdConferida: i.quantidadeConferida,
+          })),
+        },
+        after: {
+          status: updated.status,
+          conferente: updated.conferente,
+          itens: updated.itens.map((i) => ({
+            id: i.id,
+            codigo: i.codigoMaterial,
+            qtdRecebida: i.quantidadeRecebida,
+            qtdConferida: i.quantidadeConferida,
+          })),
+        },
+      });
+    }
+    return result;
   }
   writeAll(items);
+  appendAuthAuditEvent({
+    type: 'recebimento_conferencia_finalizada',
+    actorLogin: payload.conferente.trim() || 'desconhecido',
+    detail: `Conferencia finalizada NF ${updated.notaFiscal || '-'} / ${updated.romaneio || '-'} (${updated.fornecedor}) status=${updated.status}.`,
+    entityType: 'recebimento',
+    entityId: updated.id,
+  });
   return { success: true, data: updated, meta: { source: 'local' } };
 }
 
