@@ -71,8 +71,8 @@ function atendimentoHistoricoQueryKey(userLogin: string | undefined) {
   return ['atendimento', 'historico', userLogin ?? ''] as const;
 }
 
-/** Lotes visiveis de cada vez na zona Historico (WMS: arquivo paginado no cliente). */
-export const ATENDIMENTO_HISTORICO_PAGE_SIZE = 80;
+/** Lotes por pagina na zona Historico (WMS: poucas linhas no DOM — setas Anterior/Proxima). */
+export const ATENDIMENTO_HISTORICO_PAGE_SIZE = 15;
 
 /**
  * Valida documento, cabecalho (atendente + retirante conforme o tipo) e itens com quantidades.

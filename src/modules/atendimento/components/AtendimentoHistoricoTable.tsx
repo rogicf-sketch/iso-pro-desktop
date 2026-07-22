@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DataTable } from '../../../components/tables/DataTable';
+import { Pagination } from '../../../components/tables/Pagination';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
 import { ActionButton } from '../../../components/ui/ActionButton';
 import { Button } from '../../../components/ui/Button';
@@ -8,6 +9,8 @@ import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { ATENDIMENTO_HISTORICO_PAGE_SIZE } from '../hooks/useAtendimento';
 import type { Atendimento } from '../types/atendimento.types';
 import { filtrarAtendimentosPorBusca } from '../utils/filtrarHistoricoAtendimentoBusca';
+
+type PeriodoFiltro = 'hoje' | '7d' | '30d' | 'todos';
 
 type Props = {
   items: Atendimento[];
@@ -20,6 +23,33 @@ type Props = {
   loading?: boolean;
 };
 
+function inicioDoDiaLocal(d: Date): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
+function filtrarPorPeriodo(items: Atendimento[], periodo: PeriodoFiltro): Atendimento[] {
+  if (periodo === 'todos') return items;
+  const agora = Date.now();
+  const hoje0 = inicioDoDiaLocal(new Date());
+  const corte =
+    periodo === 'hoje'
+      ? hoje0
+      : periodo === '7d'
+        ? agora - 7 * 24 * 60 * 60 * 1000
+        : agora - 30 * 24 * 60 * 60 * 1000;
+  return items.filter((a) => {
+    const t = new Date(a.dataAtendimento).getTime();
+    return Number.isFinite(t) && t >= corte;
+  });
+}
+
+const PERIODOS: Array<{ id: PeriodoFiltro; rotulo: string }> = [
+  { id: 'hoje', rotulo: 'Hoje' },
+  { id: '7d', rotulo: '7 dias' },
+  { id: '30d', rotulo: '30 dias' },
+  { id: 'todos', rotulo: 'Todos' },
+];
+
 export function AtendimentoHistoricoTable({
   items,
   onVerRecibo,
@@ -29,37 +59,71 @@ export function AtendimentoHistoricoTable({
   loading = false,
 }: Props) {
   const [busca, setBusca] = useState('');
-  const [limite, setLimite] = useState(ATENDIMENTO_HISTORICO_PAGE_SIZE);
+  const [periodo, setPeriodo] = useState<PeriodoFiltro>('7d');
+  const [page, setPage] = useState(1);
 
-  const filtrados = useMemo(() => filtrarAtendimentosPorBusca(items, busca), [items, busca]);
-  const visiveis = useMemo(() => filtrados.slice(0, limite), [filtrados, limite]);
-  const temMais = filtrados.length > visiveis.length;
+  const filtrados = useMemo(() => {
+    const porPeriodo = filtrarPorPeriodo(items, periodo);
+    return filtrarAtendimentosPorBusca(porPeriodo, busca);
+  }, [items, busca, periodo]);
+
+  const totalPages = Math.max(1, Math.ceil(filtrados.length / ATENDIMENTO_HISTORICO_PAGE_SIZE));
+  const pageSegura = Math.min(page, totalPages);
+
+  useEffect(() => {
+    setPage(1);
+  }, [busca, periodo, items.length]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  const visiveis = useMemo(() => {
+    const start = (pageSegura - 1) * ATENDIMENTO_HISTORICO_PAGE_SIZE;
+    return filtrados.slice(start, start + ATENDIMENTO_HISTORICO_PAGE_SIZE);
+  }, [filtrados, pageSegura]);
+
+  const de = filtrados.length === 0 ? 0 : (pageSegura - 1) * ATENDIMENTO_HISTORICO_PAGE_SIZE + 1;
+  const ate = Math.min(pageSegura * ATENDIMENTO_HISTORICO_PAGE_SIZE, filtrados.length);
 
   return (
     <div className="stack-grid">
+      <div className="panel-tabs" role="tablist" aria-label="Periodo do historico">
+        {PERIODOS.map((p) => (
+          <button
+            key={p.id}
+            aria-selected={periodo === p.id}
+            className={`panel-tab${periodo === p.id ? ' panel-tab--active' : ''}`}
+            onClick={() => setPeriodo(p.id)}
+            role="tab"
+            type="button"
+          >
+            {p.rotulo}
+          </button>
+        ))}
+      </div>
+
       <div className="form-grid">
         <Input
           autoComplete="off"
           id="historico-atendimento-busca"
           label="Pesquisar lotes"
-          onChange={(e) => {
-            setBusca(e.target.value);
-            setLimite(ATENDIMENTO_HISTORICO_PAGE_SIZE);
-          }}
-          placeholder="Numero do atendimento, documento, atendente, recebedor, material (codigo ou texto)…"
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Numero, documento, atendente, recebedor, material…"
           spellCheck={false}
           type="search"
           value={busca}
         />
       </div>
+
       {loading && items.length === 0 ? (
         <p className="panel-copy">A carregar arquivo de lotes da nuvem…</p>
       ) : null}
+
       {items.length > 0 ? (
         <p className="panel-copy">
-          Exibindo <strong>{visiveis.length}</strong> de <strong>{filtrados.length}</strong> lote(s)
-          {filtrados.length !== items.length ? ` (filtro sobre ${items.length} carregados)` : ''}
-          {busca.trim() ? ` — filtro: "${busca.trim()}"` : ''}.
+          Exibindo <strong>{de}</strong> a <strong>{ate}</strong> de <strong>{filtrados.length}</strong> lote(s)
+          {filtrados.length !== items.length ? ` · ${items.length} carregados no arquivo` : ''}.
         </p>
       ) : null}
 
@@ -134,20 +198,18 @@ export function AtendimentoHistoricoTable({
             ? 'A carregar…'
             : items.length === 0
               ? 'Nenhum registro no arquivo ainda.'
-              : 'Nenhum lote corresponde a esta busca. Tente outro termo ou limpe o campo.'
+              : 'Nenhum lote neste periodo/busca. Tente «Todos» ou limpe o filtro.'
         }
         items={visiveis}
       />
 
-      {temMais ? (
-        <div className="inline-actions">
-          <Button onClick={() => setLimite((n) => n + ATENDIMENTO_HISTORICO_PAGE_SIZE)} type="button" variant="ghost">
-            Mostrar mais {Math.min(ATENDIMENTO_HISTORICO_PAGE_SIZE, filtrados.length - visiveis.length)} lote(s)
-          </Button>
-          <span className="panel-copy">
-            Restam {filtrados.length - visiveis.length} no filtro actual
-          </span>
-        </div>
+      {filtrados.length > 0 ? (
+        <Pagination
+          onPageChange={setPage}
+          page={pageSegura}
+          pageSize={ATENDIMENTO_HISTORICO_PAGE_SIZE}
+          total={filtrados.length}
+        />
       ) : null}
     </div>
   );
