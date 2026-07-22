@@ -62,20 +62,32 @@ function celulaFoto(f: RelatorioFotograficoFoto, indiceGlobal: number): string {
   const { titulo, detalhe } = partirLegenda(f.legenda);
   const etiqueta = f.etiqueta.trim();
   const mostrarTexto = f.mostrarLegendaImpressao;
-  const tituloLinha = mostrarTexto && titulo
-    ? `Foto ${num} — ${escapeHtmlRelatorio(titulo)}`
-    : `Foto ${num}`;
-  const badge = etiqueta
-    ? `<span class="rf-foto-tag">${escapeHtmlRelatorio(etiqueta)}</span>`
+  const tituloNorm = titulo.trim();
+  const etiquetaNorm = etiqueta.trim();
+  // Evita "Foto 01 — BOBINA 01" + badge BOBINA 01 (duplicado).
+  const tituloIgualEtiqueta =
+    tituloNorm.length > 0 &&
+    etiquetaNorm.length > 0 &&
+    tituloNorm.toLowerCase() === etiquetaNorm.toLowerCase();
+
+  let tituloLinha = `Foto ${num}`;
+  if (mostrarTexto && tituloNorm && !tituloIgualEtiqueta) {
+    tituloLinha = `Foto ${num} — ${escapeHtmlRelatorio(tituloNorm)}`;
+  }
+
+  const badge = etiquetaNorm
+    ? `<span class="rf-foto-tag">${escapeHtmlRelatorio(etiquetaNorm)}</span>`
     : '';
-  const detalheHtml =
-    mostrarTexto && detalhe
-      ? `<p class="rf-foto-detalhe">${escapeHtmlRelatorio(detalhe).replace(/\n/g, '<br>')}</p>`
-      : mostrarTexto && titulo && !detalhe
-        ? ''
-        : mostrarTexto && !titulo && f.legenda.trim()
-          ? `<p class="rf-foto-detalhe">${escapeHtmlRelatorio(f.legenda).replace(/\n/g, '<br>')}</p>`
-          : '';
+
+  let detalheHtml = '';
+  if (mostrarTexto) {
+    if (detalhe) {
+      detalheHtml = `<p class="rf-foto-detalhe">${escapeHtmlRelatorio(detalhe).replace(/\n/g, '<br>')}</p>`;
+    } else if (tituloNorm && !tituloIgualEtiqueta && !etiquetaNorm) {
+      // só título curto já está na linha; sem detalhe extra
+      detalheHtml = '';
+    }
+  }
 
   return `
     <div class="rf-celula">
@@ -103,13 +115,26 @@ function htmlBlocoAssinatura(
        <div class="rf-ass-nome">${escapeHtmlRelatorio(nome)}</div>
        <div class="rf-ass-data">${escapeHtmlRelatorio(data || '—')}</div>`
     : `<div class="rf-ass-pendente">Pendente</div>
-       <div class="rf-ass-nome rf-ass-nome--vazio">—</div>
-       <div class="rf-ass-data">—</div>`;
+       <div class="rf-ass-linha" aria-hidden="true"></div>
+       <div class="rf-ass-data">Nome / data</div>`;
   return `
     <div class="rf-ass-box">
       <div class="rf-ass-papel">${escapeHtmlRelatorio(papel)}</div>
       ${visto}
     </div>`;
+}
+
+function htmlAssinaturasCompactas(p: RelatorioFotograficoPayload): string {
+  if (!p.incluirAssinaturasImpressao) return '';
+  return `
+  <div class="rf-assinaturas-inline" aria-label="Assinaturas">
+    <div class="rf-assin-h2">Assinaturas / visto digital</div>
+    <div class="rf-ass-grid">
+      ${htmlBlocoAssinatura('Recebimento / Almoxarifado', p.assinaturaRecebimento)}
+      ${htmlBlocoAssinatura('Inspetor de Qualidade', p.assinaturaQualidade)}
+      ${htmlBlocoAssinatura('Fiscalização / Cliente', p.assinaturaFiscalizacao)}
+    </div>
+  </div>`;
 }
 
 export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): string {
@@ -123,9 +148,10 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
   const tituloPrincipal = p.titulo.trim() || TITULO_PADRAO;
   const numeroDoc = p.numeroRelatorio.trim();
   const totalFotos = p.fotos.length;
-  const totalPaginasFotos = Math.max(1, Math.ceil(totalFotos / FOTOS_POR_PAGINA) || 1);
   const comAssinaturas = p.incluirAssinaturasImpressao;
-  const totalPaginasDoc = totalFotos === 0 ? 1 : totalPaginasFotos + (comAssinaturas ? 1 : 0);
+  const totalPaginasFotos = Math.max(1, Math.ceil(Math.max(totalFotos, 1) / FOTOS_POR_PAGINA));
+  // Assinaturas vão na última página de fotos (sem página em branco).
+  const totalPaginasDoc = totalFotos === 0 ? 1 : totalPaginasFotos;
 
   const logoCol =
     p.incluirLogoImpressao && logo
@@ -155,23 +181,24 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
 
   const capaQuadroRepeatHtml = `<div class="rf-quadro rf-quadro--capa rf-quadro--capa--repeat">${capaLinhaInterna}</div>`;
 
-  const blocoObra = `
-    <div class="rf-linhas-compactas">
-      <div class="rf-grid-obra-3">
-        ${linhaCampoOuTraco('Cliente', clienteImpressao)}
-        ${linhaCampoOuTraco('Projeto', projetoImpressao)}
-        ${linhaCampoOuTraco('Local', localImpressao)}
-      </div>
-    </div>`;
+  const blocoObraLinhas = [
+    linhaCampo('Cliente', clienteImpressao),
+    linhaCampo('Projeto', projetoImpressao),
+    linhaCampo('Local', localImpressao),
+  ].filter(Boolean);
+  const blocoObra =
+    blocoObraLinhas.length > 0
+      ? `<div class="rf-linhas-compactas"><div class="rf-grid-obra-3">${blocoObraLinhas.join('')}</div></div>`
+      : '';
 
   const blocoRecebimento = `
     <div class="rf-linhas-compactas">
       <div class="rf-grid-receb-nf-rom">
         ${linhaCampoOuTraco('Nota fiscal', p.notaFiscal)}
-        ${linhaCampoOuTraco('Romaneio', p.romaneio)}
+        ${linhaCampo('Romaneio', p.romaneio)}
       </div>
       ${linhaCampoOuTraco('Fornecedor', p.fornecedor)}
-      ${linhaCampoOuTraco('Fotos neste relatório', String(totalFotos))}
+      ${linhaCampo('Fotos neste relatório', totalFotos > 0 ? String(totalFotos) : '')}
     </div>`;
 
   const secExtra = [
@@ -188,10 +215,11 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       ? `<div class="rf-secao-extra">${secExtra}</div>`
       : '';
 
+  const temObra = blocoObra.trim() !== '';
   const cabecalhoCampos = `
     <div class="rf-dados-stack">
       ${blocoObra}
-      <div class="rf-dados-separador" role="presentation"></div>
+      ${temObra ? '<div class="rf-dados-separador" role="presentation"></div>' : ''}
       ${blocoRecebimento}
     </div>
     ${blocoExtra}`;
@@ -207,38 +235,41 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
   const cabecalhoPaginaRepetidoHtml = `${topbarGeradoHtml}${capaQuadroRepeatHtml}${dadosQuadroRepeatHtml}`;
 
   const grupos = chunk(p.fotos, FOTOS_POR_PAGINA);
+  const assinaturasHtml = htmlAssinaturasCompactas(p);
   const blocosPaginas = grupos
     .map((grupo, pagIdx) => {
       const celulas = grupo
         .map((f, i) => celulaFoto(f, pagIdx * FOTOS_POR_PAGINA + i))
         .join('');
-      const gridClass = grupo.length === FOTOS_POR_PAGINA ? 'rf-grid4' : 'rf-grid4 rf-grid4--parcial';
+      const isLast = pagIdx === grupos.length - 1;
+      const comAssinNestaPagina = isLast && comAssinaturas;
+      const gridClass = [
+        'rf-grid4',
+        grupo.length < FOTOS_POR_PAGINA ? 'rf-grid4--parcial' : '',
+        comAssinNestaPagina ? 'rf-grid4--com-assin' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
       const repetirCabecalho = pagIdx > 0 ? cabecalhoPaginaRepetidoHtml : '';
       const pageNo = pagIdx + 1;
       return `
-  <section class="rf-pagina-fotos" aria-label="Página ${pageNo} de fotos">
+  <section class="rf-pagina-fotos${comAssinNestaPagina ? ' rf-pagina-fotos--com-assin' : ''}" aria-label="Página ${pageNo}">
     ${repetirCabecalho}
     <div class="${gridClass}">${celulas}</div>
+    ${comAssinNestaPagina ? assinaturasHtml : ''}
     <div class="rf-page-foot">Página ${pageNo} de ${totalPaginasDoc} · ${escapeHtmlRelatorio(numeroDoc || 'RF')}</div>
   </section>`;
     })
     .join('');
 
-  const assinaturasHtml = comAssinaturas
-    ? `
-  <section class="rf-pagina-assinaturas" aria-label="Assinaturas">
-    <div class="rf-quadro rf-quadro--assin">
-      <h2 class="rf-assin-h2">Assinaturas / visto digital</h2>
-      <p class="rf-assin-lead">Confirmação do registro fotográfico do recebimento. Campos vazios ficam como pendentes.</p>
-      <div class="rf-ass-grid">
-        ${htmlBlocoAssinatura('Recebimento / Almoxarifado', p.assinaturaRecebimento)}
-        ${htmlBlocoAssinatura('Inspetor de Qualidade', p.assinaturaQualidade)}
-        ${htmlBlocoAssinatura('Fiscalização / Cliente', p.assinaturaFiscalizacao)}
-      </div>
-    </div>
-    <div class="rf-page-foot">Página ${totalPaginasDoc} de ${totalPaginasDoc} · ${escapeHtmlRelatorio(numeroDoc || 'RF')}</div>
+  const paginaSoAssinaturas =
+    p.fotos.length === 0 && comAssinaturas
+      ? `
+  <section class="rf-pagina-fotos rf-pagina-fotos--com-assin" aria-label="Assinaturas">
+    ${assinaturasHtml}
+    <div class="rf-page-foot">Página 1 de 1 · ${escapeHtmlRelatorio(numeroDoc || 'RF')}</div>
   </section>`
-    : '';
+      : '';
 
   const rodapeInst = `Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}.`;
 
@@ -398,26 +429,28 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
     }
     .rf-secao-extra .rf-campo-linha { grid-template-columns: 100px 1fr; }
     .rf-pagina-fotos {
-      page-break-inside: avoid;
       width: 100%;
     }
-    .rf-pagina-fotos + .rf-pagina-fotos,
-    .rf-pagina-assinaturas {
+    .rf-pagina-fotos + .rf-pagina-fotos {
       page-break-before: always;
     }
     .rf-grid4 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-auto-rows: minmax(78mm, 84mm);
-      gap: 8px;
+      grid-auto-rows: minmax(72mm, 80mm);
+      gap: 7px;
       width: 100%;
       align-items: stretch;
+    }
+    .rf-grid4--com-assin {
+      grid-auto-rows: minmax(58mm, 64mm);
+      gap: 6px;
     }
     .rf-grid4--parcial { align-content: start; }
     .rf-celula {
       border: 1px solid #cbd5e1;
       border-radius: 6px;
-      padding: 6px;
+      padding: 5px;
       background: #fff;
       display: grid;
       grid-template-rows: minmax(0, 1fr) auto;
@@ -448,7 +481,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       display: block;
     }
     .rf-foto-meta {
-      margin-top: 6px;
+      margin-top: 4px;
       min-width: 0;
     }
     .rf-foto-meta-top {
@@ -482,81 +515,90 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       overflow-wrap: anywhere;
     }
     .rf-foto-detalhe {
-      margin: 4px 0 0;
+      margin: 3px 0 0;
       font-size: 7.5pt;
       text-align: left;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       word-break: break-word;
       color: #475569;
-      line-height: 1.35;
-      max-height: 18mm;
+      line-height: 1.3;
+      max-height: 12mm;
       overflow: hidden;
     }
     .rf-page-foot {
-      margin-top: 8px;
+      margin-top: 6px;
       font-size: 7.5pt;
       color: #64748b;
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
-    .rf-quadro--assin { background: #fff; page-break-after: auto; }
+    .rf-assinaturas-inline {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      page-break-inside: avoid;
+    }
     .rf-assin-h2 {
-      margin: 0 0 4px;
-      font-size: 11pt;
+      margin: 0 0 8px;
+      font-size: 9pt;
+      font-weight: 800;
       color: #1e3a5f;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
       border: none;
       padding: 0;
-    }
-    .rf-assin-lead {
-      margin: 0 0 12px;
-      font-size: 8.5pt;
-      color: #64748b;
     }
     .rf-ass-grid {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
-      gap: 10px;
+      gap: 8px;
     }
     .rf-ass-box {
-      border: 1.5px dashed #94a3b8;
-      border-radius: 8px;
-      padding: 12px 10px;
-      min-height: 110px;
+      border: 1px dashed #94a3b8;
+      border-radius: 6px;
+      padding: 8px;
+      min-height: 62px;
       background: #f8fafc;
     }
     .rf-ass-papel {
-      font-size: 7.5pt;
+      font-size: 7pt;
       font-weight: 800;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
       color: #475569;
-      margin-bottom: 10px;
+      margin-bottom: 6px;
     }
     .rf-ass-visto {
-      font-size: 8pt;
+      font-size: 7.5pt;
       font-weight: 700;
       color: #1e3a5f;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }
     .rf-ass-pendente {
-      font-size: 8pt;
+      font-size: 7.5pt;
       font-weight: 700;
       color: #b54708;
       margin-bottom: 4px;
     }
     .rf-ass-nome {
-      font-size: 11pt;
+      font-size: 10pt;
       font-weight: 600;
       color: #0f172a;
       font-family: "Segoe Script", "Brush Script MT", cursive, "Segoe UI", sans-serif;
-      line-height: 1.3;
+      line-height: 1.2;
       overflow-wrap: anywhere;
     }
-    .rf-ass-nome--vazio { font-family: "Segoe UI", sans-serif; color: #94a3b8; }
+    .rf-ass-linha {
+      margin: 10px 0 4px;
+      border-bottom: 1px solid #94a3b8;
+      height: 14px;
+    }
     .rf-ass-data {
-      margin-top: 8px;
-      font-size: 8pt;
+      margin-top: 4px;
+      font-size: 7.5pt;
       color: #64748b;
       font-variant-numeric: tabular-nums;
     }
@@ -569,7 +611,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       font-size: 9pt;
     }
     .rf-rodape-doc {
-      margin-top: 10px;
+      margin-top: 8px;
       font-size: 7.5pt;
       color: #64748b;
     }
@@ -603,13 +645,11 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
 
     ${
       p.fotos.length === 0
-        ? '<div class="rf-empty">Nenhuma foto neste relatório.</div>'
+        ? `${paginaSoAssinaturas || '<div class="rf-empty">Nenhuma foto neste relatório.</div>'}`
         : blocosPaginas
     }
 
-    ${assinaturasHtml}
-
-    <p class="rf-rodape-doc">${rodapeInst} Layout: até 4 fotos por página · Assinaturas ${comAssinaturas ? 'ativas' : 'desligadas'}.</p>
+    <p class="rf-rodape-doc">${rodapeInst} Até 4 fotos por página${comAssinaturas ? ' · assinaturas na última página' : ''}.</p>
   </div>
   ${scriptBarraPreVisualizacaoImpressao()}
 </body>
