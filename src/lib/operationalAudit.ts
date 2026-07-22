@@ -82,7 +82,11 @@ async function resolvePublicIpBestEffort(): Promise<string | null> {
 
 /** Grava evento na nuvem sem lançar (fire-and-forget seguro). */
 export function recordOperationalAuditBestEffort(input: OperationalAuditInput): void {
-  if (!hasSupabaseConfig()) return;
+  try {
+    if (!hasSupabaseConfig()) return;
+  } catch {
+    return;
+  }
   const actor = input.actorLogin?.trim() || 'desconhecido';
   const action = input.action?.trim();
   if (!action) return;
