@@ -246,7 +246,7 @@ export async function listDocumentosPendentesPorCodigoMaterialFromCloud(
     const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : '';
     const authBlocked =
       Boolean(result.error) &&
-      /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID|permission|rls|policy|jwt/i.test(result.error);
+      /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID|permission|rls|policy|jwt/i.test(result.error ?? '');
     if (token || authBlocked) {
       await clearIsoProJwtSession();
       result = await queryOnce();
