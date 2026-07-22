@@ -28,6 +28,10 @@ export function AtendimentoPage() {
   const {
     documentos,
     historico,
+    historicoLoading,
+    historicoFetchError,
+    ensureHistoricoCarregado,
+    recarregarHistorico,
     colaboradores,
     selectedDocumento,
     selectedDocumentoId,
@@ -128,6 +132,8 @@ export function AtendimentoPage() {
   const [reciboHistoricoLoadingId, setReciboHistoricoLoadingId] = useState<string | null>(null);
   const [reciboSessaoPreviewLoading, setReciboSessaoPreviewLoading] = useState(false);
   const [reciboAviso, setReciboAviso] = useState<string | null>(null);
+  /** WMS: Operacao (bipe) vs Arquivo (historico) — default = bancada de obra. */
+  const [zona, setZona] = useState<'operacao' | 'historico'>('operacao');
 
   const avisoRetiranteLeitor = useMemo(() => {
     if (!atendente.trim()) return 'Informe o atendente antes de confirmar o lote final.';
@@ -346,7 +352,7 @@ export function AtendimentoPage() {
 
         <OperationalNotice>
           {cloudStatus === 'ready' && hasCloudConfig
-            ? 'Fonte atual: Supabase. Atendimento operando com historico e saldo integrados em nuvem.'
+            ? 'Fonte atual: Supabase. Zona Operacao leve; historico sob demanda na aba Arquivo.'
             : cloudStatus === 'partial'
               ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
               : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
@@ -369,6 +375,34 @@ export function AtendimentoPage() {
           </OperationalNotice>
         ) : null}
 
+        <div className="panel-tabs" role="tablist" aria-label="Zonas do atendimento">
+          <button
+            aria-selected={zona === 'operacao'}
+            className={`panel-tab${zona === 'operacao' ? ' panel-tab--active' : ''}`}
+            onClick={() => setZona('operacao')}
+            role="tab"
+            type="button"
+          >
+            Operacao
+          </button>
+          <button
+            aria-selected={zona === 'historico'}
+            className={`panel-tab${zona === 'historico' ? ' panel-tab--active' : ''}`}
+            onClick={() => {
+              setZona('historico');
+              ensureHistoricoCarregado();
+            }}
+            role="tab"
+            type="button"
+          >
+            Historico
+            {historico.length > 0 ? ` (${historico.length})` : ''}
+          </button>
+        </div>
+      </div>
+
+      {zona === 'operacao' ? (
+      <div className="panel">
         {canEdit ? (
           <div className="section-block">
             <label className="field" htmlFor="atendimento-leitor-codigo">
@@ -512,46 +546,49 @@ export function AtendimentoPage() {
           </OperationalNotice>
         )}
       </div>
-
-      {!canEdit ? <OperationalNotice>Seu perfil pode consultar atendimento, mas nao pode registrar baixas.</OperationalNotice> : null}
-
+      ) : (
       <div className="panel">
         <div className="panel-header panel-header--toolbar">
           <div>
-            <p className="panel-kicker">Historico</p>
-            <h2>Lotes registrados</h2>
+            <p className="panel-kicker">Arquivo</p>
+            <h2>Historico de lotes</h2>
           </div>
-          {canExportAtendimentos ? (
-            <div className="panel-toolbar">
-              <div className="panel-toolbar__group" role="group" aria-label="Exportar historico">
-                <span className="panel-toolbar__label">Planilha</span>
-                <div className="panel-toolbar__buttons">
+          <div className="panel-toolbar">
+            <div className="panel-toolbar__group" role="group" aria-label="Arquivo de lotes">
+              <div className="panel-toolbar__buttons">
+                <Button onClick={() => void recarregarHistorico()} type="button" variant="ghost">
+                  Atualizar
+                </Button>
+                {canExportAtendimentos ? (
                   <Button onClick={() => void exportarAtendimentosMateriaisExcel()} type="button" variant="ghost">
                     Exportar Excel (ZIP)
                   </Button>
-                </div>
+                ) : null}
               </div>
             </div>
-          ) : null}
+          </div>
         </div>
 
         <ModuleHelp>
           <OperationalNotice>
-            O ZIP inclui <strong>atendimentos-materiais.csv</strong> (uma linha por material, com saldo atual no lote) e <strong>estornos-log.csv</strong> (historico auditavel de cada estorno: data, lote, documento, quantidade estornada, operador e motivo). Colunas{' '}
-            <code>quantidade_retirada_original</code> e <code>quantidade_estornada_acumulada</code> no CSV principal mostram a retirada inicial e o total ja devolvido por linha. Tambem ha{' '}
-            <code>estorno_permitido</code> (sim/nao) e <code>qtd_pode_estornar</code> (numero) para ver se a linha ainda pode ser estornada; <code>atendido</code> indica material ainda com quantidade no lote. Lotes com estorno total aparecem uma linha resumo com <code>status_lote</code> estornado. No Excel, use importar com separador{' '}
-            <strong>ponto e virgula (;)</strong> se as colunas nao separarem. A coluna <code>atendimento_item_id</code> corresponde a cada linha do lote na tela de estorno.
+            Arquivo de retiradas (consulta e estorno). A bancada de bipe fica em <strong>Operacao</strong>. O ZIP inclui{' '}
+            <strong>atendimentos-materiais.csv</strong> e <strong>estornos-log.csv</strong>. No Excel, use separador{' '}
+            <strong>ponto e virgula (;)</strong>.
           </OperationalNotice>
         </ModuleHelp>
+
+        {historicoFetchError ? <div className="error-box">{historicoFetchError}</div> : null}
 
         <AtendimentoHistoricoTable
           canAdminister={canAdminister}
           items={historico}
+          loading={historicoLoading}
           onEstornar={iniciarEstorno}
           onVerRecibo={handleVerReciboHistorico}
           reciboCarregandoId={reciboHistoricoLoadingId}
         />
       </div>
+      )}
 
       <Modal
         onClose={() => {

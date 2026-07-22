@@ -59,7 +59,6 @@ import {
 
 type AtendimentoCorePayload = {
   documentos: AtendimentoDocumento[];
-  historico: Atendimento[];
   colaboradores: Colaborador[];
   fallbackReason: string;
 };
@@ -67,6 +66,13 @@ type AtendimentoCorePayload = {
 function atendimentoCoreQueryKey(userLogin: string | undefined) {
   return ['atendimento', 'core', userLogin ?? ''] as const;
 }
+
+function atendimentoHistoricoQueryKey(userLogin: string | undefined) {
+  return ['atendimento', 'historico', userLogin ?? ''] as const;
+}
+
+/** Lotes visiveis de cada vez na zona Historico (WMS: arquivo paginado no cliente). */
+export const ATENDIMENTO_HISTORICO_PAGE_SIZE = 80;
 
 /**
  * Valida documento, cabecalho (atendente + retirante conforme o tipo) e itens com quantidades.
@@ -231,6 +237,23 @@ export function useAtendimento() {
     }
     setError('');
     setSuccess('');
+    // Export precisa do arquivo completo — ativa a query de historico se ainda nao foi pedida.
+    setHistoricoArquivoAtivo(true);
+    try {
+      await queryClient.fetchQuery({
+        queryKey: atendimentoHistoricoQueryKey(user?.login),
+        queryFn: async () => {
+          const histResult = await listarHistoricoAtendimentosComMeta();
+          if (!histResult.success) {
+            throw new Error(histResult.error ?? 'Nao foi possivel carregar o historico de atendimento.');
+          }
+          return histResult.data ?? [];
+        },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar o historico para exportar.');
+      return;
+    }
     const result = await montarExportacaoAtendimentosPacoteZip();
     if (!result.success || !result.data) {
       setError(result.error ?? 'Nao foi possivel gerar o arquivo.');
@@ -346,6 +369,7 @@ export function useAtendimento() {
    */
   const nextApplyRef = useRef<'initial' | 'replace' | 'merge'>('initial');
   const lastAppliedDataUpdatedAtRef = useRef<number>(0);
+  const lastHistoricoAppliedRef = useRef<number>(0);
 
   const listQuery = useQuery({
     queryKey: atendimentoCoreQueryKey(user?.login),
@@ -359,21 +383,15 @@ export function useAtendimento() {
       return 120_000;
     },
     queryFn: async (): Promise<AtendimentoCorePayload> => {
-      // Boot prioritário: lotes + colaboradores (UI «Lotes registrados»).
-      // Pendentes de desenho em paralelo, mas sem bloquear se forem mais lentos:
-      // se pendentes demorarem, devolvemos histórico já e o React Query refetch preenche docs.
+      // Boot WMS: so o necessario para OPERAR (pendentes + colaboradores).
+      // Historico completo fica na zona «Historico» sob demanda — nao bloqueia o bipe.
       void aquecerBaselineAtendimentoNuvem();
-      // Pre-aquece saldo + indice O(1) de materiais (1.o bipe nao espera catalogo).
       void aquecerSaldoOperacionalAtendimento();
       void aquecerIndiceLeituraMateriais();
-      const histPromise = listarHistoricoAtendimentosComMeta();
       const colabPromise = listarColaboradoresAtivos();
       const docsPromise = listarDocumentosPendentesComMeta();
 
-      const [histResult, colaboradoresAtivos] = await Promise.all([histPromise, colabPromise]);
-      if (!histResult.success) {
-        throw new Error(histResult.error ?? 'Nao foi possivel carregar o historico de atendimento.');
-      }
+      const colaboradoresAtivos = await colabPromise;
 
       const docsResult = await Promise.race([
         docsPromise,
@@ -403,7 +421,6 @@ export function useAtendimento() {
                 ? {
                     ...prev,
                     documentos: late.data ?? [],
-                    // Carregamento em fundo concluido: limpa o aviso (nao herdar "segundo plano").
                     fallbackReason: late.meta?.fallbackReason ?? '',
                   }
                 : prev,
@@ -415,20 +432,48 @@ export function useAtendimento() {
       if (!docsResult.success) {
         return {
           documentos: [],
-          historico: histResult.data ?? [],
           colaboradores: colaboradoresAtivos,
-          fallbackReason: docsResult.error ?? histResult.meta?.fallbackReason ?? '',
+          fallbackReason: docsResult.error ?? '',
         };
       }
 
       return {
         documentos: docsResult.data ?? [],
-        historico: histResult.data ?? [],
         colaboradores: colaboradoresAtivos,
-        fallbackReason: docsResult.meta?.fallbackReason ?? histResult.meta?.fallbackReason ?? '',
+        fallbackReason: docsResult.meta?.fallbackReason ?? '',
       };
     },
   });
+
+  /** Arquivo de lotes: so dispara quando a zona Historico e pedida (ou export/estorno). */
+  const [historicoArquivoAtivo, setHistoricoArquivoAtivo] = useState(false);
+  const historicoQuery = useQuery({
+    queryKey: atendimentoHistoricoQueryKey(user?.login),
+    enabled: historicoArquivoAtivo,
+    placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+    refetchInterval: () => {
+      if (!historicoArquivoAtivo || !hasCloudConfig) return false;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+      return 180_000;
+    },
+    queryFn: async (): Promise<Atendimento[]> => {
+      const histResult = await listarHistoricoAtendimentosComMeta();
+      if (!histResult.success) {
+        throw new Error(histResult.error ?? 'Nao foi possivel carregar o historico de atendimento.');
+      }
+      return histResult.data ?? [];
+    },
+  });
+
+  const ensureHistoricoCarregado = useCallback(() => {
+    setHistoricoArquivoAtivo(true);
+  }, []);
+
+  const recarregarHistorico = useCallback(async () => {
+    setHistoricoArquivoAtivo(true);
+    await queryClient.invalidateQueries({ queryKey: ['atendimento', 'historico'] });
+  }, [queryClient]);
 
   /** Volta ao separador / janela: alinha pendências (merge), com debounce como no fluxo anterior ao React Query. */
   useEffect(() => {
@@ -483,10 +528,17 @@ export function useAtendimento() {
       setDocumentosListaTick((n) => n + 1);
       ultimoDocumentoComSugestaoAplicadaRef.current = '';
     }
-    setHistorico(payload.historico);
+    // Historico nao vem do core — zona Arquivo tem query propria.
     setColaboradores(payload.colaboradores);
     setFallbackReason(payload.fallbackReason);
   }, [listQuery.data, listQuery.dataUpdatedAt]);
+
+  useEffect(() => {
+    if (!historicoArquivoAtivo || !historicoQuery.data) return;
+    if (historicoQuery.dataUpdatedAt === lastHistoricoAppliedRef.current) return;
+    lastHistoricoAppliedRef.current = historicoQuery.dataUpdatedAt;
+    setHistorico(historicoQuery.data);
+  }, [historicoArquivoAtivo, historicoQuery.data, historicoQuery.dataUpdatedAt]);
 
   const invalidateAtendimentoReplace = useCallback(async () => {
     nextApplyRef.current = 'replace';
@@ -517,6 +569,13 @@ export function useAtendimento() {
       ? listQuery.error instanceof Error
         ? listQuery.error.message
         : 'Nao foi possivel carregar os dados de atendimento.'
+      : '';
+  const historicoLoading = historicoArquivoAtivo && (historicoQuery.isLoading || historicoQuery.isFetching);
+  const historicoFetchError =
+    historicoArquivoAtivo && historicoQuery.isError && !historicoQuery.data
+      ? historicoQuery.error instanceof Error
+        ? historicoQuery.error.message
+        : 'Nao foi possivel carregar o historico de atendimento.'
       : '';
 
   const selectedDocumento = useMemo(
@@ -968,10 +1027,13 @@ export function useAtendimento() {
         if (!prev) return prev;
         return {
           ...prev,
-          historico: [...novos, ...prev.historico],
           documentos: aplicarBaixasDocs(prev.documentos),
         };
       },
+    );
+    queryClient.setQueryData(
+      atendimentoHistoricoQueryKey(user?.login),
+      (prev: Atendimento[] | undefined) => [...novos, ...(prev ?? [])],
     );
 
     setSessaoRetirada([]);
@@ -1328,6 +1390,14 @@ export function useAtendimento() {
         ? `Atendimento ${result.data?.numero ?? ''} registrado localmente.`
         : `Atendimento ${result.data?.numero ?? ''} registrado com sucesso.`,
     );
+    if (result.data) {
+      const novo = result.data;
+      setHistorico((prev) => [novo, ...prev.filter((a) => a.id !== novo.id)]);
+      queryClient.setQueryData(
+        atendimentoHistoricoQueryKey(user?.login),
+        (prev: Atendimento[] | undefined) => [novo, ...(prev ?? []).filter((a) => a.id !== novo.id)],
+      );
+    }
     setRecebedorTipo('interno');
     setRecebedorColaboradorId('');
     setRecebedor('');
@@ -1681,11 +1751,17 @@ export function useAtendimento() {
       atendimentoCoreQueryKey(user?.login),
       (prev: AtendimentoCorePayload | undefined) => {
         if (!prev) return prev;
-        const hist = [...prev.historico];
+        return { ...prev, documentos: aplicarDeltasDocs(prev.documentos) };
+      },
+    );
+    queryClient.setQueryData(
+      atendimentoHistoricoQueryKey(user?.login),
+      (prev: Atendimento[] | undefined) => {
+        const hist = [...(prev ?? [])];
         const idx = hist.findIndex((a) => a.id === atualizado.id || a.numero === atualizado.numero);
         if (idx === -1) hist.unshift(atualizado);
         else hist[idx] = atualizado;
-        return { ...prev, historico: hist, documentos: aplicarDeltasDocs(prev.documentos) };
+        return hist;
       },
     );
     // Revalidacao leve em fundo (merge), sem travar o sucesso.
@@ -1707,6 +1783,11 @@ export function useAtendimento() {
   return {
     documentos,
     historico,
+    historicoLoading,
+    historicoFetchError,
+    historicoArquivoAtivo,
+    ensureHistoricoCarregado,
+    recarregarHistorico,
     colaboradores,
     selectedDocumento,
     itensSelecionados,
