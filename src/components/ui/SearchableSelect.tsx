@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { labelMatchesSearch } from './searchableSelectUtils';
+import { labelMatchesSearch, resolveSearchableOption } from './searchableSelectUtils';
 
 export type SearchableSelectOption = { value: string; label: string };
 
@@ -10,6 +10,11 @@ type Props = {
   onChange: (value: string) => void;
   /** Notifica o texto digitado (ex.: busca remota complementar às opções locais). */
   onQueryChange?: (query: string) => void;
+  /**
+   * Se o texto nao resolve nas opcoes locais (ex.: desenho fora do boot),
+   * tenta resolver de forma async (busca na nuvem) no blur/Enter.
+   */
+  resolveTypedValue?: (query: string) => Promise<SearchableSelectOption | null | undefined>;
   placeholder?: string;
   disabled?: boolean;
   /**
@@ -25,6 +30,7 @@ export function SearchableSelect({
   options,
   onChange,
   onQueryChange,
+  resolveTypedValue,
   placeholder,
   disabled,
   selectedShowsValueOnly = false,
@@ -106,17 +112,25 @@ export function SearchableSelect({
 
   function onBlur() {
     window.setTimeout(() => {
-      setOpen(false);
-      const t = query.trim().toLowerCase();
-      const exact = options.find(
-        (o) => o.label.trim().toLowerCase() === t || o.value.trim().toLowerCase() === t,
-      );
-      if (exact) {
-        if (value !== exact.value) onChange(exact.value);
-        setQuery(displayFor(exact));
-        return;
-      }
-      if (value && selected) setQuery(displayFor(selected));
+      void (async () => {
+        setOpen(false);
+        const resolved = resolveSearchableOption(options, query);
+        if (resolved) {
+          if (value !== resolved.value) onChange(resolved.value);
+          setQuery(displayFor(resolved));
+          return;
+        }
+        const q = query.trim();
+        if (q && resolveTypedValue) {
+          const remote = await resolveTypedValue(q);
+          if (remote) {
+            onChange(remote.value);
+            setQuery(displayFor(remote));
+            return;
+          }
+        }
+        if (value && selected) setQuery(displayFor(selected));
+      })();
     }, 160);
   }
 
@@ -129,6 +143,29 @@ export function SearchableSelect({
       setOpen(true);
       return;
     }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void (async () => {
+        const fromHighlight = highlight >= 0 ? filtered[highlight] : undefined;
+        const resolved =
+          fromHighlight ?? resolveSearchableOption(filtered.length ? filtered : options, query);
+        if (resolved) {
+          pick(resolved);
+          return;
+        }
+        const q = query.trim();
+        if (q && resolveTypedValue) {
+          const remote = await resolveTypedValue(q);
+          if (remote) {
+            onChange(remote.value);
+            setQuery(displayFor(remote));
+            setOpen(false);
+            setHighlight(-1);
+          }
+        }
+      })();
+      return;
+    }
     if (!filtered.length) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -136,9 +173,6 @@ export function SearchableSelect({
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setHighlight((h) => Math.max(h - 1, 0));
-    } else if (e.key === 'Enter' && highlight >= 0) {
-      e.preventDefault();
-      pick(filtered[highlight]!);
     }
   }
 

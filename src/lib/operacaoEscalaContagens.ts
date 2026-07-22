@@ -1,3 +1,4 @@
+import { clearIsoProJwtSession, ensureIsoProDataSessionReadable } from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase, hasSupabaseConfig } from './supabase';
 
@@ -102,16 +103,36 @@ export async function listDocumentosPendentesAtendimentoFromCloud(options?: {
   if (!hasSupabaseConfig()) {
     return { documentos: [], total: 0, truncated: false, source: 'none', error: 'Supabase nao configurado.' };
   }
-  const supabase = getSupabase();
-  if (!supabase) {
-    return { documentos: [], total: 0, truncated: false, source: 'none', error: 'Supabase indisponivel.' };
+
+  // Mesmo padrao do Planejamento: sessao Auth residual esconde linhas via RLS
+  // e o Atendimento ficava sem desenhos na busca/bipe enquanto o Planejamento listava.
+  await ensureIsoProDataSessionReadable();
+
+  const invoke = async () => {
+    const supabase = getSupabase();
+    if (!supabase) {
+      return { data: null as unknown, error: { message: 'Supabase indisponivel.' } };
+    }
+    return supabase.rpc('iso_pro_list_documentos_pendentes_atendimento', {
+      p_tenant_id: getActiveTenantId(),
+      p_busca: options?.busca?.trim() || null,
+      p_limit: options?.limit ?? 2000,
+    });
+  };
+
+  let { data, error } = await invoke();
+
+  const totalOf = (raw: unknown) => Number((raw as { total?: number } | null)?.total ?? 0);
+  const sourceOf = (raw: unknown) => String((raw as { _source?: string } | null)?._source ?? '');
+  const needsAnonRetry =
+    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(String(error.message))) ||
+    (!error && (totalOf(data) === 0 || sourceOf(data) === 'snapshot'));
+
+  if (needsAnonRetry) {
+    await clearIsoProJwtSession();
+    ({ data, error } = await invoke());
   }
 
-  const { data, error } = await supabase.rpc('iso_pro_list_documentos_pendentes_atendimento', {
-    p_tenant_id: getActiveTenantId(),
-    p_busca: options?.busca?.trim() || null,
-    p_limit: options?.limit ?? 2000,
-  });
   if (error) {
     return { documentos: [], total: 0, truncated: false, source: 'error', error: error.message };
   }
@@ -146,72 +167,92 @@ export async function listDocumentosPendentesPorCodigoMaterialFromCloud(
   const codigo = codigoMaterial.trim();
   if (!codigo) return { documentos: [] };
   if (!hasSupabaseConfig()) return { documentos: [], error: 'Supabase nao configurado.' };
-  const supabase = getSupabase();
-  if (!supabase) return { documentos: [], error: 'Supabase indisponivel.' };
-  const tenantId = getActiveTenantId();
 
-  const { data: linhas, error: e1 } = await supabase
-    .from('iso_pro_documento_itens_planejamento')
-    .select('documento_id,quantidade,quantidade_atendida')
-    .eq('tenant_id', tenantId)
-    .ilike('codigo', codigo)
-    .limit(400);
-  if (e1) return { documentos: [], error: e1.message };
+  await ensureIsoProDataSessionReadable();
 
-  const docIds = [
-    ...new Set(
-      (linhas ?? [])
-        .filter((l) => (Number(l.quantidade) || 0) > (Number(l.quantidade_atendida) || 0) + 1e-9)
-        .map((l) => String(l.documento_id)),
-    ),
-  ].slice(0, 60);
-  if (!docIds.length) return { documentos: [] };
+  const queryOnce = async (): Promise<{ documentos: DocumentoPendenteAtendimentoWire[]; error?: string }> => {
+    const supabase = getSupabase();
+    if (!supabase) return { documentos: [], error: 'Supabase indisponivel.' };
+    const tenantId = getActiveTenantId();
 
-  const [{ data: docs, error: e2 }, { data: itens, error: e3 }] = await Promise.all([
-    supabase
-      .from('iso_pro_documentos_planejamento')
-      .select('id,numero,revisao,descricao,responsavel,status')
-      .eq('tenant_id', tenantId)
-      .in('id', docIds),
-    supabase
+    const { data: linhas, error: e1 } = await supabase
       .from('iso_pro_documento_itens_planejamento')
-      .select('id,documento_id,codigo,descricao,unidade,quantidade,quantidade_atendida')
+      .select('documento_id,quantidade,quantidade_atendida')
       .eq('tenant_id', tenantId)
-      .in('documento_id', docIds),
-  ]);
-  if (e2) return { documentos: [], error: e2.message };
-  if (e3) return { documentos: [], error: e3.message };
+      .ilike('codigo', codigo)
+      .limit(400);
+    if (e1) return { documentos: [], error: e1.message };
 
-  const itensPorDoc = new Map<string, DocumentoPendenteAtendimentoWire['itens']>();
-  for (const item of itens ?? []) {
-    if ((Number(item.quantidade) || 0) <= (Number(item.quantidade_atendida) || 0) + 1e-9) continue;
-    const key = String(item.documento_id);
-    const lista = itensPorDoc.get(key) ?? [];
-    lista.push({
-      id: String(item.id),
-      codigo: String(item.codigo ?? ''),
-      descricao: String(item.descricao ?? ''),
-      unidade: String(item.unidade ?? 'UN'),
-      quantidade: Number(item.quantidade) || 0,
-      quantidadeAtendida: Number(item.quantidade_atendida) || 0,
-    });
-    itensPorDoc.set(key, lista);
+    const docIds = [
+      ...new Set(
+        (linhas ?? [])
+          .filter((l) => (Number(l.quantidade) || 0) > (Number(l.quantidade_atendida) || 0) + 1e-9)
+          .map((l) => String(l.documento_id)),
+      ),
+    ].slice(0, 60);
+    if (!docIds.length) return { documentos: [] };
+
+    const [{ data: docs, error: e2 }, { data: itens, error: e3 }] = await Promise.all([
+      supabase
+        .from('iso_pro_documentos_planejamento')
+        .select('id,numero,revisao,descricao,responsavel,status')
+        .eq('tenant_id', tenantId)
+        .in('id', docIds),
+      supabase
+        .from('iso_pro_documento_itens_planejamento')
+        .select('id,documento_id,codigo,descricao,unidade,quantidade,quantidade_atendida')
+        .eq('tenant_id', tenantId)
+        .in('documento_id', docIds),
+    ]);
+    if (e2) return { documentos: [], error: e2.message };
+    if (e3) return { documentos: [], error: e3.message };
+
+    const itensPorDoc = new Map<string, DocumentoPendenteAtendimentoWire['itens']>();
+    for (const item of itens ?? []) {
+      if ((Number(item.quantidade) || 0) <= (Number(item.quantidade_atendida) || 0) + 1e-9) continue;
+      const key = String(item.documento_id);
+      const lista = itensPorDoc.get(key) ?? [];
+      lista.push({
+        id: String(item.id),
+        codigo: String(item.codigo ?? ''),
+        descricao: String(item.descricao ?? ''),
+        unidade: String(item.unidade ?? 'UN'),
+        quantidade: Number(item.quantidade) || 0,
+        quantidadeAtendida: Number(item.quantidade_atendida) || 0,
+      });
+      itensPorDoc.set(key, lista);
+    }
+
+    const documentos: DocumentoPendenteAtendimentoWire[] = (docs ?? [])
+      .filter((d) => String(d.status ?? '').trim().toLowerCase() !== 'cancelado')
+      .map((d) => ({
+        id: String(d.id),
+        numero: String(d.numero ?? ''),
+        revisao: String(d.revisao ?? 'A'),
+        descricao: String(d.descricao ?? ''),
+        responsavel: String(d.responsavel ?? ''),
+        status: String(d.status ?? 'pendente'),
+        itens: itensPorDoc.get(String(d.id)) ?? [],
+      }))
+      .filter((d) => (d.itens ?? []).length > 0);
+
+    return { documentos };
+  };
+
+  let result = await queryOnce();
+  // RLS com JWT residual devolve 0 linhas sem erro — so faz retry se ainda ha sessao Auth.
+  if (result.documentos.length === 0) {
+    const supabase = getSupabase();
+    const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : '';
+    const authBlocked =
+      Boolean(result.error) &&
+      /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID|permission|rls|policy|jwt/i.test(result.error);
+    if (token || authBlocked) {
+      await clearIsoProJwtSession();
+      result = await queryOnce();
+    }
   }
-
-  const documentos: DocumentoPendenteAtendimentoWire[] = (docs ?? [])
-    .filter((d) => String(d.status ?? '').trim().toLowerCase() !== 'cancelado')
-    .map((d) => ({
-      id: String(d.id),
-      numero: String(d.numero ?? ''),
-      revisao: String(d.revisao ?? 'A'),
-      descricao: String(d.descricao ?? ''),
-      responsavel: String(d.responsavel ?? ''),
-      status: String(d.status ?? 'pendente'),
-      itens: itensPorDoc.get(String(d.id)) ?? [],
-    }))
-    .filter((d) => (d.itens ?? []).length > 0);
-
-  return { documentos };
+  return result;
 }
 
 /**
