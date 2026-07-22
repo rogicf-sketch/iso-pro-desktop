@@ -20,6 +20,7 @@ import {
   parseRelatorioFotograficoSeqState,
 } from '../schemas/relatorioFotograficoStorage.zod';
 import type { RelatorioFotograficoFoto, RelatorioFotograficoMeta, RelatorioFotograficoPayload } from '../types/relatorioFotografico.types';
+import { defaultRelatorioFotograficoAssinatura } from '../types/relatorioFotografico.types';
 import {
   emptyRelatorioFotograficoCloudBundle,
   listMetadadosFromBundle,
@@ -176,6 +177,10 @@ export function createEmptyRelatorioFotograficoPayload(): RelatorioFotograficoPa
     projeto: '',
     localObra: '',
     incluirLogoImpressao: true,
+    incluirAssinaturasImpressao: true,
+    assinaturaRecebimento: defaultRelatorioFotograficoAssinatura(),
+    assinaturaQualidade: defaultRelatorioFotograficoAssinatura(),
+    assinaturaFiscalizacao: defaultRelatorioFotograficoAssinatura(),
     fotos: [],
     relatoriosGerados: 0,
   };
@@ -215,6 +220,14 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+function normalizeAssinatura(raw: unknown): ReturnType<typeof defaultRelatorioFotograficoAssinatura> {
+  if (!isRecord(raw)) return defaultRelatorioFotograficoAssinatura();
+  return {
+    nome: String(raw.nome ?? '').trim().slice(0, 200),
+    data: String(raw.data ?? '').trim().slice(0, 80),
+  };
+}
+
 /** Normaliza JSON vindo do armazenamento (local ou Supabase). */
 export function normalizeRelatorioFotograficoPayload(raw: unknown): RelatorioFotograficoPayload {
   const base = createEmptyRelatorioFotograficoPayload();
@@ -230,26 +243,27 @@ export function normalizeRelatorioFotograficoPayload(raw: unknown): RelatorioFot
     if (!id) continue;
     const dataUrl = String(item.dataUrl ?? '').trim();
     const imageRef = String(item.imageRef ?? '').trim();
+    const fotoBase = {
+      id,
+      legenda: String(item.legenda ?? '').slice(0, 2000),
+      etiqueta: String(item.etiqueta ?? '').trim().slice(0, 80),
+      createdAt: String(item.createdAt ?? new Date().toISOString()),
+      mostrarLegendaImpressao: item.mostrarLegendaImpressao === false ? false : true,
+    };
     if (imageRef.startsWith(MEDIA_REF_PREFIX) || isStorageRef(imageRef)) {
       fotos.push({
-        id,
+        ...fotoBase,
         dataUrl: dataUrl.startsWith('data:image/') ? dataUrl : '',
         imageRef,
-        legenda: String(item.legenda ?? '').slice(0, 2000),
-        createdAt: String(item.createdAt ?? new Date().toISOString()),
-        mostrarLegendaImpressao: item.mostrarLegendaImpressao === false ? false : true,
       });
       if (fotos.length >= MAX_FOTOS) break;
       continue;
     }
     if (!dataUrl.startsWith('data:image/')) continue;
     fotos.push({
-      id,
+      ...fotoBase,
       dataUrl,
       imageRef: undefined,
-      legenda: String(item.legenda ?? '').slice(0, 2000),
-      createdAt: String(item.createdAt ?? new Date().toISOString()),
-      mostrarLegendaImpressao: item.mostrarLegendaImpressao === false ? false : true,
     });
     if (fotos.length >= MAX_FOTOS) break;
   }
@@ -273,6 +287,10 @@ export function normalizeRelatorioFotograficoPayload(raw: unknown): RelatorioFot
     projeto: String(raw.projeto ?? '').slice(0, 300),
     localObra: String(raw.localObra ?? '').slice(0, 300),
     incluirLogoImpressao: raw.incluirLogoImpressao === false ? false : true,
+    incluirAssinaturasImpressao: raw.incluirAssinaturasImpressao === false ? false : true,
+    assinaturaRecebimento: normalizeAssinatura(raw.assinaturaRecebimento),
+    assinaturaQualidade: normalizeAssinatura(raw.assinaturaQualidade),
+    assinaturaFiscalizacao: normalizeAssinatura(raw.assinaturaFiscalizacao),
     fotos,
     relatoriosGerados: Math.max(0, Math.floor(Number(raw.relatoriosGerados) || 0)),
   };

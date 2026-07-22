@@ -10,9 +10,14 @@ import {
 } from '../../../lib/htmlRelatorioInstitucional';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
-import type { RelatorioFotograficoFoto, RelatorioFotograficoPayload } from '../types/relatorioFotografico.types';
+import type {
+  RelatorioFotograficoAssinatura,
+  RelatorioFotograficoFoto,
+  RelatorioFotograficoPayload,
+} from '../types/relatorioFotografico.types';
 
 const FOTOS_POR_PAGINA = 4;
+const TITULO_PADRAO = 'Relatório Fotográfico de Recebimento de Materiais';
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -33,18 +38,77 @@ function linhaCampoOuTraco(rotulo: string, valor: string): string {
   return `<div class="rf-campo-linha"><span class="rf-campo-rot">${escapeHtmlRelatorio(rotulo)}</span><span class="rf-campo-val">${escapeHtmlRelatorio(v)}</span></div>`;
 }
 
+/** Primeira linha = título curto; restante = detalhe (quebra longa). */
+function partirLegenda(legenda: string): { titulo: string; detalhe: string } {
+  const raw = legenda.replace(/\r\n/g, '\n').trim();
+  if (!raw) return { titulo: '', detalhe: '' };
+  const nl = raw.indexOf('\n');
+  if (nl < 0) {
+    if (raw.length <= 90) return { titulo: raw, detalhe: '' };
+    return { titulo: raw.slice(0, 90).trim(), detalhe: raw };
+  }
+  return {
+    titulo: raw.slice(0, nl).trim(),
+    detalhe: raw.slice(nl + 1).trim(),
+  };
+}
+
+function formatFotoNum(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
 function celulaFoto(f: RelatorioFotograficoFoto, indiceGlobal: number): string {
-  const legendaHtml =
-    f.mostrarLegendaImpressao && f.legenda.trim()
-      ? `<p class="rf-foto-legenda">${escapeHtmlRelatorio(f.legenda).replace(/\n/g, '<br>')}</p>`
-      : '';
+  const num = formatFotoNum(indiceGlobal + 1);
+  const { titulo, detalhe } = partirLegenda(f.legenda);
+  const etiqueta = f.etiqueta.trim();
+  const mostrarTexto = f.mostrarLegendaImpressao;
+  const tituloLinha = mostrarTexto && titulo
+    ? `Foto ${num} — ${escapeHtmlRelatorio(titulo)}`
+    : `Foto ${num}`;
+  const badge = etiqueta
+    ? `<span class="rf-foto-tag">${escapeHtmlRelatorio(etiqueta)}</span>`
+    : '';
+  const detalheHtml =
+    mostrarTexto && detalhe
+      ? `<p class="rf-foto-detalhe">${escapeHtmlRelatorio(detalhe).replace(/\n/g, '<br>')}</p>`
+      : mostrarTexto && titulo && !detalhe
+        ? ''
+        : mostrarTexto && !titulo && f.legenda.trim()
+          ? `<p class="rf-foto-detalhe">${escapeHtmlRelatorio(f.legenda).replace(/\n/g, '<br>')}</p>`
+          : '';
+
   return `
     <div class="rf-celula">
-      <div class="rf-foto-num">Foto ${indiceGlobal + 1}</div>
       <div class="rf-foto-wrap">
         <img class="rf-foto-img" src="${escapeHtmlRelatorio(f.dataUrl ?? '')}" alt="" />
       </div>
-      ${legendaHtml}
+      <div class="rf-foto-meta">
+        <div class="rf-foto-meta-top">
+          <div class="rf-foto-titulo">${tituloLinha}</div>
+          ${badge}
+        </div>
+        ${detalheHtml}
+      </div>
+    </div>`;
+}
+
+function htmlBlocoAssinatura(
+  papel: string,
+  a: RelatorioFotograficoAssinatura,
+): string {
+  const nome = a.nome.trim();
+  const data = a.data.trim();
+  const visto = nome
+    ? `<div class="rf-ass-visto">Visto digital</div>
+       <div class="rf-ass-nome">${escapeHtmlRelatorio(nome)}</div>
+       <div class="rf-ass-data">${escapeHtmlRelatorio(data || '—')}</div>`
+    : `<div class="rf-ass-pendente">Pendente</div>
+       <div class="rf-ass-nome rf-ass-nome--vazio">—</div>
+       <div class="rf-ass-data">—</div>`;
+  return `
+    <div class="rf-ass-box">
+      <div class="rf-ass-papel">${escapeHtmlRelatorio(papel)}</div>
+      ${visto}
     </div>`;
 }
 
@@ -56,8 +120,12 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
   const logo = resolverUrlLogoInstitucionalParaHtmlImpresso(cfg.logoInstitucionalUrl);
   const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfg.documentoRodapeNome, cfg.documentoRodapeCnpj);
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-  const tituloPrincipal = p.titulo.trim() || 'Relatório fotográfico';
+  const tituloPrincipal = p.titulo.trim() || TITULO_PADRAO;
   const numeroDoc = p.numeroRelatorio.trim();
+  const totalFotos = p.fotos.length;
+  const totalPaginasFotos = Math.max(1, Math.ceil(totalFotos / FOTOS_POR_PAGINA) || 1);
+  const comAssinaturas = p.incluirAssinaturasImpressao;
+  const totalPaginasDoc = totalFotos === 0 ? 1 : totalPaginasFotos + (comAssinaturas ? 1 : 0);
 
   const logoCol =
     p.incluirLogoImpressao && logo
@@ -79,6 +147,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
         <div class="rf-capa-linha">
           ${capaLogoHtml}
           <div class="rf-capa-col rf-capa-col--titulo">
+            <p class="rf-kicker">Evidência fotográfica · Recebimento</p>
             <h1 class="rf-titulo-principal">${tituloDoc}</h1>
           </div>
           <div class="rf-capa-col rf-capa-col--num">${numeroHtml}</div>
@@ -86,7 +155,6 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
 
   const capaQuadroRepeatHtml = `<div class="rf-quadro rf-quadro--capa rf-quadro--capa--repeat">${capaLinhaInterna}</div>`;
 
-  /** Em cima: obra (Config.). Em baixo: NF do recebimento — fornecedor só uma vez (linha única). */
   const blocoObra = `
     <div class="rf-linhas-compactas">
       <div class="rf-grid-obra-3">
@@ -103,6 +171,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
         ${linhaCampoOuTraco('Romaneio', p.romaneio)}
       </div>
       ${linhaCampoOuTraco('Fornecedor', p.fornecedor)}
+      ${linhaCampoOuTraco('Fotos neste relatório', String(totalFotos))}
     </div>`;
 
   const secExtra = [
@@ -133,7 +202,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
 
   const dadosQuadroRepeatHtml = `<div class="rf-quadro rf-quadro--dados rf-quadro--dados--repeat">${dadosInteriorHtml}</div>`;
 
-  const topbarGeradoHtml = `<div class="inst-topbar inst-topbar--repeat"><span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span></div>`;
+  const topbarGeradoHtml = `<div class="inst-topbar inst-topbar--repeat"><span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span><span class="rf-topbar-meta">${escapeHtmlRelatorio(numeroDoc || 'RF')}</span></div>`;
 
   const cabecalhoPaginaRepetidoHtml = `${topbarGeradoHtml}${capaQuadroRepeatHtml}${dadosQuadroRepeatHtml}`;
 
@@ -145,13 +214,33 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
         .join('');
       const gridClass = grupo.length === FOTOS_POR_PAGINA ? 'rf-grid4' : 'rf-grid4 rf-grid4--parcial';
       const repetirCabecalho = pagIdx > 0 ? cabecalhoPaginaRepetidoHtml : '';
+      const pageNo = pagIdx + 1;
       return `
-  <section class="rf-pagina-fotos" aria-label="Página ${pagIdx + 1} de fotos">
+  <section class="rf-pagina-fotos" aria-label="Página ${pageNo} de fotos">
     ${repetirCabecalho}
     <div class="${gridClass}">${celulas}</div>
+    <div class="rf-page-foot">Página ${pageNo} de ${totalPaginasDoc} · ${escapeHtmlRelatorio(numeroDoc || 'RF')}</div>
   </section>`;
     })
     .join('');
+
+  const assinaturasHtml = comAssinaturas
+    ? `
+  <section class="rf-pagina-assinaturas" aria-label="Assinaturas">
+    <div class="rf-quadro rf-quadro--assin">
+      <h2 class="rf-assin-h2">Assinaturas / visto digital</h2>
+      <p class="rf-assin-lead">Confirmação do registro fotográfico do recebimento. Campos vazios ficam como pendentes.</p>
+      <div class="rf-ass-grid">
+        ${htmlBlocoAssinatura('Recebimento / Almoxarifado', p.assinaturaRecebimento)}
+        ${htmlBlocoAssinatura('Inspetor de Qualidade', p.assinaturaQualidade)}
+        ${htmlBlocoAssinatura('Fiscalização / Cliente', p.assinaturaFiscalizacao)}
+      </div>
+    </div>
+    <div class="rf-page-foot">Página ${totalPaginasDoc} de ${totalPaginasDoc} · ${escapeHtmlRelatorio(numeroDoc || 'RF')}</div>
+  </section>`
+    : '';
+
+  const rodapeInst = `Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}.`;
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -163,26 +252,25 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
     ${cssInstitucionalRelatorio()}
     .rf-doc { max-width: 210mm; margin: 0 auto; }
     .rf-doc .inst-topbar {
-      justify-content: flex-start;
+      justify-content: space-between;
       margin-bottom: 6px;
       font-size: 8.5pt;
+      gap: 12px;
     }
-    .rf-doc .inst-topbar span:last-child { font-weight: 400; color: #444; }
+    .rf-topbar-meta { font-variant-numeric: tabular-nums; color: #64748b; }
     .inst-topbar--repeat {
       margin-bottom: 6px;
       page-break-after: avoid;
     }
     .rf-quadro {
       border: 1px solid #334155;
-      border-radius: 5px;
+      border-radius: 6px;
       padding: 8px 10px;
       margin-bottom: 8px;
       background: #fafbfc;
       page-break-inside: avoid;
       page-break-after: avoid;
-      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.05);
     }
-    /* Logo | título (só este centralizado) | número */
     .rf-capa-linha {
       display: grid;
       grid-template-columns: minmax(100px, 1fr) minmax(0, 2.4fr) minmax(100px, 1fr);
@@ -204,14 +292,22 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       justify-self: stretch;
       min-width: 0;
     }
+    .rf-kicker {
+      margin: 0 0 4px;
+      font-size: 7.5pt;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+    }
     h1.rf-titulo-principal {
       border: none;
       padding: 0;
       margin: 0;
-      font-size: 1.2rem;
+      font-size: 1.15rem;
       font-weight: 800;
       color: #0f172a;
-      line-height: 1.15;
+      line-height: 1.2;
       letter-spacing: -0.02em;
     }
     .rf-capa-col--num {
@@ -235,9 +331,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       padding-top: 6px;
       padding-bottom: 6px;
     }
-    .rf-quadro--capa--repeat .rf-capa-linha {
-      min-height: 46px;
-    }
+    .rf-quadro--capa--repeat .rf-capa-linha { min-height: 46px; }
     .rf-quadro--dados--repeat {
       margin-bottom: 8px;
       page-break-inside: avoid;
@@ -253,9 +347,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       border: 0;
       border-top: 1px solid #e2e8f0;
     }
-    .rf-linhas-compactas .rf-campo-linha {
-      margin-bottom: 2px;
-    }
+    .rf-linhas-compactas .rf-campo-linha { margin-bottom: 2px; }
     .rf-grid-obra-3 {
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
@@ -295,57 +387,45 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
     .rf-campo-val {
       color: #0f172a;
       word-break: break-word;
+      overflow-wrap: anywhere;
       font-size: 8.5pt;
-      line-height: 1.25;
+      line-height: 1.3;
     }
     .rf-secao-extra {
       margin-top: 8px;
       padding-top: 6px;
       border-top: 1px solid #e2e8f0;
     }
-    .rf-secao-extra .rf-campo-linha {
-      grid-template-columns: 100px 1fr;
-    }
+    .rf-secao-extra .rf-campo-linha { grid-template-columns: 100px 1fr; }
     .rf-pagina-fotos {
       page-break-inside: avoid;
       width: 100%;
     }
-    .rf-pagina-fotos + .rf-pagina-fotos {
+    .rf-pagina-fotos + .rf-pagina-fotos,
+    .rf-pagina-assinaturas {
       page-break-before: always;
     }
     .rf-grid4 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      grid-auto-rows: 86mm;
-      gap: 6px;
+      grid-auto-rows: minmax(78mm, 84mm);
+      gap: 8px;
       width: 100%;
       align-items: stretch;
     }
-    .rf-grid4--parcial {
-      align-content: start;
-    }
-    /* Três faixas: rótulo | área de imagem (sempre igual na mesma linha) | legenda */
+    .rf-grid4--parcial { align-content: start; }
     .rf-celula {
       border: 1px solid #cbd5e1;
-      border-radius: 3px;
-      padding: 4px;
+      border-radius: 6px;
+      padding: 6px;
       background: #fff;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-rows: minmax(0, 1fr) auto;
       align-items: stretch;
       min-height: 0;
       min-width: 0;
       height: 100%;
-      max-height: 86mm;
       page-break-inside: avoid;
-    }
-    .rf-foto-num {
-      font-size: 7.5pt;
-      font-weight: 700;
-      color: #475569;
-      width: 100%;
-      margin-bottom: 2px;
-      line-height: 1.1;
     }
     .rf-foto-wrap {
       min-height: 0;
@@ -355,7 +435,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       align-items: center;
       justify-content: center;
       background: #f1f5f9;
-      border-radius: 2px;
+      border-radius: 4px;
       overflow: hidden;
     }
     .rf-foto-img {
@@ -367,16 +447,118 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       object-position: center;
       display: block;
     }
-    .rf-foto-legenda {
-      margin: 4px 0 0;
+    .rf-foto-meta {
+      margin-top: 6px;
+      min-width: 0;
+    }
+    .rf-foto-meta-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .rf-foto-titulo {
       font-size: 8pt;
-      width: 100%;
-      text-align: center;
-      white-space: pre-wrap;
+      font-weight: 700;
       color: #0f172a;
-      line-height: 1.2;
-      max-height: 14mm;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      min-width: 0;
+      flex: 1;
+    }
+    .rf-foto-tag {
+      flex-shrink: 0;
+      font-size: 7pt;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #1e3a5f;
+      background: #e8eef5;
+      border: 1px solid #c5d4e8;
+      border-radius: 4px;
+      padding: 2px 6px;
+      max-width: 42%;
+      overflow-wrap: anywhere;
+    }
+    .rf-foto-detalhe {
+      margin: 4px 0 0;
+      font-size: 7.5pt;
+      text-align: left;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      color: #475569;
+      line-height: 1.35;
+      max-height: 18mm;
       overflow: hidden;
+    }
+    .rf-page-foot {
+      margin-top: 8px;
+      font-size: 7.5pt;
+      color: #64748b;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .rf-quadro--assin { background: #fff; page-break-after: auto; }
+    .rf-assin-h2 {
+      margin: 0 0 4px;
+      font-size: 11pt;
+      color: #1e3a5f;
+      border: none;
+      padding: 0;
+    }
+    .rf-assin-lead {
+      margin: 0 0 12px;
+      font-size: 8.5pt;
+      color: #64748b;
+    }
+    .rf-ass-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+    }
+    .rf-ass-box {
+      border: 1.5px dashed #94a3b8;
+      border-radius: 8px;
+      padding: 12px 10px;
+      min-height: 110px;
+      background: #f8fafc;
+    }
+    .rf-ass-papel {
+      font-size: 7.5pt;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #475569;
+      margin-bottom: 10px;
+    }
+    .rf-ass-visto {
+      font-size: 8pt;
+      font-weight: 700;
+      color: #1e3a5f;
+      margin-bottom: 4px;
+    }
+    .rf-ass-pendente {
+      font-size: 8pt;
+      font-weight: 700;
+      color: #b54708;
+      margin-bottom: 4px;
+    }
+    .rf-ass-nome {
+      font-size: 11pt;
+      font-weight: 600;
+      color: #0f172a;
+      font-family: "Segoe Script", "Brush Script MT", cursive, "Segoe UI", sans-serif;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .rf-ass-nome--vazio { font-family: "Segoe UI", sans-serif; color: #94a3b8; }
+    .rf-ass-data {
+      margin-top: 8px;
+      font-size: 8pt;
+      color: #64748b;
+      font-variant-numeric: tabular-nums;
     }
     .rf-empty {
       padding: 16px;
@@ -386,21 +568,23 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
       border-radius: 6px;
       font-size: 9pt;
     }
+    .rf-rodape-doc {
+      margin-top: 10px;
+      font-size: 7.5pt;
+      color: #64748b;
+    }
     ${cssBarraPreVisualizacaoImpressaoHtml()}
     @media print {
       body { padding: 7mm 9mm; }
-      .rf-quadro { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-shadow: none; }
-      .rf-foto-wrap { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .rf-quadro, .rf-foto-wrap, .rf-foto-tag, .rf-ass-box {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
     }
     @media screen and (max-width: 560px) {
-      .rf-capa-linha {
-        grid-template-columns: 1fr;
-        text-align: center;
-      }
-      .rf-capa-col--logo { justify-self: center; }
-      .rf-capa-col--num { justify-self: center; text-align: center; }
-      .rf-grid-obra-3 { grid-template-columns: 1fr; }
-      .rf-grid-receb-nf-rom { grid-template-columns: 1fr; }
+      .rf-capa-linha { grid-template-columns: 1fr; text-align: center; }
+      .rf-capa-col--logo, .rf-capa-col--num { justify-self: center; text-align: center; }
+      .rf-grid-obra-3, .rf-grid-receb-nf-rom, .rf-ass-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -409,6 +593,7 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
   <div class="rf-doc">
     <div class="inst-topbar">
       <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
+      <span class="rf-topbar-meta">${escapeHtmlRelatorio(numeroDoc || 'RF')} · ${totalFotos} foto(s)</span>
     </div>
 
     <header class="rf-cabecalho-doc" aria-label="Cabeçalho do relatório">
@@ -422,7 +607,9 @@ export function montarHtmlRelatorioFotografico(p: RelatorioFotograficoPayload): 
         : blocosPaginas
     }
 
-    <p style="margin-top:10px;font-size:8pt;color:#64748b;">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Layout: 4 fotos por página quando possível.</p>
+    ${assinaturasHtml}
+
+    <p class="rf-rodape-doc">${rodapeInst} Layout: até 4 fotos por página · Assinaturas ${comAssinaturas ? 'ativas' : 'desligadas'}.</p>
   </div>
   ${scriptBarraPreVisualizacaoImpressao()}
 </body>

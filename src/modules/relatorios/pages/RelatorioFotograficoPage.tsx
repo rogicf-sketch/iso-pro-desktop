@@ -378,6 +378,7 @@ export function RelatorioFotograficoPage() {
           id: crypto.randomUUID(),
           dataUrl,
           legenda: file.name.replace(/\.[^.]+$/, ''),
+          etiqueta: '',
           createdAt: new Date().toISOString(),
           mostrarLegendaImpressao: true,
         });
@@ -398,11 +399,30 @@ export function RelatorioFotograficoPage() {
     }));
   };
 
+  const updateEtiqueta = (id: string, etiqueta: string) => {
+    if (!allowEdit) return;
+    setPayload((prev) => ({
+      ...mergeObraFromConfig(prev),
+      fotos: prev.fotos.map((f) => (f.id === id ? { ...f, etiqueta } : f)),
+    }));
+  };
+
   const updateMostrarLegenda = (id: string, mostrarLegendaImpressao: boolean) => {
     if (!allowEdit) return;
     setPayload((prev) => ({
       ...mergeObraFromConfig(prev),
       fotos: prev.fotos.map((f) => (f.id === id ? { ...f, mostrarLegendaImpressao } : f)),
+    }));
+  };
+
+  const setAssinatura = (
+    campo: 'assinaturaRecebimento' | 'assinaturaQualidade' | 'assinaturaFiscalizacao',
+    patch: Partial<{ nome: string; data: string }>,
+  ) => {
+    if (!allowEdit) return;
+    setPayload((prev) => ({
+      ...mergeObraFromConfig(prev),
+      [campo]: { ...prev[campo], ...patch },
     }));
   };
 
@@ -677,6 +697,80 @@ export function RelatorioFotograficoPage() {
           <span>Incluir logo institucional na impressão (definido em Configurações)</span>
         </label>
 
+        <label className="field" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            checked={payload.incluirAssinaturasImpressao}
+            disabled={!allowEdit}
+            onChange={(e) =>
+              setPayload((prev) => ({ ...mergeObraFromConfig(prev), incluirAssinaturasImpressao: e.target.checked }))
+            }
+            type="checkbox"
+          />
+          <span>Incluir assinaturas / visto digital no PDF</span>
+        </label>
+
+        {payload.incluirAssinaturasImpressao ? (
+          <div
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 14,
+              borderRadius: 12,
+              border: '1px solid var(--border-strong)',
+              background: 'var(--surface-elevated, rgba(148, 163, 184, 0.08))',
+            }}
+          >
+            <p className="panel-copy" style={{ margin: 0 }}>
+              <strong>Assinaturas</strong> — nome e data/hora do visto. Vazio = «Pendente» no PDF.
+            </p>
+            <div className="form-columns">
+              <Input
+                disabled={!allowEdit}
+                label="Recebimento / Almoxarifado — nome"
+                onChange={(e) => setAssinatura('assinaturaRecebimento', { nome: e.target.value })}
+                value={payload.assinaturaRecebimento.nome}
+              />
+              <Input
+                disabled={!allowEdit}
+                label="Data/hora"
+                onChange={(e) => setAssinatura('assinaturaRecebimento', { data: e.target.value })}
+                placeholder="21/07/2026 08:20"
+                value={payload.assinaturaRecebimento.data}
+              />
+            </div>
+            <div className="form-columns">
+              <Input
+                disabled={!allowEdit}
+                label="Inspetor de Qualidade — nome"
+                onChange={(e) => setAssinatura('assinaturaQualidade', { nome: e.target.value })}
+                value={payload.assinaturaQualidade.nome}
+              />
+              <Input
+                disabled={!allowEdit}
+                label="Data/hora"
+                onChange={(e) => setAssinatura('assinaturaQualidade', { data: e.target.value })}
+                placeholder="21/07/2026 08:35"
+                value={payload.assinaturaQualidade.data}
+              />
+            </div>
+            <div className="form-columns">
+              <Input
+                disabled={!allowEdit}
+                label="Fiscalização / Cliente — nome"
+                onChange={(e) => setAssinatura('assinaturaFiscalizacao', { nome: e.target.value })}
+                value={payload.assinaturaFiscalizacao.nome}
+              />
+              <Input
+                disabled={!allowEdit}
+                label="Data/hora"
+                onChange={(e) => setAssinatura('assinaturaFiscalizacao', { data: e.target.value })}
+                placeholder="Pendente se vazio"
+                value={payload.assinaturaFiscalizacao.data}
+              />
+            </div>
+          </div>
+        ) : null}
+
         <label className="field" style={{ display: 'grid', gap: 6 }}>
           <span>Observações (aparecem no cabeçalho impresso)</span>
           <textarea
@@ -776,6 +870,12 @@ export function RelatorioFotograficoPage() {
             </div>
             {allowEdit ? (
               <>
+                <Input
+                  disabled={!allowEdit}
+                  label="Etiqueta curta (ex.: BOBINA 01)"
+                  onChange={(e) => updateEtiqueta(f.id, e.target.value)}
+                  value={f.etiqueta}
+                />
                 <label className="field" style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
                   <input
                     checked={f.mostrarLegendaImpressao}
@@ -784,12 +884,24 @@ export function RelatorioFotograficoPage() {
                   />
                   <span>Mostrar legenda na impressão</span>
                 </label>
-                <Input
-                  disabled={!f.mostrarLegendaImpressao}
-                  label="Legenda (se ativada acima)"
-                  onChange={(e) => updateLegenda(f.id, e.target.value)}
-                  value={f.legenda}
-                />
+                <label className="field" style={{ display: 'grid', gap: 6, marginBottom: 8 }}>
+                  <span>Legenda (1.ª linha = título; resto = detalhe)</span>
+                  <textarea
+                    disabled={!f.mostrarLegendaImpressao || !allowEdit}
+                    onChange={(e) => updateLegenda(f.id, e.target.value)}
+                    rows={3}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px solid var(--border-strong)',
+                      background: 'var(--input-bg)',
+                      color: 'var(--text-primary)',
+                      fontFamily: 'inherit',
+                      width: '100%',
+                    }}
+                    value={f.legenda}
+                  />
+                </label>
                 <Button onClick={() => void removeFoto(f.id)} type="button" variant="ghost">
                   Remover foto
                 </Button>

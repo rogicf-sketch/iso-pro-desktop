@@ -10,9 +10,21 @@ export type RelatorioFotograficoFoto = {
   /** Chave `iso-media:rf:...` (IndexedDB) ou `iso-storage:evidencias/...` (Supabase Storage). */
   imageRef?: string;
   legenda: string;
+  /**
+   * Etiqueta curta impressa junto à foto (ex.: BOBINA 01, ITEM 3).
+   * Opcional — não substitui a legenda.
+   */
+  etiqueta: string;
   createdAt: string;
   /** Se false, a legenda não aparece na impressão (só a imagem e o número da foto). */
   mostrarLegendaImpressao: boolean;
+};
+
+/** Bloco de assinatura / visto digital no PDF. */
+export type RelatorioFotograficoAssinatura = {
+  nome: string;
+  /** Data ISO ou texto livre (ex. 21/07/2026 08:20). */
+  data: string;
 };
 
 export type RelatorioFotograficoPayload = {
@@ -43,6 +55,11 @@ export type RelatorioFotograficoPayload = {
   localObra: string;
   /** Incluir logo institucional na primeira página do PDF/impressão. */
   incluirLogoImpressao: boolean;
+  /** Incluir bloco de assinaturas / visto digital no final do PDF. */
+  incluirAssinaturasImpressao: boolean;
+  assinaturaRecebimento: RelatorioFotograficoAssinatura;
+  assinaturaQualidade: RelatorioFotograficoAssinatura;
+  assinaturaFiscalizacao: RelatorioFotograficoAssinatura;
   fotos: RelatorioFotograficoFoto[];
   /** Quantidade de vezes que o relatório HTML foi gerado (métrica). */
   relatoriosGerados: number;
@@ -56,3 +73,7 @@ export type RelatorioFotograficoMeta = {
   salvoEm: string;
   fotoCount: number;
 };
+
+export function defaultRelatorioFotograficoAssinatura(): RelatorioFotograficoAssinatura {
+  return { nome: '', data: '' };
+}
