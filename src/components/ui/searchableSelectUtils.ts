@@ -50,7 +50,7 @@ export function resolveSearchableOption<T extends { value: string; label: string
 
   const byPrefix = options.filter((o) => {
     const label = o.label.trim().toLowerCase();
-    return label.startsWith(t) && (label.length === t.length || /[\s—\-]/.test(label.charAt(t.length)));
+    return label.startsWith(t) && (label.length === t.length || /[\s—-]/.test(label.charAt(t.length)));
   });
   if (byPrefix.length === 1) return byPrefix[0];
 
