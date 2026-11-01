@@ -7,9 +7,12 @@ import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
+import { ResourceEditLockBanner } from '../../../components/ui/ResourceEditLockBanner';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
+import { useResourceEditLock } from '../../../hooks/useResourceEditLock';
 import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
 import type { ServiceWriteResult } from '../../../types/common.types';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { RecebimentoItensEditor } from './RecebimentoItensEditor';
 import { listarColaboradores } from '../../colaboradores/services/colaboradores.service';
 import { listarFornecedores } from '../../fornecedores/services/fornecedores.service';
@@ -28,6 +31,8 @@ import {
 
 type Props = {
   initialValue: RecebimentoFormData;
+  /** Id do recebimento em edicao (lock); omitir na criacao. */
+  editId?: string;
   onCancel: () => void;
   onSubmit: (data: RecebimentoFormData) => Promise<ServiceWriteResult>;
   onReloadAfterConflict?: () => void | Promise<void>;
@@ -49,6 +54,7 @@ type Props = {
 
 export function RecebimentoForm({
   initialValue,
+  editId,
   onCancel,
   onSubmit,
   onReloadAfterConflict,
@@ -57,11 +63,22 @@ export function RecebimentoForm({
   podeCorrigirItensNaVisualizacao = false,
   recebimentoRelatorioMeta,
 }: Props) {
+  const { user, canAccessAction } = useAuth();
   const [form, setForm] = useState<RecebimentoFormData>(initialValue);
   const [editandoItensNf, setEditandoItensNf] = useState(false);
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const lockEnabled =
+    Boolean(editId?.trim()) && (!readOnly || (podeCorrigirItensNaVisualizacao && editandoItensNf));
+  const editLock = useResourceEditLock({
+    kind: 'recebimento',
+    resourceId: editId,
+    enabled: lockEnabled,
+    holderLogin: user?.login,
+    holderLabel: user?.nome ?? user?.login,
+    canForceRelease: canAccessAction('usuarios', 'administrar'),
+  });
   const [folhaCampoBusy, setFolhaCampoBusy] = useState(false);
   const [folhaCampoAviso, setFolhaCampoAviso] = useState<string | null>(null);
   const guardedCancel = useModalGuardedClose(onCancel);
@@ -126,6 +143,10 @@ export function RecebimentoForm({
     if (readOnly) return;
     setError('');
     setSnapshotConflict(false);
+    if (!(await editLock.ensureClaim())) {
+      setError(editLock.aviso || 'Recebimento em uso por outro posto.');
+      return;
+    }
     setIsSaving(true);
     const result = await onSubmit(form);
 
@@ -140,6 +161,10 @@ export function RecebimentoForm({
   async function handleSalvarSomenteItensNf() {
     setError('');
     setSnapshotConflict(false);
+    if (!(await editLock.ensureClaim())) {
+      setError(editLock.aviso || 'Recebimento em uso por outro posto.');
+      return;
+    }
     setIsSaving(true);
     const result = await onSubmit(form);
     if (!result.success) {
@@ -460,6 +485,17 @@ export function RecebimentoForm({
         />
       </section>
 
+      {editLock.bloqueado || editLock.aviso ? (
+        <ResourceEditLockBanner
+          aviso={editLock.aviso}
+          canForceRelease={canAccessAction('usuarios', 'administrar')}
+          forcing={editLock.forcing}
+          onForceRelease={() => {
+            void editLock.forceRelease();
+          }}
+        />
+      ) : null}
+
       <SnapshotConflictHint show={snapshotConflict} onReload={onReloadAfterConflict} />
       {error ? (
         <div className="error-box" ref={errorBoxRef}>
@@ -543,13 +579,13 @@ export function RecebimentoForm({
             <Button disabled={isSaving} onClick={cancelarEdicaoItensNf} type="button" variant="ghost">
               Cancelar edicao dos itens
             </Button>
-            <Button disabled={isSaving} onClick={() => void handleSalvarSomenteItensNf()} type="button">
+            <Button disabled={isSaving || editLock.bloqueado} onClick={() => void handleSalvarSomenteItensNf()} type="button">
               {isSaving ? 'Salvando...' : 'Salvar alteracoes nos itens'}
             </Button>
           </>
         ) : null}
         {!readOnly ? (
-          <Button disabled={isSaving} type="submit">
+          <Button disabled={isSaving || editLock.bloqueado} type="submit">
             {isSaving ? 'Salvando...' : 'Salvar recebimento'}
           </Button>
         ) : null}

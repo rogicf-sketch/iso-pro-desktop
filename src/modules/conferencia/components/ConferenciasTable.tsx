@@ -1,7 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconFolderOpen } from '../../../components/ui/TableActionIcons';
 import type { ConferenciaListItem } from '../types/conferencia.types';
 
 type Props = {
@@ -9,6 +10,14 @@ type Props = {
   selectedId: string;
   onSelect: (id: string) => void;
 };
+
+function statusLabel(status: ConferenciaListItem['status']): string {
+  if (status === 'conferido') return 'Conferido';
+  if (status === 'parcialmente_conferido') return 'Parcial';
+  if (status === 'aguardando_conferencia') return 'Aguardando';
+  if (status === 'divergente') return 'Divergente';
+  return status;
+}
 
 function getTone(status: ConferenciaListItem['status']) {
   if (status === 'conferido') return 'ok';
@@ -41,19 +50,24 @@ export function ConferenciasTable({ items, selectedId, onSelect }: Props) {
         {
           key: 'status',
           header: 'Status',
-          render: (item) => <StatusBadge text={item.status} tone={getTone(item.status)} />,
+          render: (item) => <StatusBadge text={statusLabel(item.status)} tone={getTone(item.status)} />,
         },
         {
           key: 'acoes',
           header: 'Acoes',
           render: (item) => (
-            <Button onClick={() => onSelect(item.id)} variant={selectedId === item.id ? 'primary' : 'ghost'}>
-              {selectedId === item.id ? 'Selecionado' : 'Abrir'}
-            </Button>
+            <TableIconButton
+              label={selectedId === item.id ? 'Selecionado' : 'Abrir'}
+              onClick={() => onSelect(item.id)}
+              tone={selectedId === item.id ? 'accent' : 'neutral'}
+            >
+              <IconFolderOpen />
+            </TableIconButton>
           ),
         },
       ]}
-      emptyText="Nenhum recebimento no fluxo de conferencia."
+      emptyDescription="Quando houver recebimentos aguardando, aparecem aqui para conferir."
+      emptyText="Nenhum recebimento no fluxo de conferência"
       items={items}
     />
   );

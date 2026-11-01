@@ -16,11 +16,11 @@ Aplica-se ao **iso-pro-desktop** (Web **0.1.75+**, Windows **0.1.75+**) e **iso_
 | Obra / tenant UUID | `00000000-0000-0000-0000-000000000001` |
 | URL Supabase | https://huvktaxsosxrfpvdigxq.supabase.co |
 | URL produção web | https://isoprogestaodemateriais.com.br |
-| Versão PC/Web testada | 0.1.153+ (sync outbox idle + ensure_pending) |
-| Versão mobile testada | 1.0.78+ |
+| Versão PC/Web testada | 0.1.182 (JWT enterprise fail-closed + auto-link Auth) |
+| Versão mobile testada | 1.0.91 (JWT fail-closed) |
 | Responsável TI | |
 | Data início | 2026-07-11 |
-| Data go-live JWT | |
+| Data go-live JWT | 2026-07-21 — cutover prod (revoke anon auth RPC) |
 | PR1 dual-path (sem cutover) | **Feito** 2026-07-12 — migration `20260712120000` + login prefer JWT |
 
 ---
@@ -34,9 +34,23 @@ Aplica-se ao **iso-pro-desktop** (Web **0.1.75+**, Windows **0.1.75+**) e **iso_
 | P1.3 | Mobile login prefer JWT | [x] | `69f875a` |
 | P1.4 | `npm run jwt:auditar-link` — listar `rpc_only` vs `jwt_ready` | [x] | 2026-07-12: admin + ceci `jwt_ready`; restantes activos ainda podem ser `rpc_only` |
 | P1.5 | Ligar restantes activos (Fase 4) até `rpc_only = 0` | [x] | 2026-07-21: activos=2 jwt_ready=2 rpc_only=0 (`ops-security-baseline`) |
-| P1.6 | Só então: staging + revogar EXECUTE anon em `iso_pro_autenticar_usuario` | [x] | 2026-07-21 staging `anon_execute=false`; **prod ainda com fallback** |
+| P1.6 | Só então: staging + revogar EXECUTE anon em `iso_pro_autenticar_usuario` | [x] | 2026-07-21 staging + **prod** `anon_execute=false` |
 | P1.7 | Mobile APK com JWT-prefer + Sentry `auth_path` (`client: mobile`) | [x] | 2026-07-12: APK 1.0.61 — login OK + 1 atendimento OK |
-| P1.8 | Acompanhar Sentry `iso.auth_path` (web + mobile) ≥ alguns dias | [ ] | paths esperados: `jwt` / `rpc_fallback` / `rpc_only` |
+| P1.8 | Acompanhar Sentry `iso.auth_path` (web + mobile) ≥ alguns dias | [~] | 2026-07-24: pós-cutover esperar quase só `jwt` (fail-closed remove `rpc_fallback`/`rpc_only` em builds novos) |
+
+## Pós-cutover / enterprise (2026-07-24)
+
+Cutover principal **já feito** (2026-07-21). Esta secção é endurecimento — ver `docs/JWT-ENTERPRISE-HARDENING.md`.
+
+| # | Item | OK? | Data |
+|---|------|-----|------|
+| E.1 | Auditoria RPCs `anon` EXECUTE — snippet + política manter/revogar | [x] | 2026-07-24 `auditar_anon_execute_iso_pro.sql` + doc |
+| E.2 | Login fail-closed (desktop/web + mobile) — sem fallback silencioso | [x] | 2026-07-24 |
+| E.3 | Auto-ligar Auth ao criar utilizador (`iso_pro_admin_user` + aviso UI) | [x] | 2026-07-24 Edge deploy |
+| E.4 | MFA admin activo + runbook recuperação | [x] | 2026-07-24 `jwt:verificar-mfa-admin` — admin TOTP OK |
+| E.5 | `npm run jwt:auditar-link` — 0 `rpc_only` | [x] | 2026-07-24: activos=2 jwt_ready=2 |
+| E.6 | `verify-jwt-cutover.mjs` — anon bloqueado em autenticar | [x] | 2026-07-24 |
+| E.7 | Release PC/Web + APK com fail-closed / auto-link | [x] | 2026-07-24 web+EXE **0.1.182** + APK **1.0.91** |
 
 ## Fase 0 — Pré-requisitos (obrigatório)
 
@@ -145,7 +159,7 @@ Login como administrador mobile (`configuracoes` / `mobile` → administrar).
 | 6.1 | Login piloto (JWT) → **Atendimento** → 1 baixa teste | Sucesso; comando aparece no painel sync (origem PC) | [ ] |
 | 6.2 | Mobile **1.0.43** → mesma obra → 1 baixa teste | Comando origem Mobile; PC vê na auditoria | [ ] |
 | 6.3 | PC B (outro browser) → Ctrl+F5 → mesmo atendimento | Dados coincidem | [ ] |
-| 6.4 | `npm run test:load:atendimento -- --operators 10 --rounds 2` (staging) | ≥ 95% sucesso | [ ] |
+| 6.4 | `npm run test:load:atendimento -- --operators 10 --rounds 2` (staging) | >= 95% sucesso | [x] | 2026-07-22 staging `vghbcwkvmmihakunvwqw`: comandos 95%, hotspot/canteiro 100% — `docs/LOAD-TEST-RESULTADOS.md` |
 | 6.5 | Logout → login utilizador **sem** Auth ligado | `anon_compativel`; operações normais | [ ] |
 
 Variáveis para teste de carga:
@@ -219,6 +233,7 @@ Por omissão, o bootstrap JWT está **activo** no cliente (tenta `signInWithPass
 | `supabase/functions/README.md` | Secrets e deploy Edge Functions |
 | `docs/runbook-operacao.md` | Runbook geral |
 | `docs/guia-piloto-jwt-admin.md` | Passo a passo piloto `admin` (menus) |
+| `docs/JWT-ENTERPRISE-HARDENING.md` | Pós-cutover: anon audit, fail-closed, MFA recuperação |
 | `docs/email-ti-ativacao-jwt.md` | Modelo email para equipa TI |
 | Mobile Fase 3 JWT | `C:\IPB\mob\docs\fase-3-mobile-jwt.md` (APK **1.0.44**) |
 

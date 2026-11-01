@@ -1,8 +1,9 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
+import { appendDomainEventFromAuditBestEffort } from '../../../lib/domainEventsAppend';
 import { recordOperationalAuditBestEffort } from '../../../lib/operationalAudit';
 import { parseAuthAuditEventsList } from '../schemas/authAuditLocal.zod';
 
-type AuthAuditEventType =
+export type AuthAuditEventType =
   | 'login_success'
   | 'login_failure'
   | 'logout'
@@ -21,9 +22,19 @@ type AuthAuditEventType =
   | 'recebimento_excluido_definitivamente'
   | 'recebimento_destravado_correcao'
   | 'recebimento_conferencia_finalizada'
+  | 'recebimento_criado'
+  | 'recebimento_editado'
+  | 'recebimento_cancelado'
   | 'recebimentos_excluidos_definitivamente'
   | 'materiais_excluidos_definitivamente'
   | 'materiais_copia_local_desde_nuvem'
+  | 'material_criado'
+  | 'material_editado'
+  | 'inventario_criado'
+  | 'inventario_editado'
+  | 'inventario_fechado'
+  | 'documento_criado'
+  | 'documento_editado'
   | 'atendimento_registrado'
   | 'rir_destravado_correcao'
   | 'planejamento_limpeza_codigos_persistida'
@@ -35,7 +46,12 @@ type AuthAuditEventType =
   | 'purga_nuvem_operacional_executada'
   | 'purga_nuvem_com_utilizadores_executada'
   | 'limpeza_cadastros_local_executada'
-  | 'limpeza_cadastros_nuvem_executada';
+  | 'limpeza_cadastros_nuvem_executada'
+  | 'mfa_challenge_success'
+  | 'mfa_challenge_failure'
+  | 'mfa_enroll_success'
+  | 'mfa_enroll_failure'
+  | 'mfa_unenroll_blocked';
 
 export type AuthAuditEvent = {
   id: string;
@@ -84,15 +100,21 @@ function readAuditEvents(): AuthAuditEvent[] {
 }
 
 export function appendAuthAuditEvent(event: Omit<AuthAuditEvent, 'id' | 'createdAt'>) {
-  const items = readAuditEvents();
   const nextItem: AuthAuditEvent = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     ...event,
   };
 
-  const nextItems = [nextItem, ...items].slice(0, MAX_AUDIT_ITEMS);
-  localStorage.setItem(authAuditStorageKey(), JSON.stringify(nextItems));
+  try {
+    const items = readAuditEvents();
+    const nextItems = [nextItem, ...items].slice(0, MAX_AUDIT_ITEMS);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(authAuditStorageKey(), JSON.stringify(nextItems));
+    }
+  } catch {
+    /* nunca bloquear operação de negócio por falha de log local */
+  }
 
   // Espelho na nuvem (who/when/IP/dispositivo) — nunca bloqueia a UI.
   recordOperationalAuditBestEffort({
@@ -102,6 +124,17 @@ export function appendAuthAuditEvent(event: Omit<AuthAuditEvent, 'id' | 'created
     targetLogin: event.targetLogin,
     entityType: event.entityType,
     entityId: event.entityId,
+    before: event.before,
+    after: event.after,
+  });
+
+  // P2: eventos de dominio append-only (best-effort).
+  appendDomainEventFromAuditBestEffort({
+    auditType: event.type,
+    actorLogin: event.actorLogin,
+    entityType: event.entityType,
+    entityId: event.entityId,
+    detail: event.detail,
     before: event.before,
     after: event.after,
   });

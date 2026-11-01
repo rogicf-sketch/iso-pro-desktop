@@ -4,9 +4,7 @@ import {
   type MetricasPorCodigoMaterial,
 } from '../../documentos/services/documentoPlanejamento';
 import { carregarMetricasPlanejamentoPorCodigo } from '../../documentos/services/documentos.service';
-import { buildSaldoMap, type SaldoSnapshotPayload } from '../../estoque/saldoFromSnapshot';
-import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
-import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
+import { carregarSaldoMapFromAgregadosNuvem } from '../../../lib/operacaoEscalaContagens';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import type { Material } from '../types/material.types';
@@ -120,8 +118,8 @@ async function carregarMateriaisComSaldo(): Promise<Material[]> {
   const base = await carregarMateriaisDoCadastro();
   if (!hasSupabaseConfig()) return base;
   try {
-    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
-    const saldoMap = buildSaldoMap(payload);
+    const saldoMap = await carregarSaldoMapFromAgregadosNuvem();
+    if (!saldoMap) return base;
     return base.map((m) => ({
       ...m,
       saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual,

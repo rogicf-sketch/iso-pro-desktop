@@ -2,12 +2,15 @@ import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
 import { isElectronApp } from '../../../lib/isElectronApp';
 import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { RirFilters } from '../components/RirFilters';
 import { RirForm } from '../components/RirForm';
@@ -28,6 +31,8 @@ export function RirPage() {
     error,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     modoNumeracao,
     recebimentoChoices,
@@ -45,6 +50,7 @@ export function RirPage() {
     submitRir,
     removeRir,
     exportarRirExcel,
+    exportingRirCsv,
     rirDestravarAlvo,
     rirDestravarSenha,
     rirDestravarBusy,
@@ -92,21 +98,39 @@ export function RirPage() {
     }
   }, []);
 
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource,
+    hasCloudConfig,
+    staleWhileRevalidate,
+    fallbackReason,
+  });
+
+  usePageChrome(
+    {
+      meta:
+        loading && total === 0
+          ? 'A carregar…'
+          : `${total.toLocaleString('pt-BR')} RIR · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, total, fonteNuvemOk],
+  );
+
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Qualidade</p>
-          <h2>RIR — Inspecao de recebimento</h2>
-        </div>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
         {canEdit || canExportCsv ? (
           <div className="panel-toolbar">
             {canExportCsv ? (
               <div className="panel-toolbar__group" role="group" aria-label="Exportacao">
                 <span className="panel-toolbar__label">Exportacao</span>
                 <div className="panel-toolbar__buttons">
-                  <Button type="button" variant="ghost" onClick={() => void exportarRirExcel()}>
-                    Excel (CSV) completo
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={exportingRirCsv}
+                    onClick={() => void exportarRirExcel()}
+                  >
+                    {exportingRirCsv ? 'A exportar…' : 'Excel (CSV) completo'}
                   </Button>
                 </div>
               </div>
@@ -152,17 +176,23 @@ export function RirPage() {
           </div>
         </div>
       </ModuleHelp>
-      <OperationalNotice>
-        {cloudStatus === 'ready' && hasCloudConfig
-          ? 'Fonte atual: Supabase. RIR sincronizado com a base em nuvem.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
-      </OperationalNotice>
+      <FonteDadosNotice
+        healthy={fonteNuvemOk}
+        fallbackMessage={
+          hasCloudConfig
+            ? 'Fonte atual: fallback local. A lista ainda nao veio da nuvem (rede ou sync).'
+            : cloudStatus === 'partial'
+              ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        }
+      />
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
       <RirFilters filters={filters} onChange={setFilters} />
       {error ? <div className="error-box">{error}</div> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {exportingRirCsv ? (
+        <OperationalNotice>A exportar RIR para Excel… Aguarde o download.</OperationalNotice>
+      ) : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
       {rirImpressaoAviso ? <OperationalNotice tone="critical">{rirImpressaoAviso}</OperationalNotice> : null}
       {rirPreviewBusyId ? (
         <OperationalNotice>A abrir pre-visualizacao do RIR…</OperationalNotice>
@@ -203,6 +233,7 @@ export function RirPage() {
             }}
           />
           <Pagination
+            itemLabel="RIR"
             onPageChange={(page) => setFilters({ ...filters, page })}
             page={filters.page}
             pageSize={filters.pageSize}
@@ -277,6 +308,7 @@ export function RirPage() {
               </p>
               <p style={{ marginTop: 10 }}>Esta acao nao pode ser desfeita.</p>
             </OperationalNotice>
+            {error ? <div className="error-box">{error}</div> : null}
             {excluindoRir ? <OperationalNotice>Excluindo...</OperationalNotice> : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
               <Button disabled={excluindoRir} onClick={fecharExcluirRir} type="button" variant="ghost">

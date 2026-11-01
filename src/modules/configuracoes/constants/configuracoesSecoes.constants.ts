@@ -14,8 +14,9 @@ export const CONFIGURACOES_SECOES: ConfiguracaoSecaoMeta[] = [
   {
     id: 'obra',
     rotulo: 'Obra',
-    resumo: 'Cliente, projeto, ambiente no PC e rodapé nos impressos',
-    intro: 'Contexto da obra, separação de dados por ambiente local e identificação nos relatórios impressos.',
+    resumo: 'Cliente, projeto, empresa na nuvem e rodapé nos impressos',
+    intro: 'Contexto da obra, empresas na nuvem e identificação nos relatórios impressos.',
+    adminOnly: true,
   },
   {
     id: 'aparencia',

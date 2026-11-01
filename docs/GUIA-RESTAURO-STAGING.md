@@ -4,6 +4,8 @@
 
 Projecto prod: `huvktaxsosxrfpvdigxq` (`rogicf-iso-pro`)
 
+**Nota 2026-07-22:** projecto `vghbcwkvmmihakunvwqw` (`iso-pro-staging`) já tem schema (preflight + `db push`) e seed sintético `scripts/seed-staging-volume.sql` (8k docs / 64k itens) — serve para stress OCC/listagens. **Restore to new project** continua o caminho para clone PHYSICAL com dados reais de obra.
+
 ---
 
 ## Passos no Dashboard (tu)
@@ -11,7 +13,7 @@ Projecto prod: `huvktaxsosxrfpvdigxq` (`rogicf-iso-pro`)
 1. Abre: https://supabase.com/dashboard/project/huvktaxsosxrfpvdigxq/database/backups/scheduled
 2. Separador **Restore to new project (BETA)**
 3. Nome sugerido: `iso-pro-staging`
-4. Escolhe o backup mais recente (ex.: `11 Jul 2026 07:35`)
+4. Escolhe o backup mais recente
 5. Confirma e **espera** o projecto novo ficar Healthy
 6. Copia o **Reference ID** (project-ref) do projecto novo
 7. Cola o ref neste chat
@@ -30,10 +32,11 @@ npm run staging:bootstrap -- -ProjectRef "COLE_O_REF" -AnonKey "COLE_A_ANON_KEY"
 
 Alternativa manual: `npm run staging:link -- -ProjectRef "COLE_O_REF"` + preencher `.env.staging` + `npm run ops:smoke-diario`.
 
-Marcar: `docs/CHECKLIST-RESTAURO-BACKUP.md` secção Restauro + Fecho. · Cutover: `docs/GUIA-JWT-CUTOVER.md`.
+Marcar: `docs/CHECKLIST-RESTAURO-BACKUP.md` secção Restauro + Fecho. · Cutover: `docs/GUIA-JWT-CUTOVER.md`.  
+Load-tests: `docs/LOAD-TEST-RESULTADOS.md`.
 
 ---
 
 ## Nota Storage
 
-Backups PHYSICAL **não** incluem ficheiros do Storage — só metadados/BD. Fotos/PDFs em Storage precisam de política à parte se forem críticos.
+Backups PHYSICAL **não** incluem ficheiros do Storage — só metadados/BD. Fotos/PDFs em Storage precisam de política à parte (`docs/POLITICA-BACKUP-STORAGE.md`).

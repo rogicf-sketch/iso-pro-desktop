@@ -1,8 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
+import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
   atualizarStatusEtiqueta,
@@ -50,6 +52,7 @@ export function useEtiquetas() {
   const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
+  const hasCloudConfig = hasSupabaseConfig();
   const [filters, setFilters] = useState<EtiquetaFiltro>(initialFilters);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -63,7 +66,7 @@ export function useEtiquetas() {
     setSelectedIds(new Set());
   }
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -73,13 +76,31 @@ export function useEtiquetas() {
       if (!result.success || !result.data) {
         throw new Error(result.error ?? 'Nao foi possivel carregar etiquetas.');
       }
-      return { items: result.data.items, total: result.data.total };
+      return {
+        items: result.data.items,
+        total: result.data.total,
+        fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
+      };
     },
   });
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
+  const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['etiquetas', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -245,6 +266,10 @@ export function useEtiquetas() {
     loading,
     error: error || listError,
     success,
+    fallbackReason,
+    listSource,
+    staleWhileRevalidate,
+    hasCloudConfig,
     filters,
     formInitialValue,
     isModalOpen,

@@ -1,18 +1,25 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ListPageShell, PanelToolbarGroup } from '../../../components/layout/ListPageShell';
 import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
+import { getSupabaseOperationalStatus, hasSupabaseConfig } from '../../../lib/supabase';
 import { Button } from '../../../components/ui/Button';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
+import { RelatorioFotograficoFilters } from '../components/RelatorioFotograficoFilters';
+import { RelatorioFotograficoTable } from '../components/RelatorioFotograficoTable';
 import {
   carregarRelatorioFotografico,
+  hydrateRelatorioFotograficoPayloadForPreview,
   estimativaBytesTodoLocalStorage,
   estimativaBytesTotalArmazenamentoRfLocal,
   excluirRelatorioFotograficoLocal,
-  hydrateRelatorioFotograficoPayload,
   limparTodosRelatoriosFotograficosLocais,
   listarMetadadosRelatoriosFotograficosComNuvem,
 } from '../services/relatorioFotografico.service';
@@ -41,25 +48,76 @@ function formatSalvo(iso: string): string {
   return new Date(t).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+type RfListLocationState = {
+  rfSalvoOk?: boolean;
+  mensagem?: string;
+};
+
 export function RelatorioFotograficoListPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { confirm } = useConfirmDialog();
   const { canAccessAction } = useAuth();
   const canEdit = canAccessAction('relatorios', 'editar');
+  const cloudStatus = getSupabaseOperationalStatus();
+  const hasCloudConfig = hasSupabaseConfig();
 
   const [items, setItems] = useState<RelatorioFotograficoMeta[]>([]);
+  const [listSource, setListSource] = useState<'supabase' | 'local' | 'remote'>('local');
+  const [fallbackReason, setFallbackReason] = useState<string | undefined>();
+  const [loading, setLoading] = useState(true);
+  const [busca, setBusca] = useState('');
   const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
+    setLoading(true);
     void listarMetadadosRelatoriosFotograficosComNuvem().then((r) => {
-      if (r.success && r.data) setItems(r.data);
+      if (r.success && r.data) {
+        setItems(r.data);
+        setListSource(r.meta?.source === 'supabase' ? 'supabase' : 'local');
+        setFallbackReason(r.meta?.fallbackReason);
+      }
+      setLoading(false);
     });
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const st = location.state as RfListLocationState | null;
+    if (!st?.rfSalvoOk) return;
+    setMsg({ tone: 'ok', text: st.mensagem?.trim() || 'Relatório fotográfico salvo.' });
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
+
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource,
+    hasCloudConfig,
+    fallbackReason,
+  });
+
+  const filtered = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((m) => {
+      const titulo = m.titulo.toLowerCase();
+      const num = m.numeroRelatorio.toLowerCase();
+      return titulo.includes(q) || num.includes(q);
+    });
+  }, [items, busca]);
+
+  usePageChrome(
+    {
+      meta:
+        loading && items.length === 0
+          ? 'A carregar…'
+          : `${items.length.toLocaleString('pt-BR')} RF · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, items.length, fonteNuvemOk],
+  );
 
   const bytesRf = estimativaBytesTotalArmazenamentoRfLocal();
   const bytesLs = estimativaBytesTodoLocalStorage();
@@ -78,8 +136,9 @@ export function RelatorioFotograficoListPage() {
         setMsg({ tone: 'err', text: result.error ?? 'Falha ao carregar o relatório.' });
         return;
       }
-      const ready = await hydrateRelatorioFotograficoPayload(mergeObraFromConfigRf(result.data));
-      const html = montarHtmlRelatorioFotografico(ready);
+      // Mesmo fluxo da web: URLs assinadas + overlay (rápido; fotos carregam).
+      const ready = await hydrateRelatorioFotograficoPayloadForPreview(mergeObraFromConfigRf(result.data));
+      const html = await montarHtmlRelatorioFotografico(ready);
       const codigo = ready.numeroRelatorio || ready.titulo || m.id;
       const res = await preVisualizarRelatorioProfissional({
         html,
@@ -92,7 +151,7 @@ export function RelatorioFotograficoListPage() {
           tone: 'err',
           text:
             res.error ??
-            'Não foi possível abrir a janela de pré-visualização. Permita pop-ups para este site ou use Editar e depois «Imprimir / PDF».',
+            'Não foi possível abrir a pré-visualização. Permita pop-ups ou use Editar e depois «Imprimir / PDF».',
         });
       }
     } catch {
@@ -142,132 +201,87 @@ export function RelatorioFotograficoListPage() {
   };
 
   return (
-    <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Relatórios</p>
-          <h2>Relatório fotográfico</h2>
-        </div>
-        <div className="panel-toolbar">
-          <div className="panel-toolbar__group" role="group" aria-label="Navegacao">
-            <span className="panel-toolbar__label">Navegação</span>
-            <div className="panel-toolbar__buttons">
-              <Link className="ghost-button" to="/relatorios">
-                Painel relatórios
-              </Link>
-            </div>
-          </div>
+    <ListPageShell
+      toolbar={
+        <>
+          <PanelToolbarGroup label="Navegação" aria-label="Navegacao">
+            <Link className="ghost-button" to="/relatorios">
+              Painel relatórios
+            </Link>
+          </PanelToolbarGroup>
           {canEdit ? (
-            <div className="panel-toolbar__group" role="group" aria-label="Novo relatorio">
-              <span className="panel-toolbar__label">Registo</span>
-              <div className="panel-toolbar__buttons">
-                <Button onClick={novo} type="button" variant="primary">
-                  Novo relatório
-                </Button>
-                <Button onClick={() => void onLimparTodosLocais()} type="button" variant="ghost">
-                  Limpar tudo (este PC)
-                </Button>
-              </div>
-            </div>
+            <PanelToolbarGroup label="Registo" aria-label="Novo relatorio">
+              <Button onClick={novo} type="button" variant="primary">
+                Novo relatório
+              </Button>
+              <Button onClick={() => void onLimparTodosLocais()} type="button" variant="ghost">
+                Limpar tudo (este PC)
+              </Button>
+            </PanelToolbarGroup>
           ) : null}
-        </div>
-      </div>
-
-      <ModuleHelp>
-        <p className="panel-copy">
-          Cada relatório tem o seu próprio número, fotos e vínculo opcional a recebimentos. <strong>Visualizar</strong> mostra o relatório
-          pronto para impressão (janela nova ou painel sobreposto nesta app — Ctrl+P para PDF). <strong>Editar</strong> abre a ficha de
-          preenchimento; <strong>Excluir</strong> remove um relatório. <strong>Limpar tudo (este PC)</strong> apaga todos os relatórios
-          fotográficos locais e as fotos em IndexedDB.
-        </p>
-      </ModuleHelp>
-
-      {msg ? (
-        <OperationalNotice tone={msg.tone === 'err' ? 'critical' : 'neutral'}>{msg.text}</OperationalNotice>
-      ) : null}
-
-      {items.length > 0 ? (
-        <ModuleHelp>
-          <p
-            className="panel-copy"
-            style={{
-              fontSize: 13,
-              padding: '10px 12px',
-              borderRadius: 10,
-              border: '1px solid var(--border-strong)',
-              background:
-                bytesLs >= 4.5 * 1024 * 1024
-                  ? 'rgba(220, 38, 38, 0.12)'
-                  : bytesRf >= 2.5 * 1024 * 1024
-                    ? 'rgba(234, 179, 8, 0.12)'
-                    : 'var(--surface-elevated, rgba(148, 163, 184, 0.08))',
-            }}
-          >
-            <strong>Espaço no navegador:</strong> relatórios fotográficos ~{formatBytesPt(bytesRf)} · total da app no{' '}
-            <code>localStorage</code> ~{formatBytesPt(bytesLs)}. Valores aproximados; o teto real é do browser (frequentemente modesto). Muitas
-            fotos em alta definição enchem rápido — use PDF arquivado e apague o que não precisar.
-          </p>
-        </ModuleHelp>
-      ) : null}
-
-      {items.length === 0 ? (
-        <div className="info-card" style={{ padding: 20 }}>
-          <p className="panel-copy" style={{ marginBottom: 12 }}>
-            Ainda não há relatórios guardados neste equipamento.
-          </p>
-          {canEdit ? (
-            <Button onClick={novo} type="button" variant="primary">
-              Criar primeiro relatório
-            </Button>
+        </>
+      }
+      notices={
+        <>
+          <ModuleHelp>
+            <p className="panel-copy">
+              Cada relatório tem o seu próprio número, fotos e vínculo opcional a recebimentos. Use a pré-visualização
+              (ícone olho) antes de imprimir/PDF. <strong>Limpar tudo (este PC)</strong> apaga catálogo local e fotos em
+              IndexedDB.
+            </p>
+          </ModuleHelp>
+          <FonteDadosNotice
+            healthy={fonteNuvemOk}
+            fallbackMessage={
+              hasCloudConfig
+                ? 'Fonte atual: fallback local. A lista ainda nao veio da nuvem (rede ou sync).'
+                : cloudStatus === 'partial'
+                  ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+                  : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+            }
+          />
+          {fallbackReason ? (
+            <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice>
           ) : null}
-        </div>
+          {msg ? (
+            <OperationalNotice tone={msg.tone === 'err' ? 'critical' : 'success'}>{msg.text}</OperationalNotice>
+          ) : null}
+          {previewId ? <OperationalNotice>A abrir pré-visualização…</OperationalNotice> : null}
+          {!canEdit ? (
+            <OperationalNotice>O seu perfil pode consultar relatórios, mas não pode alterar registos.</OperationalNotice>
+          ) : null}
+        </>
+      }
+      filters={<RelatorioFotograficoFilters busca={busca} onBuscaChange={setBusca} />}
+      beforeTable={
+        items.length > 0 ? (
+          <ModuleHelp>
+            <OperationalNotice
+              tone={
+                bytesLs >= 4.5 * 1024 * 1024 ? 'critical' : bytesRf >= 2.5 * 1024 * 1024 ? 'warning' : 'neutral'
+              }
+            >
+              Espaço no navegador: relatórios fotográficos ~{formatBytesPt(bytesRf)} · total da app no localStorage ~
+              {formatBytesPt(bytesLs)}. Valores aproximados; muitas fotos em alta definição enchem rápido — use PDF
+              arquivado e apague o que não precisar.
+            </OperationalNotice>
+          </ModuleHelp>
+        ) : null
+      }
+    >
+      {loading && items.length === 0 ? (
+        <OperationalNotice>Carregando relatórios fotográficos…</OperationalNotice>
       ) : (
-        <div className="section-block" style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-strong)' }}>
-                <th style={{ padding: '10px 8px' }}>Título</th>
-                <th style={{ padding: '10px 8px' }}>Nº</th>
-                <th style={{ padding: '10px 8px' }}>Fotos</th>
-                <th style={{ padding: '10px 8px' }}>Atualizado</th>
-                <th style={{ padding: '10px 8px' }}>Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((m) => (
-                <tr key={m.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                  <td style={{ padding: '10px 8px', maxWidth: 280 }}>{m.titulo}</td>
-                  <td style={{ padding: '10px 8px', fontVariantNumeric: 'tabular-nums' }}>{m.numeroRelatorio || '—'}</td>
-                  <td style={{ padding: '10px 8px' }}>{m.fotoCount}</td>
-                  <td style={{ padding: '10px 8px', whiteSpace: 'nowrap' }}>{formatSalvo(m.salvoEm)}</td>
-                  <td style={{ padding: '10px 8px' }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      <button
-                        className="ghost-button"
-                        disabled={previewId === m.id}
-                        onClick={() => void onVisualizar(m)}
-                        type="button"
-                      >
-                        {previewId === m.id ? 'A abrir…' : 'Visualizar'}
-                      </button>
-                      {canEdit ? (
-                        <Link className="ghost-button" to={`/relatorio-fotografico/editar/${m.id}`}>
-                          Editar
-                        </Link>
-                      ) : null}
-                      {canEdit ? (
-                        <Button onClick={() => onExcluir(m)} type="button" variant="ghost">
-                          Excluir
-                        </Button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <RelatorioFotograficoTable
+          canEdit={canEdit}
+          formatSalvo={formatSalvo}
+          items={filtered}
+          onEdit={(m) => navigate(`/relatorio-fotografico/editar/${m.id}`)}
+          onExcluir={(m) => void onExcluir(m)}
+          onVisualizar={(m) => void onVisualizar(m)}
+          previewId={previewId}
+        />
       )}
-    </div>
+    </ListPageShell>
   );
 }

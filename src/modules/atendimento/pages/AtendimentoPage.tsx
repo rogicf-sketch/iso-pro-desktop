@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { APP_VERSION } from '../../../appMeta';
+import { PanelToolbarGroup } from '../../../components/layout/ListPageShell';
 import { Button } from '../../../components/ui/Button';
 import { AutocompleteField } from '../../../components/ui/AutocompleteField';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { AtendimentoBuscaDocumento } from '../components/AtendimentoBuscaDocumento';
 import { AtendimentoFormHeader } from '../components/AtendimentoFormHeader';
@@ -21,6 +26,7 @@ import { montarHtmlRecibo, montarHtmlReciboConsolidado } from '../utils/imprimir
 import { montarHtmlReciboEstorno } from '../utils/imprimirReciboEstorno';
 import { montarReciboVisualizarHistorico } from '../utils/montarReciboVisualizarHistorico';
 import { atendimentoTemVariosDocumentos } from '../utils/estornoDocumento.utils';
+import { formatDocumentoNumeroDisplay } from '../utils/formatDocumentoNumeroDisplay';
 
 export function AtendimentoPage() {
   const { canAccessAction } = useAuth();
@@ -28,6 +34,13 @@ export function AtendimentoPage() {
   const {
     documentos,
     historico,
+    historicoTotalCount,
+    historicoPage,
+    setHistoricoPage,
+    historicoBusca,
+    setHistoricoBusca,
+    historicoPeriodo,
+    setHistoricoPeriodo,
     historicoLoading,
     historicoFetchError,
     ensureHistoricoCarregado,
@@ -48,7 +61,10 @@ export function AtendimentoPage() {
     error,
     success,
     snapshotConflict,
+    documentoLockAviso,
+    documentoLockBloqueado,
     fallbackReason,
+    listSource,
     hasCloudConfig,
     setSelectedDocumentoId,
     setAtendente,
@@ -61,6 +77,8 @@ export function AtendimentoPage() {
     setAutorizadorInterno,
     setMotivoRetirada,
     updateLinha,
+    preencherMaximoLinha,
+    preencherMaximosMarcados,
     load,
     pedirConfirmacaoAtendimento,
     podeRegistrarAtendimento,
@@ -97,6 +115,9 @@ export function AtendimentoPage() {
     toggleMarcaItem,
     marcarTodosItens,
     exportarAtendimentosMateriaisExcel,
+    exportarEstornosExcel,
+    exportingAtendimentosCsv,
+    exportingEstornosCsv,
     leitorPainel,
     processarLeituraCodigoBarras,
     confirmarLeitorComQuantidade,
@@ -127,13 +148,44 @@ export function AtendimentoPage() {
   const estornoQtdRefs = useRef<(HTMLInputElement | null)[]>([]);
   const estornoConfirmarRef = useRef<HTMLButtonElement | null>(null);
   const [leitorCodigoBuffer, setLeitorCodigoBuffer] = useState('');
-  /** Leitura em processamento (cadastro + busca de desenhos na nuvem) — feedback «aguarde» junto ao campo. */
+  /** Leitura em processamento (cadastro + busca de desenhos na nuvem) - feedback "aguarde" junto ao campo. */
   const [leituraEmCurso, setLeituraEmCurso] = useState(false);
   const [reciboHistoricoLoadingId, setReciboHistoricoLoadingId] = useState<string | null>(null);
   const [reciboSessaoPreviewLoading, setReciboSessaoPreviewLoading] = useState(false);
   const [reciboAviso, setReciboAviso] = useState<string | null>(null);
-  /** WMS: Operacao (bipe) vs Arquivo (historico) — default = bancada de obra. */
+  /** WMS: Operacao (bipe) vs Arquivo (historico) - default = bancada de obra. */
   const [zona, setZona] = useState<'operacao' | 'historico'>('operacao');
+  const [gravandoElapsedSec, setGravandoElapsedSec] = useState(0);
+
+  useEffect(() => {
+    if (!gravandoAtendimento) {
+      setGravandoElapsedSec(0);
+      return;
+    }
+    const t0 = Date.now();
+    const id = window.setInterval(() => {
+      setGravandoElapsedSec(Math.floor((Date.now() - t0) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [gravandoAtendimento]);
+
+  usePageChrome(
+    {
+      meta:
+        zona === 'historico'
+          ? historicoLoading
+            ? 'A carregar histórico…'
+            : `${historicoTotalCount.toLocaleString('pt-BR')} lotes · ${listSource === 'supabase' && hasCloudConfig ? 'nuvem' : 'arquivo'} · v${APP_VERSION}`
+          : loading
+            ? 'A carregar…'
+            : fallbackReason.includes('segundo plano')
+              ? 'A concluir a lista de desenhos…'
+              : `${documentos.length.toLocaleString('pt-BR')} docs · ${
+                  listSource === 'supabase' || hasCloudConfig ? 'nuvem' : 'local'
+                } · v${APP_VERSION}`,
+    },
+    [zona, historicoLoading, historicoTotalCount, loading, documentos.length, listSource, hasCloudConfig, fallbackReason],
+  );
 
   const avisoRetiranteLeitor = useMemo(() => {
     if (!atendente.trim()) return 'Informe o atendente antes de confirmar o lote final.';
@@ -176,7 +228,7 @@ export function AtendimentoPage() {
       window.clearTimeout(leitorDebounceRef.current);
       if (value.trim().length < 3) return;
       leitorDebounceRef.current = window.setTimeout(() => {
-        // Se o utilizador ja saiu do campo do leitor, o texto nao e um bipe — nao processar.
+        // Se o utilizador ja saiu do campo do leitor, o texto nao e um bipe - nao processar.
         if (document.activeElement !== leitorCodigoRef.current) return;
         enviarLeitura(value);
       }, 150);
@@ -273,7 +325,7 @@ export function AtendimentoPage() {
     try {
       const recibo = await montarReciboVisualizarHistorico(item);
       if (recibo.tipo === 'estorno') {
-        const html = montarHtmlReciboEstorno(recibo.dados);
+        const html = await montarHtmlReciboEstorno(recibo.dados);
         const res = await preVisualizarRelatorioProfissional({
           html,
           fileName: nomeArquivoRelatorioPdf(item.numero, 'recibo-estorno'),
@@ -284,13 +336,13 @@ export function AtendimentoPage() {
           setReciboAviso(
             traduzirErroImpressaoIsoPro(
               res.error ??
-                'Não foi possível abrir a pré-visualização do recibo de estorno.',
+                'Nao foi possivel abrir a pre-visualizacao do recibo de estorno.',
             ),
           );
         }
         return;
       }
-      const html = montarHtmlRecibo(recibo.dados);
+      const html = await montarHtmlRecibo(recibo.dados);
       const res = await preVisualizarRelatorioProfissional({
         html,
         fileName: nomeArquivoRelatorioPdf(item.numero, 'recibo'),
@@ -301,7 +353,7 @@ export function AtendimentoPage() {
         setReciboAviso(
           traduzirErroImpressaoIsoPro(
             res.error ??
-              'Não foi possível abrir a pré-visualização. Use «Imprimir / PDF» no fluxo de confirmação do atendimento.',
+              'Nao foi possivel abrir a pre-visualizacao. Use "Imprimir / PDF" no fluxo de confirmacao do atendimento.',
           ),
         );
       }
@@ -314,7 +366,7 @@ export function AtendimentoPage() {
     if (!reciboSessaoOpcional) return;
     setReciboSessaoPreviewLoading(true);
     try {
-      const html = montarHtmlReciboConsolidado(reciboSessaoOpcional);
+      const html = await montarHtmlReciboConsolidado(reciboSessaoOpcional);
       const res = await preVisualizarRelatorioProfissional({
         html,
         fileName: nomeArquivoRelatorioPdf(reciboSessaoOpcional.referencia, 'recibo-consolidado'),
@@ -325,7 +377,7 @@ export function AtendimentoPage() {
         setReciboAviso(
           traduzirErroImpressaoIsoPro(
             res.error ??
-              'Não foi possível abrir a pré-visualização. Use «Imprimir / PDF» na janela de visualização.',
+              'Nao foi possivel abrir a pre-visualizacao. Use "Imprimir / PDF" na janela de visualizacao.',
           ),
         );
       }
@@ -335,259 +387,276 @@ export function AtendimentoPage() {
   }
 
   return (
-    <div className="stack-grid" data-e2e="atendimento-page">
-      <div className="panel">
-        <div className="panel-header">
-          <div>
-            <p className="panel-kicker">Modulo</p>
-            <h2 data-e2e="atendimento-title">Atendimento</h2>
+    <div
+      className={`panel atendimento-panel${zona === 'historico' ? ' atendimento-panel--historico' : ' atendimento-panel--operacao'}`}
+      data-e2e="atendimento-page"
+    >
+      <h2 className="visually-hidden" data-e2e="atendimento-title">
+        Atendimento
+      </h2>
+      {zona === 'historico' ? (
+        <div className="panel-header panel-header--toolbar panel-header--actions-only">
+          <div className="panel-toolbar">
+            <PanelToolbarGroup label="Arquivo" aria-label="Arquivo de lotes">
+              <Button onClick={() => void recarregarHistorico()} type="button" variant="ghost">
+                Atualizar
+              </Button>
+              {canExportAtendimentos ? (
+                <>
+                  <Button
+                    onClick={() => void exportarAtendimentosMateriaisExcel()}
+                    type="button"
+                    variant="ghost"
+                    disabled={exportingAtendimentosCsv || exportingEstornosCsv}
+                  >
+                    {exportingAtendimentosCsv ? 'A exportar…' : 'Exportar atendimentos'}
+                  </Button>
+                  <Button
+                    onClick={() => void exportarEstornosExcel()}
+                    type="button"
+                    variant="ghost"
+                    disabled={exportingAtendimentosCsv || exportingEstornosCsv}
+                  >
+                    {exportingEstornosCsv ? 'A exportar…' : 'Exportar estornos'}
+                  </Button>
+                </>
+              ) : null}
+            </PanelToolbarGroup>
           </div>
         </div>
+      ) : null}
 
+      {zona === 'historico' ? (
         <ModuleHelp>
-          <p className="panel-copy">
-            Baixa parcial de documentos com historico de lotes e saldo calculado a partir do planejamento, recebimentos e ajustes.
-          </p>
+          <p className="panel-copy">Arquivo de retiradas (consulta e estorno). A bancada de bipe fica em Operação.</p>
         </ModuleHelp>
+      ) : null}
 
-        <OperationalNotice>
-          {cloudStatus === 'ready' && hasCloudConfig
-            ? 'Fonte atual: Supabase. Zona Operacao leve; historico sob demanda na aba Arquivo.'
+      <FonteDadosNotice
+        healthy={
+          loading ||
+          resolveFonteNuvemOk({ listSource, hasCloudConfig, fallbackReason }) ||
+          Boolean(fallbackReason?.includes('segundo plano'))
+        }
+        fallbackMessage={
+          hasCloudConfig
+            ? 'Fonte atual: fallback local. Pendentes ainda nao vieram da nuvem (rede ou sync).'
             : cloudStatus === 'partial'
               ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        }
+      />
+      {!loading && fallbackReason && !fallbackReason.includes('segundo plano') ? (
+        <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice>
+      ) : null}
+
+      <SnapshotConflictHint show={snapshotConflict} onReload={() => void load()} />
+      {documentoLockAviso ? (
+        <OperationalNotice tone={documentoLockBloqueado ? 'critical' : 'warning'}>{documentoLockAviso}</OperationalNotice>
+      ) : null}
+      {error ? <div className="error-box">{error}</div> : null}
+      {exportingAtendimentosCsv || exportingEstornosCsv ? (
+        <OperationalNotice>
+          {exportingAtendimentosCsv
+            ? 'A exportar atendimentos (periodo seleccionado)… Aguarde o download.'
+            : 'A exportar estornos (periodo seleccionado)… Aguarde o download.'}
         </OperationalNotice>
-        {fallbackReason ? (
-          fallbackReason.includes('segundo plano') ? (
-            <OperationalNotice>Desenhos pendentes a carregar em segundo plano… a lista completa aparece em instantes.</OperationalNotice>
-          ) : (
-            <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice>
-          )
-        ) : null}
+      ) : null}
+      {reciboAviso ? <OperationalNotice tone="critical">{reciboAviso}</OperationalNotice> : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
+      {!canEdit ? (
+        <OperationalNotice tone="warning">
+          Seu perfil pode consultar saldos e historico, mas o registro de baixas permanece bloqueado.
+        </OperationalNotice>
+      ) : null}
 
-        <SnapshotConflictHint show={snapshotConflict} onReload={() => void load()} />
-        {error ? <div className="error-box">{error}</div> : null}
-        {reciboAviso ? <OperationalNotice tone="critical">{reciboAviso}</OperationalNotice> : null}
-        {success ? <OperationalNotice>{success}</OperationalNotice> : null}
-        {!canEdit ? (
-          <OperationalNotice tone="warning">
-            Regra operacional: seu perfil pode consultar saldos e historico, mas o registro de baixas permanece bloqueado para evitar movimentacao sem autorizacao.
-          </OperationalNotice>
-        ) : null}
-
-        <div className="panel-tabs" role="tablist" aria-label="Zonas do atendimento">
-          <button
-            aria-selected={zona === 'operacao'}
-            className={`panel-tab${zona === 'operacao' ? ' panel-tab--active' : ''}`}
-            onClick={() => setZona('operacao')}
-            role="tab"
-            type="button"
-          >
-            Operacao
-          </button>
-          <button
-            aria-selected={zona === 'historico'}
-            className={`panel-tab${zona === 'historico' ? ' panel-tab--active' : ''}`}
-            onClick={() => {
-              setZona('historico');
-              ensureHistoricoCarregado();
-            }}
-            role="tab"
-            type="button"
-          >
-            Historico
-            {historico.length > 0 ? ` (${historico.length})` : ''}
-          </button>
-        </div>
+      <div className="panel-tabs" role="tablist" aria-label="Zonas do atendimento">
+        <button
+          aria-selected={zona === 'operacao'}
+          className={`panel-tab${zona === 'operacao' ? ' panel-tab--active' : ''}`}
+          onClick={() => setZona('operacao')}
+          role="tab"
+          type="button"
+        >
+          Operacao
+        </button>
+        <button
+          aria-selected={zona === 'historico'}
+          className={`panel-tab${zona === 'historico' ? ' panel-tab--active' : ''}`}
+          onClick={() => {
+            setZona('historico');
+            ensureHistoricoCarregado();
+          }}
+          role="tab"
+          type="button"
+        >
+          Historico
+          {historico.length > 0 ? ` (${historico.length})` : ''}
+        </button>
       </div>
 
       {zona === 'operacao' ? (
-      <div className="panel">
-        {canEdit ? (
-          <div className="section-block">
-            <label className="field" htmlFor="atendimento-leitor-codigo">
-              <span>Leitor de codigo de barras (USB)</span>
-              <input
-                autoComplete="off"
-                className="input-control"
-                id="atendimento-leitor-codigo"
-                onChange={(e) => onLeitorChange(e.target.value)}
-                onKeyDown={onLeitorKeyDown}
-                placeholder="Bipe o material — Enter ou Tab confirma; leitura automatica apos pausa"
-                ref={leitorCodigoRef}
-                spellCheck={false}
-                type="text"
-                value={leitorCodigoBuffer}
-              />
-            </label>
-            {leituraEmCurso ? (
-              <OperationalNotice>
-                A identificar o material e a procurar desenhos com pendencia na nuvem… aguarde um instante.
-              </OperationalNotice>
-            ) : null}
-            <ModuleHelp>
-              <p className="panel-copy" style={{ marginTop: 8 }}>
-                Fluxo: preencha atendente e retirante, bipe os materiais de varios desenhos e confirme a sessao — um recibo consolidado e um lote por desenho no historico.
-              </p>
-            </ModuleHelp>
-          </div>
-        ) : null}
-        <AtendimentoBuscaDocumento
-          documentos={documentos}
-          onDocumentoRemoto={adicionarDocumentoPendenteRemoto}
-          onSelect={setSelectedDocumentoId}
-          selectedDocumentoId={selectedDocumentoId}
-        />
-
-
-
-        <AtendimentoFormHeader
-          atendente={atendente}
-          autorizadorInterno={autorizadorInterno}
-          colaboradores={colaboradores}
-          motivoRetirada={motivoRetirada}
-          onAtendenteChange={setAtendente}
-          onAutorizadorInternoChange={setAutorizadorInterno}
-          onMotivoRetiradaChange={setMotivoRetirada}
-          onRecebedorChange={setRecebedor}
-          onRecebedorColaboradorIdChange={setRecebedorColaboradorId}
-          onRecebedorDocumentoChange={setRecebedorDocumento}
-          onRecebedorEmpresaChange={setRecebedorEmpresa}
-          onRecebedorTelefoneChange={setRecebedorTelefone}
-          onRecebedorTipoChange={setRecebedorTipo}
-          recebedor={recebedor}
-          recebedorColaboradorId={recebedorColaboradorId}
-          recebedorDocumento={recebedorDocumento}
-          recebedorEmpresa={recebedorEmpresa}
-          recebedorTelefone={recebedorTelefone}
-          recebedorTipo={recebedorTipo}
-        />
-
-        {canEdit ? (
-          <AtendimentoSessaoRetiradaPanel
-            linhas={sessaoRetirada}
-            loading={loading}
-            motivoBloqueio={motivoBloqueioSessaoRetirada}
-            onConfirmar={pedirConfirmacaoSessaoRetirada}
-            onLimpar={limparSessaoRetirada}
-            onRemoverLinha={removerLinhaSessaoRetirada}
-            podeConfirmar={podeConfirmarSessaoRetirada}
-          />
-        ) : null}
-
-        {loading ? <OperationalNotice>Carregando dados de atendimento...</OperationalNotice> : null}
-
-        {selectedDocumento ? (
-          <div className="section-block">
-            <div className="document-summary">
-              <strong>
-                {selectedDocumento.numero} Rev. {selectedDocumento.revisao}
-              </strong>
-              <p className="panel-copy">{selectedDocumento.descricao}</p>
-              <p className="panel-copy">Responsavel: {selectedDocumento.responsavel || '-'}</p>
+        <div className="atendimento-operacao-scroll">
+          <div className="atendimento-ops-rail">
+            <div className="atendimento-ops-top">
+              {canEdit ? (
+                <label className="field atendimento-leitor-field" htmlFor="atendimento-leitor-codigo">
+                  <span>Leitor USB</span>
+                  <input
+                    autoComplete="off"
+                    className="input-control"
+                    id="atendimento-leitor-codigo"
+                    onChange={(e) => onLeitorChange(e.target.value)}
+                    onKeyDown={onLeitorKeyDown}
+                    placeholder="Bipe o material — Enter confirma"
+                    ref={leitorCodigoRef}
+                    spellCheck={false}
+                    type="text"
+                    value={leitorCodigoBuffer}
+                  />
+                </label>
+              ) : null}
+              <div className="atendimento-ops-doc">
+                <AtendimentoBuscaDocumento
+                  documentos={documentos}
+                  onDocumentoRemoto={adicionarDocumentoPendenteRemoto}
+                  onSelect={setSelectedDocumentoId}
+                  selectedDocumentoId={selectedDocumentoId}
+                />
+              </div>
             </div>
-
-            {recebedorTipo === 'interno' ? (
-              <OperationalNotice tone="warning">
-                Regra operacional: atendimento interno exige colaborador ativo cadastrado para manter rastreabilidade completa da retirada.
-              </OperationalNotice>
-            ) : (
-              <OperationalNotice tone="warning">
-                Regra operacional: retirada externa exige identificacao completa, autorizador interno e motivo registrado antes da confirmacao.
-              </OperationalNotice>
-            )}
-
-            <ModuleHelp>
-              <OperationalNotice>
-                Itens marcados recebem automaticamente a quantidade sugerida (ate o pendente do documento, limitada ao saldo). Ajuste
-                somente o que for parcial; desmarque linhas que nao entram nesta operacao.
-              </OperationalNotice>
-            </ModuleHelp>
-
-            {itensSelecionados.length === 0 &&
-            selectedDocumento.linhas.some((l) => idsMarcados.has(l.documentoItemId)) ? (
-              <OperationalNotice tone="warning">
-                Itens estao marcados, mas a quantidade nesta operacao esta zero (por exemplo saldo 0 ou material nao encontrado no cadastro com o mesmo codigo). Corrija o cadastro/estoque ou informe uma quantidade valida antes de confirmar. Para retirada interna, selecione tambem o colaborador acima.
-              </OperationalNotice>
+            {leituraEmCurso ? (
+              <p className="atendimento-ops-hint">A identificar material e desenhos pendentes…</p>
             ) : null}
 
-            <AtendimentoItensTable
-              idsMarcados={idsMarcados}
-              items={selectedDocumento.linhas}
-              onChangeQuantidade={updateLinha}
-              onMarcarTodos={marcarTodosItens}
-              onToggleMarca={toggleMarcaItem}
+            <AtendimentoFormHeader
+              atendente={atendente}
+              autorizadorInterno={autorizadorInterno}
+              colaboradores={colaboradores}
+              colaboradoresCarregados={!loading}
+              motivoRetirada={motivoRetirada}
+              onAtendenteChange={setAtendente}
+              onAutorizadorInternoChange={setAutorizadorInterno}
+              onMotivoRetiradaChange={setMotivoRetirada}
+              onRecebedorChange={setRecebedor}
+              onRecebedorColaboradorIdChange={setRecebedorColaboradorId}
+              onRecebedorDocumentoChange={setRecebedorDocumento}
+              onRecebedorEmpresaChange={setRecebedorEmpresa}
+              onRecebedorTelefoneChange={setRecebedorTelefone}
+              onRecebedorTipoChange={setRecebedorTipo}
+              recebedor={recebedor}
+              recebedorColaboradorId={recebedorColaboradorId}
+              recebedorDocumento={recebedorDocumento}
+              recebedorEmpresa={recebedorEmpresa}
+              recebedorTelefone={recebedorTelefone}
+              recebedorTipo={recebedorTipo}
             />
 
-            {canEdit && !podeRegistrarAtendimento && !loading && motivoBloqueioAtendimento ? (
-              <OperationalNotice tone="warning">
-                <strong>Falta para confirmar:</strong> {motivoBloqueioAtendimento}
-              </OperationalNotice>
+            {canEdit ? (
+              <AtendimentoSessaoRetiradaPanel
+                linhas={sessaoRetirada}
+                loading={loading}
+                motivoBloqueio={motivoBloqueioSessaoRetirada}
+                onConfirmar={pedirConfirmacaoSessaoRetirada}
+                onLimpar={limparSessaoRetirada}
+                onRemoverLinha={removerLinhaSessaoRetirada}
+                podeConfirmar={podeConfirmarSessaoRetirada}
+              />
             ) : null}
-            <div className="inline-actions">
-              <span className="panel-copy">
-                Total desta operacao: <strong>{totalizarLinhas(selectedDocumento.linhas)}</strong>
-              </span>
-              {canEdit ? (
-                <Button
-                  disabled={loading || !podeRegistrarAtendimento}
-                  onClick={pedirConfirmacaoAtendimento}
-                  title={motivoBloqueioAtendimento && !loading ? motivoBloqueioAtendimento : undefined}
-                  type="button"
-                >
-                  Confirmar atendimento
-                </Button>
-              ) : null}
-            </div>
           </div>
-        ) : (
-          <OperationalNotice>
-            Selecione um documento pendente para visualizar os itens e registrar o atendimento.
-          </OperationalNotice>
-        )}
-      </div>
-      ) : (
-      <div className="panel">
-        <div className="panel-header panel-header--toolbar">
-          <div>
-            <p className="panel-kicker">Arquivo</p>
-            <h2>Historico de lotes</h2>
-          </div>
-          <div className="panel-toolbar">
-            <div className="panel-toolbar__group" role="group" aria-label="Arquivo de lotes">
-              <div className="panel-toolbar__buttons">
-                <Button onClick={() => void recarregarHistorico()} type="button" variant="ghost">
-                  Atualizar
-                </Button>
-                {canExportAtendimentos ? (
-                  <Button onClick={() => void exportarAtendimentosMateriaisExcel()} type="button" variant="ghost">
-                    Exportar Excel (ZIP)
+
+          {selectedDocumento ? (
+            <div className="atendimento-doc-block">
+              <div className="atendimento-doc-head">
+                <span className="atendimento-doc-head__title">
+                  <strong>
+                    {formatDocumentoNumeroDisplay(selectedDocumento.numero)} Rev.{' '}
+                    {selectedDocumento.revisao}
+                  </strong>
+                  <span className="atendimento-doc-head__meta">
+                    {selectedDocumento.descricao}
+                    {selectedDocumento.responsavel ? ` · ${selectedDocumento.responsavel}` : ''}
+                  </span>
+                </span>
+                {itensSelecionados.length === 0 &&
+                selectedDocumento.linhas.some((l) => idsMarcados.has(l.documentoItemId)) ? (
+                  <span className="atendimento-ops-hint atendimento-ops-hint--warn">
+                    Itens com qtd. zero — ajuste saldo ou quantidade.
+                  </span>
+                ) : null}
+              </div>
+
+              <AtendimentoItensTable
+                idsMarcados={idsMarcados}
+                items={selectedDocumento.linhas}
+                onChangeQuantidade={updateLinha}
+                onMarcarTodos={marcarTodosItens}
+                onPreencherMaximo={preencherMaximoLinha}
+                onToggleMarca={toggleMarcaItem}
+              />
+
+              <div className="inline-actions atendimento-doc-actions">
+                <span className="panel-copy">
+                  Total: <strong>{totalizarLinhas(selectedDocumento.linhas)}</strong>
+                  {canEdit ? (
+                    <Button
+                      disabled={loading || idsMarcados.size === 0}
+                      onClick={preencherMaximosMarcados}
+                      style={{ marginLeft: 8 }}
+                      title="Preenche o máximo em todas as linhas marcadas"
+                      type="button"
+                      variant="ghost"
+                    >
+                      Máximos marcados
+                    </Button>
+                  ) : null}
+                  {canEdit && !podeRegistrarAtendimento && !loading && motivoBloqueioAtendimento ? (
+                    <span className="atendimento-ops-hint atendimento-ops-hint--warn">
+                      {' '}
+                      · {motivoBloqueioAtendimento}
+                    </span>
+                  ) : null}
+                </span>
+                {canEdit ? (
+                  <Button
+                    disabled={loading || !podeRegistrarAtendimento}
+                    onClick={pedirConfirmacaoAtendimento}
+                    title={motivoBloqueioAtendimento && !loading ? motivoBloqueioAtendimento : undefined}
+                    type="button"
+                  >
+                    Confirmar atendimento
                   </Button>
                 ) : null}
               </div>
             </div>
-          </div>
+          ) : (
+            <p className="atendimento-ops-empty">
+              {loading || fallbackReason.includes('segundo plano')
+                ? 'A carregar desenhos pendentes…'
+                : 'Selecione um documento pendente para ver os itens e registar o atendimento.'}
+            </p>
+          )}
         </div>
+      ) : (
+        <div className="atendimento-historico-body">
+          {historicoFetchError ? <div className="error-box">{historicoFetchError}</div> : null}
 
-        <ModuleHelp>
-          <OperationalNotice>
-            Arquivo de retiradas (consulta e estorno). A bancada de bipe fica em <strong>Operacao</strong>. O ZIP inclui{' '}
-            <strong>atendimentos-materiais.csv</strong> e <strong>estornos-log.csv</strong>. No Excel, use separador{' '}
-            <strong>ponto e virgula (;)</strong>.
-          </OperationalNotice>
-        </ModuleHelp>
-
-        {historicoFetchError ? <div className="error-box">{historicoFetchError}</div> : null}
-
-        <AtendimentoHistoricoTable
-          canAdminister={canAdminister}
-          items={historico}
-          loading={historicoLoading}
-          onEstornar={iniciarEstorno}
-          onVerRecibo={handleVerReciboHistorico}
-          reciboCarregandoId={reciboHistoricoLoadingId}
-        />
-      </div>
+          <AtendimentoHistoricoTable
+            busca={historicoBusca}
+            canAdminister={canAdminister}
+            items={historico}
+            loading={historicoLoading}
+            onBuscaChange={setHistoricoBusca}
+            onEstornar={iniciarEstorno}
+            onPageChange={setHistoricoPage}
+            onPeriodoChange={setHistoricoPeriodo}
+            onVerRecibo={handleVerReciboHistorico}
+            page={historicoPage}
+            periodo={historicoPeriodo}
+            reciboCarregandoId={reciboHistoricoLoadingId}
+            totalCount={historicoTotalCount}
+          />
+        </div>
       )}
 
       <Modal
@@ -601,13 +670,21 @@ export function AtendimentoPage() {
         {confirmacaoAtendimento ? (
           <div className="editor-block">
             <p>
-              Confirmar o atendimento do documento <strong>{confirmacaoAtendimento.documentoNumero}</strong> com{' '}
+              Confirmar o atendimento do documento{' '}
+              <strong>{formatDocumentoNumeroDisplay(confirmacaoAtendimento.documentoNumero)}</strong> com{' '}
               <strong>{confirmacaoAtendimento.itemCount}</strong> item(ns) e total de{' '}
               <strong>{confirmacaoAtendimento.totalUnidades}</strong> unidade(s)?
             </p>
             {gravandoAtendimento ? (
               <OperationalNotice>
-                A registrar o atendimento na nuvem… aguarde, pode levar alguns segundos. Nao feche esta janela.
+                A registrar o atendimento na nuvem
+                {gravandoElapsedSec > 0 ? ` (${gravandoElapsedSec}s)` : ''}
+                ... nao feche esta janela.
+                {gravandoElapsedSec >= 35
+                  ? ' Ainda a processar. Se falhar, abra Historico antes de tentar de novo (nao duplica).'
+                  : gravandoElapsedSec >= 20
+                    ? ' Ligacao lenta - se falhar, clique Confirmar de novo (nao duplica).'
+                    : ' Pode levar alguns segundos.'}
               </OperationalNotice>
             ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
@@ -615,7 +692,11 @@ export function AtendimentoPage() {
                 Cancelar
               </Button>
               <Button disabled={gravandoAtendimento} onClick={() => void confirmarAtendimentoNoModal()} type="button">
-                {gravandoAtendimento ? 'A gravar…' : 'Confirmar'}
+                {gravandoAtendimento
+                  ? gravandoElapsedSec > 0
+                    ? `A gravar... ${gravandoElapsedSec}s`
+                    : 'A gravar...'
+                  : 'Confirmar'}
               </Button>
             </div>
           </div>
@@ -655,7 +736,7 @@ export function AtendimentoPage() {
                 {sessaoRetirada.map((linha) => (
                   <tr key={`${linha.documentoId}-${linha.documentoItemId}`}>
                     <td>
-                      {linha.documentoNumero} Rev. {linha.documentoRevisao}
+                      {formatDocumentoNumeroDisplay(linha.documentoNumero)} Rev. {linha.documentoRevisao}
                     </td>
                     <td>{linha.codigoMaterial}</td>
                     <td>{linha.descricaoMaterial}</td>
@@ -667,7 +748,14 @@ export function AtendimentoPage() {
             </table>
             {gravandoAtendimento ? (
               <OperationalNotice>
-                A registrar a retirada na nuvem… aguarde, pode levar alguns segundos. Nao feche esta janela.
+                A registrar a retirada na nuvem
+                {gravandoElapsedSec > 0 ? ` (${gravandoElapsedSec}s)` : ''}
+                ... nao feche esta janela.
+                {gravandoElapsedSec >= 35
+                  ? ' Ainda a processar. Se falhar, abra Historico antes de tentar de novo (nao duplica).'
+                  : gravandoElapsedSec >= 20
+                    ? ' Ligacao lenta - se falhar, clique Confirmar de novo (nao duplica).'
+                    : ' Pode levar alguns segundos.'}
               </OperationalNotice>
             ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
@@ -675,7 +763,11 @@ export function AtendimentoPage() {
                 Cancelar
               </Button>
               <Button disabled={gravandoAtendimento} onClick={() => void confirmarSessaoRetiradaNoModal()} type="button">
-                {gravandoAtendimento ? 'A gravar…' : 'Confirmar retirada'}
+                {gravandoAtendimento
+                  ? gravandoElapsedSec > 0
+                    ? `A gravar... ${gravandoElapsedSec}s`
+                    : 'A gravar...'
+                  : 'Confirmar retirada'}
               </Button>
             </div>
           </div>
@@ -715,7 +807,7 @@ export function AtendimentoPage() {
                 onClick={() => void imprimirReciboSessaoEfechar()}
                 type="button"
               >
-                {reciboImprimindo ? 'A gerar PDF…' : 'Sim, imprimir recibo unico'}
+                {reciboImprimindo ? 'A gerar PDF...' : 'Sim, imprimir recibo unico'}
               </Button>
             </div>
           </div>
@@ -734,14 +826,14 @@ export function AtendimentoPage() {
                 </p>
                 {estornoDuplicadosAviso.length > 0 ? (
                   <OperationalNotice>
-                    <strong>Atencao — mesmo material em outro lote:</strong> estornar este lote{' '}
+                    <strong>Atencao - mesmo material em outro lote:</strong> estornar este lote{' '}
                     <strong>nao</strong> altera retiradas registadas noutros protocolos. Confirme se esta no lote correto.
                     <ul className="stack-grid" style={{ marginTop: '0.5rem' }}>
                       {estornoDuplicadosAviso.map((av) => (
                         <li key={`${av.loteId}-${av.codigoMaterial}`}>
-                          Lote <strong>{av.loteNumero}</strong> ({av.origem === 'mobile' ? 'Mobile' : 'PC'}) —{' '}
+                          Lote <strong>{av.loteNumero}</strong> ({av.origem === 'mobile' ? 'Mobile' : 'PC'}) -{' '}
                           {av.codigoMaterial} no desenho <strong>{av.documentoNumero}</strong>:{' '}
-                          {av.quantidadeAtendida} {av.recebedor ? `• recebedor ${av.recebedor}` : ''} •{' '}
+                          {av.quantidadeAtendida} {av.recebedor ? `· recebedor ${av.recebedor}` : ''} ·{' '}
                           {new Date(av.dataAtendimento).toLocaleString('pt-BR')}
                         </li>
                       ))}
@@ -755,7 +847,7 @@ export function AtendimentoPage() {
                     <p className="panel-copy">Responsavel (documento): {estornoDocInfo.responsavel}</p>
                   )}
                   <p className="panel-copy">
-                    Atendimento <strong>{estornoAlvo.numero}</strong> — retirada em{' '}
+                    Atendimento <strong>{estornoAlvo.numero}</strong> - retirada em{' '}
                     {new Date(estornoAlvo.dataAtendimento).toLocaleString('pt-BR')}
                   </p>
                 </div>
@@ -837,7 +929,7 @@ export function AtendimentoPage() {
                                 />
                               </td>
                               {mostrarColDoc ? (
-                                <td>{it.documentoNumero?.trim() || estornoAlvo.documentoNumero || '—'}</td>
+                                <td>{it.documentoNumero?.trim() || estornoAlvo.documentoNumero || '-'}</td>
                               ) : null}
                               <td>{it.codigoMaterial}</td>
                               <td>{it.descricaoMaterial}</td>
@@ -900,7 +992,7 @@ export function AtendimentoPage() {
 
                 {error ? <div className="error-box">{error}</div> : null}
                 {estornoConfirmando ? (
-                  <OperationalNotice>A gravar o estorno na nuvem… aguarde, pode levar alguns segundos.</OperationalNotice>
+                  <OperationalNotice>A gravar o estorno na nuvem... aguarde, pode levar alguns segundos.</OperationalNotice>
                 ) : null}
                 <div className="form-actions" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
                   <Button disabled={estornoConfirmando} onClick={fecharModalEstorno} type="button" variant="ghost">
@@ -912,7 +1004,7 @@ export function AtendimentoPage() {
                     type="button"
                     variant="ghost"
                   >
-                    {reciboImprimindo ? 'A gerar PDF…' : 'Imprimir recibo de estorno'}
+                    {reciboImprimindo ? 'A gerar PDF...' : 'Imprimir recibo de estorno'}
                   </Button>
                   <Button
                     disabled={estornoConfirmando}
@@ -921,7 +1013,7 @@ export function AtendimentoPage() {
                     type="button"
                     variant="danger"
                   >
-                    {estornoConfirmando ? 'A estornar…' : 'Confirmar estorno'}
+                    {estornoConfirmando ? 'A estornar...' : 'Confirmar estorno'}
                   </Button>
                 </div>
               </>
@@ -946,7 +1038,7 @@ export function AtendimentoPage() {
                 Nao
               </Button>
               <Button disabled={reciboImprimindo} onClick={() => void imprimirReciboEfechar()} type="button">
-                {reciboImprimindo ? 'A gerar PDF…' : 'Sim, imprimir'}
+                {reciboImprimindo ? 'A gerar PDF...' : 'Sim, imprimir'}
               </Button>
             </div>
           </div>
@@ -969,7 +1061,7 @@ export function AtendimentoPage() {
                 Nao
               </Button>
               <Button disabled={reciboImprimindo} onClick={() => void imprimirReciboEstornoEfechar()} type="button">
-                {reciboImprimindo ? 'A gerar PDF…' : 'Sim, imprimir'}
+                {reciboImprimindo ? 'A gerar PDF...' : 'Sim, imprimir'}
               </Button>
             </div>
           </div>

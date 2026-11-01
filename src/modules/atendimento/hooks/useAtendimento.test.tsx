@@ -4,11 +4,16 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AtendimentoDocumento } from '../types/atendimento.types';
-import { obterErroRegistroAtendimento, reterDocumentosProtegidos, useAtendimento } from './useAtendimento';
+import {
+  mergeDocumentosPendentesPreservandoOperacao,
+  obterErroRegistroAtendimento,
+  reterDocumentosProtegidos,
+  useAtendimento,
+} from './useAtendimento';
 
 const mocks = vi.hoisted(() => ({
   listarDocumentosPendentesComMeta: vi.fn(),
-  listarHistoricoAtendimentosComMeta: vi.fn(),
+  listarHistoricoAtendimentosPagina: vi.fn(),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -35,7 +40,13 @@ vi.mock('../services/atendimento.service', () => ({
   aquecerBaselineAtendimentoNuvem: vi.fn(() => Promise.resolve()),
   aquecerSaldoOperacionalAtendimento: vi.fn(() => Promise.resolve()),
   listarDocumentosPendentesComMeta: mocks.listarDocumentosPendentesComMeta,
-  listarHistoricoAtendimentosComMeta: mocks.listarHistoricoAtendimentosComMeta,
+  listarHistoricoAtendimentosPagina: mocks.listarHistoricoAtendimentosPagina,
+  montarExportacaoAtendimentosCsvItens: vi.fn(() =>
+    Promise.resolve({ success: true, data: { csv: 'a;b\n', fileName: 't.csv' } }),
+  ),
+  montarExportacaoEstornosCsv: vi.fn(() =>
+    Promise.resolve({ success: true, data: { csv: 'c;d\n', fileName: 'e.csv' } }),
+  ),
   montarExportacaoAtendimentosPacoteZip: vi.fn(() =>
     Promise.resolve({ success: true, data: { zipBlob: new Blob(['zip']), fileName: 't.zip' } }),
   ),
@@ -83,14 +94,14 @@ describe('useAtendimento — sugestao de quantidade', () => {
     });
   });
 
-  it('preenche quantidade sugerida ao selecionar documento apos o carregamento', async () => {
+  it('abre documento com quantidade vazia (parcial-first) e linhas marcadas', async () => {
     mocks.listarDocumentosPendentesComMeta.mockResolvedValue({
       success: true,
       data: [buildDoc()],
     });
-    mocks.listarHistoricoAtendimentosComMeta.mockResolvedValue({
+    mocks.listarHistoricoAtendimentosPagina.mockResolvedValue({
       success: true,
-      data: [],
+      data: { items: [], totalCount: 0, limit: 15, offset: 0 },
     });
 
     const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
@@ -104,19 +115,19 @@ describe('useAtendimento — sugestao de quantidade', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(4);
+      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(0);
     });
     expect(result.current.idsMarcados.has('item-1')).toBe(true);
   });
 
-  it('nao sobrescreve quantidade ao editar depois do preenchimento automatico', async () => {
+  it('nao sobrescreve quantidade ao editar depois de abrir', async () => {
     mocks.listarDocumentosPendentesComMeta.mockResolvedValue({
       success: true,
       data: [buildDoc()],
     });
-    mocks.listarHistoricoAtendimentosComMeta.mockResolvedValue({
+    mocks.listarHistoricoAtendimentosPagina.mockResolvedValue({
       success: true,
-      data: [],
+      data: { items: [], totalCount: 0, limit: 15, offset: 0 },
     });
 
     const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
@@ -130,7 +141,7 @@ describe('useAtendimento — sugestao de quantidade', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(4);
+      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(0);
     });
 
     act(() => {
@@ -140,16 +151,16 @@ describe('useAtendimento — sugestao de quantidade', () => {
     expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(2);
   });
 
-  it('aplica sugestao quando o documento e selecionado antes da lista chegar', async () => {
+  it('abre com quantidade vazia quando o documento e selecionado antes da lista chegar', async () => {
     let releaseDocs!: (v: { success: boolean; data: AtendimentoDocumento[] }) => void;
     const docsGate = new Promise<{ success: boolean; data: AtendimentoDocumento[] }>((resolve) => {
       releaseDocs = resolve;
     });
 
     mocks.listarDocumentosPendentesComMeta.mockReturnValue(docsGate);
-    mocks.listarHistoricoAtendimentosComMeta.mockResolvedValue({
+    mocks.listarHistoricoAtendimentosPagina.mockResolvedValue({
       success: true,
-      data: [],
+      data: { items: [], totalCount: 0, limit: 15, offset: 0 },
     });
 
     const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
@@ -171,8 +182,54 @@ describe('useAtendimento — sugestao de quantidade', () => {
     });
 
     await waitFor(() => {
-      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(4);
+      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(0);
     });
+  });
+
+  it('preencherMaximoLinha aplica min(pendente, saldo)', async () => {
+    mocks.listarDocumentosPendentesComMeta.mockResolvedValue({
+      success: true,
+      data: [buildDoc()],
+    });
+    mocks.listarHistoricoAtendimentosPagina.mockResolvedValue({
+      success: true,
+      data: { items: [], totalCount: 0, limit: 15, offset: 0 },
+    });
+
+    const { result } = renderHook(() => useAtendimento(), { wrapper: TestQueryProvider });
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    act(() => {
+      result.current.setSelectedDocumentoId('doc-1');
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(0);
+    });
+
+    act(() => {
+      result.current.preencherMaximoLinha('item-1');
+    });
+
+    expect(result.current.selectedDocumento?.linhas[0]?.quantidadeNestaOperacao).toBe(4);
+  });
+});
+
+describe('mergeDocumentosPendentesPreservandoOperacao', () => {
+  it('mantem linhas hidratadas quando o refetch traz so cabecalho', () => {
+    const prev = [
+      {
+        ...buildDoc(),
+        linhas: [{ ...buildDoc().linhas[0], quantidadeNestaOperacao: 2 }],
+      },
+    ];
+    const next = [{ ...buildDoc(), linhas: [] }];
+    const out = mergeDocumentosPendentesPreservandoOperacao(prev, next);
+    expect(out[0]?.linhas).toHaveLength(1);
+    expect(out[0]?.linhas[0]?.quantidadeNestaOperacao).toBe(2);
   });
 });
 
@@ -222,6 +279,12 @@ describe('reterDocumentosProtegidos', () => {
     const docBoot = buildDoc();
     const base = [docBoot];
     expect(reterDocumentosProtegidos([docBoot], base, new Set())).toBe(base);
-    expect(reterDocumentosProtegidos([docBoot], base, new Set(['doc-1']))).toBe(base);
+    expect(reterDocumentosProtegidos([docBoot], base, new Set(['doc-1']))).toEqual(base);
+  });
+
+  it('mantem documento aberto na UI quando o refetch vem vazio (timeout segundo plano)', () => {
+    const docAberto = { ...buildDoc(), id: 'doc-aberto', numero: 'N-OPEN' };
+    const out = reterDocumentosProtegidos([docAberto], [], new Set(['doc-aberto']));
+    expect(out.map((d) => d.id)).toEqual(['doc-aberto']);
   });
 });

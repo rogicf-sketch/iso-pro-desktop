@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { EmptyState } from '../ui/EmptyState';
 
 type Column<T> = {
   key: string;
@@ -10,6 +11,8 @@ type Props<T> = {
   columns: Column<T>[];
   items: T[];
   emptyText?: string;
+  emptyDescription?: string;
+  emptyAction?: ReactNode;
   getRowClassName?: (item: T) => string;
   getRowKey?: (item: T, index: number) => string | number;
 };
@@ -18,6 +21,8 @@ export function DataTable<T>({
   columns,
   items,
   emptyText = 'Nenhum registro encontrado.',
+  emptyDescription,
+  emptyAction,
   getRowClassName,
   getRowKey,
 }: Props<T>) {
@@ -43,7 +48,7 @@ export function DataTable<T>({
           ) : (
             <tr>
               <td className="table-empty" colSpan={columns.length}>
-                {emptyText}
+                <EmptyState action={emptyAction} description={emptyDescription} title={emptyText} />
               </td>
             </tr>
           )}

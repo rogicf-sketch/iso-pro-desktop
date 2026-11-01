@@ -16,7 +16,7 @@ import type { AppModule, PermissionAction } from '../../auth/types/auth.types';
 import { buscarColaboradorPorId, listarColaboradores } from '../../colaboradores/services/colaboradores.service';
 import { parseUsuariosPerfisLocal, parseUsuariosSistemaLocal } from '../schemas/usuariosLocalArrays.zod';
 import type { UsuarioFiltro, UsuarioFormData, UsuarioPerfil, UsuarioPermissao, UsuarioSistema } from '../types/usuario.types';
-import { executarIsoProAdminUserUpsert, isIsoProAdminUserEdgeConfigured } from './isoProAdminUser.service';
+import { executarIsoProAdminUserUpsert, isIsoProAdminUserEdgeConfigured, isIsoProAdminUserEdgeUnreachableError } from './isoProAdminUser.service';
 
 function profilesStorageKey(): string {
   return getScopedIsoProStorageKey('iso-pro-desktop-perfis-acesso');
@@ -84,6 +84,28 @@ function buildPermissionsFromAllowedModules(allowedModules: AppModule[]): Usuari
   );
 }
 
+/** Operacao: fluxo de campo + Configurações só visualizar (tema pessoal / consultar qualidade). */
+function buildOperacaoPermissions(): UsuarioPermissao[] {
+  const base = buildPermissionsFromAllowedModules([
+    'dashboard',
+    'recebimentos',
+    'conferencia',
+    'etiquetas',
+    'equipamentos',
+    'atendimento',
+    'inventario',
+    'rir',
+    'rnc',
+    'mobile',
+    'configuracoes',
+  ]);
+  return base.map((item) =>
+    item.modulo === 'configuracoes'
+      ? { ...item, permitido: item.acao === 'visualizar' }
+      : item,
+  );
+}
+
 function normalizePermissions(permissoes: UsuarioPermissao[]): UsuarioPermissao[] {
   const allowedPermissions = new Set(
     permissoes.filter((item) => item.permitido).map((item) => `${item.modulo}:${item.acao}`),
@@ -101,7 +123,7 @@ function normalizePermissions(permissoes: UsuarioPermissao[]): UsuarioPermissao[
 const seedProfiles: UsuarioPerfil[] = [
   { id: 'admin', codigo: 'admin', nome: 'Administrador', permissoes: buildPermissionsFromAllowedModules(ALL_MODULES) },
   { id: 'planejamento', codigo: 'planejamento', nome: 'Planejamento', permissoes: buildPermissionsFromAllowedModules(['dashboard', 'fornecedores', 'colaboradores', 'materiais', 'documentos', 'etiquetas', 'equipamentos', 'relatorios']) },
-  { id: 'operacao', codigo: 'operacao', nome: 'Operacao', permissoes: buildPermissionsFromAllowedModules(['dashboard', 'recebimentos', 'conferencia', 'etiquetas', 'equipamentos', 'atendimento', 'inventario', 'rir', 'rnc', 'mobile']) },
+  { id: 'operacao', codigo: 'operacao', nome: 'Operacao', permissoes: buildOperacaoPermissions() },
   { id: 'consulta', codigo: 'consulta', nome: 'Consulta', permissoes: buildPermissionsFromAllowedModules(['dashboard', 'relatorios']) },
 ];
 
@@ -301,11 +323,58 @@ async function listRemoteUsers(): Promise<UsuarioSistema[]> {
   const supabase = getSupabase();
   if (!supabase) throw new Error('Supabase nao configurado.');
 
-  const { data, error } = await supabase
+  const tenantId = getActiveTenantId();
+  const selectWithEmbed =
+    'id,login,nome,ativo,perfil_id,colaborador_id,perfis_acesso(nome),usuario_permissoes(modulo,acao,permitido)';
+  const selectBase = 'id,login,nome,ativo,perfil_id,colaborador_id,perfis_acesso(nome)';
+
+  let { data, error } = await supabase
     .from('usuarios_sistema')
-    .select('id,login,nome,ativo,perfil_id,colaborador_id,perfis_acesso(nome),usuario_permissoes(modulo,acao,permitido)')
-    .eq('tenant_id', getActiveTenantId())
+    .select(selectWithEmbed)
+    .eq('tenant_id', tenantId)
     .order('nome', { ascending: true });
+
+  // Fallback: FK/schema cache em falta — carrega permissoes em query separada.
+  if (error && /relationship|schema cache|usuario_permissoes/i.test(error.message)) {
+    const base = await supabase
+      .from('usuarios_sistema')
+      .select(selectBase)
+      .eq('tenant_id', tenantId)
+      .order('nome', { ascending: true });
+    if (base.error) throw new Error(base.error.message);
+    const rows = (base.data as RemoteUserRow[] | null) ?? [];
+    const ids = rows.map((r) => String(r.id ?? '')).filter(Boolean);
+    const permByUser = new Map<string, RemotePermissionRow[]>();
+    if (ids.length) {
+      const perms = await supabase
+        .from('usuario_permissoes')
+        .select('usuario_id,modulo,acao,permitido')
+        .eq('tenant_id', tenantId)
+        .in('usuario_id', ids);
+      if (!perms.error) {
+        for (const p of (perms.data as Array<RemotePermissionRow & { usuario_id?: string }> | null) ?? []) {
+          const uid = String(p.usuario_id ?? '');
+          if (!uid) continue;
+          const list = permByUser.get(uid) ?? [];
+          list.push(p);
+          permByUser.set(uid, list);
+        }
+      }
+    }
+    return rows.map((item) => {
+      const id = String(item.id ?? '');
+      return {
+        id,
+        login: String(item.login ?? ''),
+        nome: String(item.nome ?? ''),
+        ativo: Boolean(item.ativo),
+        perfilId: String(item.perfil_id ?? ''),
+        perfilNome: String(item.perfis_acesso?.nome ?? 'Perfil'),
+        colaboradorId: item.colaborador_id ? String(item.colaborador_id) : null,
+        permissoes: mapRemotePermissions(permByUser.get(id) ?? []),
+      };
+    });
+  }
 
   if (error) throw new Error(error.message);
 
@@ -447,7 +516,7 @@ export async function salvarUsuario(payload: UsuarioFormData, currentId?: string
           return {
             success: false,
             error:
-              'Para gravar utilizadores na nuvem com o segredo da funcao iso_pro_admin_user activo, termine a sessao e volte a entrar.',
+              'Senha da sessao em falta. Confirme a senha do administrador no formulario, ou saia e entre de novo.',
           };
         }
         const actor = getCurrentUser();
@@ -477,52 +546,56 @@ export async function salvarUsuario(payload: UsuarioFormData, currentId?: string
           })),
         });
         if (!edgeRes.success) {
-          return { success: false, error: edgeRes.error ?? 'Falha ao gravar utilizador na nuvem (Edge).' };
-        }
+          // Update: se a Edge estiver inacessivel, tenta gravacao directa (permissoes/mobile).
+          // Create continua a exigir Edge (Auth + membership).
+          if (!(currentId && isIsoProAdminUserEdgeUnreachableError(edgeRes.error))) {
+            return { success: false, error: edgeRes.error ?? 'Falha ao gravar utilizador na nuvem (Edge).' };
+          }
+        } else {
+          const edgePayload = edgeRes.data;
+          if (!edgePayload?.user) {
+            return { success: false, error: 'Resposta da funcao iso_pro_admin_user invalida.' };
+          }
 
-        const edgePayload = edgeRes.data;
-        if (!edgePayload?.user) {
-          return { success: false, error: 'Resposta da funcao iso_pro_admin_user invalida.' };
-        }
+          if (currentId && actor.id === currentId && payload.senha.trim()) {
+            refreshVolatileSessionPasswordAfterSelfPasswordChange(payload.senha.trim());
+          }
 
-        if (currentId && actor.id === currentId && payload.senha.trim()) {
-          refreshVolatileSessionPasswordAfterSelfPasswordChange(payload.senha.trim());
-        }
+          const createdOrUpdatedId = currentId ? currentId : String(edgePayload.user.id ?? '');
+          if (!createdOrUpdatedId) {
+            return { success: false, error: 'Resposta da funcao sem id de utilizador.' };
+          }
 
-        const createdOrUpdatedId = currentId ? currentId : String(edgePayload.user.id ?? '');
-        if (!createdOrUpdatedId) {
-          return { success: false, error: 'Resposta da funcao sem id de utilizador.' };
-        }
+          const { data: row, error: refErr } = await supabase
+            .from('usuarios_sistema')
+            .select('id,login,nome,ativo,perfil_id,colaborador_id,perfis_acesso(nome),usuario_permissoes(modulo,acao,permitido)')
+            .eq('id', createdOrUpdatedId)
+            .eq('tenant_id', tenantId)
+            .single();
+          if (refErr || !row) {
+            return { success: false, error: refErr?.message ?? 'Utilizador gravado mas falhou releitura na nuvem.' };
+          }
 
-        const { data: row, error: refErr } = await supabase
-          .from('usuarios_sistema')
-          .select('id,login,nome,ativo,perfil_id,colaborador_id,perfis_acesso(nome),usuario_permissoes(modulo,acao,permitido)')
-          .eq('id', createdOrUpdatedId)
-          .eq('tenant_id', tenantId)
-          .single();
-        if (refErr || !row) {
-          return { success: false, error: refErr?.message ?? 'Utilizador gravado mas falhou releitura na nuvem.' };
+          const item = row as RemoteUserRow;
+          registerUserAudit(
+            'user_saved',
+            String(item.login ?? normalizedLogin),
+            currentId ? 'Cadastro de usuario actualizado na nuvem (Edge).' : 'Novo usuario criado na nuvem (Edge).',
+          );
+          return {
+            success: true,
+            data: {
+              id: String(item.id ?? ''),
+              login: String(item.login ?? ''),
+              nome: String(item.nome ?? ''),
+              ativo: Boolean(item.ativo),
+              perfilId: String(item.perfil_id ?? ''),
+              perfilNome: String(item.perfis_acesso?.nome ?? 'Perfil'),
+              colaboradorId: item.colaborador_id ? String(item.colaborador_id) : null,
+              permissoes: mapRemotePermissions(item.usuario_permissoes),
+            },
+          };
         }
-
-        const item = row as RemoteUserRow;
-        registerUserAudit(
-          'user_saved',
-          String(item.login ?? normalizedLogin),
-          currentId ? 'Cadastro de usuario actualizado na nuvem (Edge).' : 'Novo usuario criado na nuvem (Edge).',
-        );
-        return {
-          success: true,
-          data: {
-            id: String(item.id ?? ''),
-            login: String(item.login ?? ''),
-            nome: String(item.nome ?? ''),
-            ativo: Boolean(item.ativo),
-            perfilId: String(item.perfil_id ?? ''),
-            perfilNome: String(item.perfis_acesso?.nome ?? 'Perfil'),
-            colaboradorId: item.colaborador_id ? String(item.colaborador_id) : null,
-            permissoes: mapRemotePermissions(item.usuario_permissoes),
-          },
-        };
       }
 
       if (currentId) {

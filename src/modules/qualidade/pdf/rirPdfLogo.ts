@@ -3,7 +3,7 @@ import {
   absolutizarUrlMidiaParaDocumentoHtmlBlob,
   resolverUrlLogoInstitucionalParaHtmlImpresso,
 } from '../../../lib/logoInstitucional';
-import { RIR_PDF_LOGO_MAX } from './rirPdfLayout';
+import { dimensoesLogoInstitucionalPdf } from '../../../lib/logoInstitucionalTamanho';
 
 /** PNG de fábrica ~590 px (300 DPI para 118 pt). */
 export const LOGO_INSTITUCIONAL_PRINT_PNG = './logo-institutional-print.png';
@@ -68,8 +68,9 @@ async function rasterizarSvgParaPng(url: string): Promise<LogoPdfCarregado> {
       el.src = objUrl;
     });
 
-    const maxW = Math.max(RIR_PDF_LOGO_MAX.w * LOGO_RASTER_SCALE, LOGO_RASTER_MIN_WIDTH);
-    const maxH = RIR_PDF_LOGO_MAX.h * LOGO_RASTER_SCALE;
+    const slot = dimensoesLogoInstitucionalPdf('auto');
+    const maxW = Math.max(slot.w * LOGO_RASTER_SCALE, LOGO_RASTER_MIN_WIDTH);
+    const maxH = slot.h * LOGO_RASTER_SCALE;
     const scale = Math.min(maxW / (img.naturalWidth || maxW), maxH / (img.naturalHeight || maxH));
     const w = Math.max(Math.round((img.naturalWidth || maxW) * scale), LOGO_RASTER_MIN_WIDTH);
     const h = Math.round((img.naturalHeight || maxH) * scale);

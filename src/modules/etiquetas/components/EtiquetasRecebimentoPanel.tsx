@@ -2,12 +2,11 @@ import type { CSSProperties } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { abrirPreVisualizacaoHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
 import { PAGEDJS_SCRIPT_FILENAME } from '../../../lib/relatorioPagedConstants';
 import { substituirPagedJsPorInline } from '../../../lib/relatorioPagedJsBundle';
 import { Input } from '../../../components/ui/Input';
-import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -161,6 +160,7 @@ export function EtiquetasRecebimentoPanel() {
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listaBuscaSeqRef = useRef(0);
+  const itensRecebRef = useRef<HTMLDivElement | null>(null);
 
   const preset = useMemo(() => getEtiquetaPreset(modelo, formato), [modelo, formato]);
 
@@ -209,15 +209,16 @@ export function EtiquetasRecebimentoPanel() {
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
       const q = buscaReceb.trim();
-      if (q.length < 1) {
+      // Evita disparar RPC a cada dígito isolado; NF típica ≥ 3.
+      if (q.length < 3) {
         listaBuscaSeqRef.current += 1;
         setListaRecebimentos([]);
-        setMsg('');
+        setMsg(q.length > 0 ? 'Digite pelo menos 3 caracteres (NF, romaneio ou fornecedor).' : '');
         setCarregandoLista(false);
         return;
       }
       void runListBuscaRecebimentos(q, false);
-    }, LISTA_BUSCA_DEBOUNCE_MS);
+    }, listaBuscaDebounceMs(buscaReceb));
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -278,6 +279,9 @@ export function EtiquetasRecebimentoPanel() {
       setRecebimentoAtual(result.data);
       const todos = new Set(result.data.itens.map((i) => i.id));
       setSelectedItemIds(todos);
+      window.requestAnimationFrame(() => {
+        itensRecebRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     },
     [podeReceb],
   );
@@ -394,48 +398,31 @@ export function EtiquetasRecebimentoPanel() {
   }
 
   return (
-    <div className="section-block rir-form-professional" style={{ marginBottom: 24 }}>
-      <h3 className="panel-kicker" style={{ marginBottom: 8 }}>
-        Impressao a partir de recebimentos
-      </h3>
-      <ModuleHelp>
-        <p className="panel-copy" style={{ marginBottom: 12 }}>
-          Busca inteligente por NF, romaneio ou fornecedor (trechos, segmentos e numeros flexiveis, como na consulta mobile). Os resultados
-          aparecem automaticamente apos uma breve pausa ao digitar (~{LISTA_BUSCA_DEBOUNCE_MS} ms); tambem pode usar <strong>Enter</strong> ou{' '}
-          <strong>Buscar recebimentos</strong> (inclui busca com campo vazio — primeiros registos). Use <strong>Limpar busca</strong> para
-          esconder a lista e voltar ao estado inicial; com um recebimento aberto, <strong>Outra NF</strong> fecha so esse recebimento e mantem
-          a lista para escolher outra linha. Abra um recebimento para listar os itens, marque os que deseja etiquetar, escolha modelo e formato
-          e gere a pre-visualizacao.
-        </p>
-      </ModuleHelp>
-
-      <div className="filters-grid" style={{ marginBottom: 12 }}>
-        <Input
-          label="Buscar recebimento"
-          onChange={(e) => setBuscaReceb(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') void buscarListaRecebimentos();
-          }}
-          placeholder="Digite NF, romaneio ou fornecedor — lista apos pausa ou Enter"
-          value={buscaReceb}
-        />
-        <div className="form-actions" style={{ alignItems: 'flex-end', flexWrap: 'wrap', gap: 8 }}>
-          <Button disabled={!podeReceb || carregandoLista} onClick={() => void buscarListaRecebimentos()} type="button">
-            {carregandoLista ? 'Buscando...' : 'Buscar recebimentos'}
-          </Button>
-          <Button
-            disabled={!podeReceb || !podeLimparBusca}
-            onClick={limparBuscaEResultados}
-            type="button"
-            variant="ghost"
-          >
-            Limpar busca
-          </Button>
+    <div className="etiquetas-recebimento">
+      {!recebimentoAtual ? (
+        <div className="etiquetas-busca-row">
+          <Input
+            label="Buscar recebimento"
+            onChange={(e) => setBuscaReceb(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void buscarListaRecebimentos();
+            }}
+            placeholder="NF, romaneio ou fornecedor"
+            value={buscaReceb}
+          />
+          <div className="etiquetas-busca-row__actions">
+            <Button disabled={!podeReceb || carregandoLista} onClick={() => void buscarListaRecebimentos()} type="button">
+              {carregandoLista ? 'A buscar…' : 'Buscar'}
+            </Button>
+            <Button disabled={!podeReceb || !podeLimparBusca} onClick={limparBuscaEResultados} type="button" variant="ghost">
+              Limpar
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      {listaRecebimentos.length > 0 ? (
-        <div className="table-shell" style={{ marginBottom: 16 }}>
+      {listaRecebimentos.length > 0 && !recebimentoAtual ? (
+        <div className="table-shell etiquetas-receb-lista">
           <table className="data-table">
             <thead>
               <tr>
@@ -444,7 +431,7 @@ export function EtiquetasRecebimentoPanel() {
                 <th>Fornecedor</th>
                 <th>Status</th>
                 <th>Itens</th>
-                <th />
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -458,12 +445,8 @@ export function EtiquetasRecebimentoPanel() {
                   <td>{r.status}</td>
                   <td>{r.totalItens}</td>
                   <td>
-                    <Button
-                      onClick={() => void carregarItensRecebimento(r.id)}
-                      type="button"
-                      variant={recebimentoAtual?.id === r.id ? 'primary' : 'ghost'}
-                    >
-                      {recebimentoAtual?.id === r.id ? 'Carregado' : 'Ver itens'}
+                    <Button onClick={() => void carregarItensRecebimento(r.id)} type="button" variant="ghost">
+                      Ver itens
                     </Button>
                   </td>
                 </tr>
@@ -473,46 +456,97 @@ export function EtiquetasRecebimentoPanel() {
         </div>
       ) : null}
 
-      {carregandoDetalhe ? <OperationalNotice>Carregando itens...</OperationalNotice> : null}
+      {carregandoDetalhe ? <OperationalNotice>A carregar itens…</OperationalNotice> : null}
 
       {recebimentoAtual ? (
         <>
-          <OperationalNotice>
-            Recebimento selecionado: NF <strong>{recebimentoAtual.notaFiscal || '—'}</strong> — {recebimentoAtual.fornecedor} —{' '}
-            {recebimentoAtual.itens.length} item(ns). Marque os que deseja imprimir.
-            {' As etiquetas usam a quantidade recebida registrada neste recebimento.'}
-          </OperationalNotice>
-
-          <div className="form-actions" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-            <Button onClick={fecharRecebimentoSelecionado} type="button" variant="ghost">
-              Outra NF (voltar à lista de recebimentos)
-            </Button>
-            <Button disabled={!podeReceb} onClick={limparBuscaEResultados} type="button" variant="ghost">
-              Limpar busca e nova pesquisa
-            </Button>
+          <div className="etiquetas-bulk-bar etiquetas-bulk-bar--compact etiquetas-nf-chrome">
+            <span className="etiquetas-nf-chrome__meta">
+              NF <strong>{recebimentoAtual.notaFiscal || '—'}</strong>
+              <span className="etiquetas-nf-chrome__sep">·</span>
+              {recebimentoAtual.fornecedor}
+              <span className="etiquetas-nf-chrome__sep">·</span>
+              {recebimentoAtual.itens.length} item(ns)
+              {selectedItemIds.size > 0 ? (
+                <>
+                  <span className="etiquetas-nf-chrome__sep">·</span>
+                  {selectedItemIds.size} selecionado(s)
+                </>
+              ) : null}
+            </span>
+            <div className="etiquetas-bulk-bar__actions">
+              <Button onClick={fecharRecebimentoSelecionado} type="button" variant="ghost">
+                Outra NF
+              </Button>
+              <Button disabled={!podeReceb} onClick={limparBuscaEResultados} type="button" variant="ghost">
+                Nova pesquisa
+              </Button>
+              <Button onClick={selecionarTodosItens} type="button" variant="ghost">
+                Selecionar todos
+              </Button>
+              <Button onClick={limparSelecaoItens} type="button" variant="ghost">
+                Limpar seleção
+              </Button>
+              <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void gerarPreview()} type="button" variant="ghost">
+                Pré-visualizar
+              </Button>
+              <Button disabled={!podeEtiqueta || !itensSelecionados.length || imprimirBusy} onClick={() => void imprimirDoc()} type="button">
+                {imprimirBusy ? 'A imprimir…' : 'Imprimir'}
+              </Button>
+            </div>
           </div>
 
-          <div className="form-actions" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
-            <Button onClick={selecionarTodosItens} type="button" variant="ghost">
-              Selecionar todos os itens
-            </Button>
-            <Button onClick={limparSelecaoItens} type="button" variant="ghost">
-              Limpar selecao
-            </Button>
+          <div className="etiquetas-print-rail">
+            <div className="form-columns form-columns--etiquetas-print">
+              <Select label="Modelo" onChange={(e) => setModelo(e.target.value as EtiquetaModelo)} value={modelo}>
+                <option value="simples">Simples</option>
+                <option value="colorido">Neutro refinado</option>
+                <option value="industrial">Industrial</option>
+                <option value="cartao">Cartão</option>
+                <option value="segregacao">Segregação — «Segregado»</option>
+                <option value="liberacao">Liberação — «Liberado»</option>
+              </Select>
+              <Select label="Formato" onChange={(e) => setFormato(e.target.value as EtiquetaFormato)} value={formato}>
+                <option value="a4_3col">A4 3 colunas (denso)</option>
+                <option value="a4_2col">A4 2 colunas</option>
+                <option value="a4_1col">A4 1 coluna</option>
+                <option value="termica_58">Térmica 58mm</option>
+                <option value="termica_80">Térmica 80mm</option>
+              </Select>
+              <Input
+                label="Cópias por item"
+                min={1}
+                onChange={(e) => setCopiasPorItem(Math.max(1, Number(e.target.value) || 1))}
+                type="number"
+                value={String(copiasPorItem)}
+              />
+              <Select
+                label="Códigos na etiqueta"
+                onChange={(e) => setCodigosNaEtiqueta(e.target.value as EtiquetaCodigosOpcao)}
+                value={codigosNaEtiqueta}
+              >
+                <option value="nenhum">Nenhum</option>
+                <option value="codigo_barras">Somente código de barras</option>
+                <option value="qrcode">Somente QR Code</option>
+                <option value="ambos">Código de barras e QR Code</option>
+              </Select>
+            </div>
+            <label className="field field--inline etiquetas-print-rail__logo">
+              <input checked={logoNaEtiqueta} onChange={(e) => setLogoNaEtiqueta(e.target.checked)} type="checkbox" />
+              <span>Logo na etiqueta</span>
+            </label>
           </div>
 
-          <div className="table-shell" style={{ marginBottom: 16 }}>
+          <div className="table-shell etiquetas-receb-itens" ref={itensRecebRef}>
             <table className="data-table">
               <thead>
                 <tr>
                   <th style={{ width: 40 }} />
-                  <th>Codigo</th>
-                  <th>Descricao</th>
-                  <th title="Quantidade recebida no recebimento (valor impresso na etiqueta)">
-                    Qtd etiqueta
-                  </th>
+                  <th>Código</th>
+                  <th>Descrição</th>
+                  <th title="Quantidade recebida no recebimento (valor impresso na etiqueta)">Qtd etiqueta</th>
                   <th>Un</th>
-                  <th>Localizacao</th>
+                  <th>Localização</th>
                   <th>Disciplina</th>
                 </tr>
               </thead>
@@ -539,66 +573,11 @@ export function EtiquetasRecebimentoPanel() {
             </table>
           </div>
 
-          <section className="rir-card">
-            <h4 className="rir-card-title">Modelo e impressao</h4>
-            <div className="form-columns" style={{ marginBottom: 12 }}>
-              <Select label="Modelo" onChange={(e) => setModelo(e.target.value as EtiquetaModelo)} value={modelo}>
-                <option value="simples">Simples</option>
-                <option value="colorido">Neutro refinado</option>
-                <option value="industrial">Industrial</option>
-                <option value="cartao">Cartao</option>
-                <option value="segregacao">Segregacao — etiqueta mostra «Segregado»</option>
-                <option value="liberacao">Liberacao — etiqueta mostra «Liberado»</option>
-              </Select>
-              <Select label="Formato" onChange={(e) => setFormato(e.target.value as EtiquetaFormato)} value={formato}>
-                <option value="a4_2col">A4 2 colunas</option>
-                <option value="a4_1col">A4 1 coluna</option>
-                <option value="termica_58">Termica 58mm</option>
-                <option value="termica_80">Termica 80mm</option>
-              </Select>
-              <Input
-                label="Copias por item"
-                min={1}
-                onChange={(e) => setCopiasPorItem(Math.max(1, Number(e.target.value) || 1))}
-                type="number"
-                value={String(copiasPorItem)}
-              />
-              <Select
-                label="Codigos na etiqueta"
-                onChange={(e) => setCodigosNaEtiqueta(e.target.value as EtiquetaCodigosOpcao)}
-                value={codigosNaEtiqueta}
-              >
-                <option value="nenhum">Nenhum</option>
-                <option value="codigo_barras">Somente codigo de barras</option>
-                <option value="qrcode">Somente QR Code</option>
-                <option value="ambos">Codigo de barras e QR Code</option>
-              </Select>
-            </div>
-
-            <label className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <input
-                checked={logoNaEtiqueta}
-                onChange={(e) => setLogoNaEtiqueta(e.target.checked)}
-                type="checkbox"
-              />
-              <span>Mostrar logo da empresa em cada etiqueta (defina o logo em Configuracoes)</span>
-            </label>
-
-            <div className="form-actions" style={{ flexWrap: 'wrap', marginBottom: 0 }}>
-              <Button disabled={!podeEtiqueta || !itensSelecionados.length} onClick={() => void gerarPreview()} type="button">
-                Gerar pre-visualizacao
-              </Button>
-              <Button disabled={!podeEtiqueta || !itensSelecionados.length || imprimirBusy} onClick={() => void imprimirDoc()} type="button">
-                {imprimirBusy ? 'A imprimir…' : 'Imprimir'}
-              </Button>
-            </div>
-          </section>
-
           {previewHtml ? (
-            <div className="editor-block" style={{ marginTop: 4 }}>
+            <div className="etiquetas-preview-block">
               <EtiquetaRecebimentoPreviewChrome
                 copiasPorItem={copiasPorItem}
-                iframeMinHeight={440}
+                iframeMinHeight={220}
                 itemCount={itensSelecionados.length}
                 onOpenLightbox={() => void abrirPreVisualizacaoTelaGrande()}
                 previewBusy={previewBusy}

@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
@@ -57,7 +58,7 @@ export function useEquipamentos() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Equipamento | null>(null);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -71,6 +72,8 @@ export function useEquipamentos() {
         items: result.data.items,
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
   });
@@ -93,6 +96,17 @@ export function useEquipamentos() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['equipamentos', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -211,6 +225,8 @@ export function useEquipamentos() {
     error: error || listError || indicadoresError,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,

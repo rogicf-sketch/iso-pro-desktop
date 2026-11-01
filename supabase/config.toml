@@ -36,6 +36,14 @@ verify_jwt = false
 # Actor login+senha + RPC iso_pro_usuario_administra_utilizadores; segredo ISO_PRO_ADMIN_USER_SECRET.
 verify_jwt = false
 
+[functions.iso_pro_create_tenant]
+# Mesmo segredo ISO_PRO_ADMIN_USER_SECRET + actor admin; provisiona tenant sem SQL Editor.
+verify_jwt = false
+
+[functions.iso_pro_desktop_license]
+# Super-admin sede: ISO_PRO_ADMIN_USER_SECRET + plataforma_super_admin; assina com ISO_PRO_DESKTOP_LICENSE_PRIVATE_KEY.
+verify_jwt = false
+
 [functions.alerta_estoque_critico]
 # Cron (ISO_PRO_ALERTA_ESTOQUE_CRON_SECRET) ou login+senha admin configuracoes.
 verify_jwt = false

@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconCheck, IconPencil } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { Etiqueta, EtiquetaListItem } from '../types/etiqueta.types';
 
@@ -21,7 +21,7 @@ type Props = {
 function getTone(status: Etiqueta['status']) {
   if (status === 'impressa') return createStatusMeta(status, 'ok');
   if (status === 'pronta') return createStatusMeta(status, 'warning');
-  if (status === 'rascunho') return createStatusMeta(status, 'warning');
+  if (status === 'rascunho') return createStatusMeta(status, 'neutral');
   return createStatusMeta(status, 'danger');
 }
 
@@ -74,74 +74,77 @@ export function EtiquetasTable({
     {
       key: 'titulo',
       header: 'Etiqueta',
-          render: (item: EtiquetaListItem) => (
-            <div>
-              <strong>{item.titulo}</strong>
-              <div className="panel-copy">{item.codigo}</div>
-            </div>
-          ),
-        },
-        { key: 'modelo', header: 'Modelo', render: (item: EtiquetaListItem) => item.modelo },
-        { key: 'formato', header: 'Formato', render: (item: EtiquetaListItem) => item.formato },
-        { key: 'origem', header: 'Origem', render: (item: EtiquetaListItem) => item.moduloOrigem },
-        { key: 'copias', header: 'Copias', render: (item: EtiquetaListItem) => item.quantidadeCopias },
-        {
-          key: 'status',
-          header: 'Status',
-          render: (item: EtiquetaListItem) => {
-            const meta = getTone(item.status);
-            return <StatusBadge text={meta.text} tone={meta.tone} />;
-          },
-        },
-        {
-          key: 'acoes',
-          header: 'Acoes',
-          render: (item: EtiquetaListItem) => (
-            <div className="table-actions">
-              {canEdit ? (
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
-              ) : null}
-              {canAdminister ? (
-                <ActionButton
-                  disabled={item.status === 'impressa' || item.status === 'cancelada'}
-                  disabledLabel={item.status === 'impressa' ? 'Impressa' : 'Travada'}
-                  disabledTitle={
-                    item.status === 'impressa'
-                      ? 'Etiqueta ja marcada como impressa.'
-                      : 'Etiquetas canceladas nao podem ser impressas.'
-                  }
-                  enabledLabel="Marcar impressa"
-                  enabledTitle="Marcar etiqueta como impressa"
-                  onClick={() => onStatus(item, 'impressa')}
-                  variant="primary"
-                />
-              ) : null}
-              {canAdminister ? (
-                <ActionButton
-                  disabled={item.status === 'cancelada' || item.status === 'impressa'}
-                  disabledLabel={item.status === 'cancelada' ? 'Cancelada' : 'Travada'}
-                  disabledTitle={
-                    item.status === 'cancelada'
-                      ? 'Etiqueta ja cancelada.'
-                      : 'Etiquetas impressas nao podem ser canceladas por este fluxo.'
-                  }
-                  enabledLabel="Cancelar"
-                  enabledTitle="Cancelar etiqueta"
-                  onClick={() => onStatus(item, 'cancelada')}
-                  variant="danger"
-                />
-              ) : null}
-            </div>
-          ),
-        },
-      ];
+      render: (item: EtiquetaListItem) => (
+        <div>
+          <strong>{item.titulo}</strong>
+          <div className="panel-copy">{item.codigo}</div>
+        </div>
+      ),
+    },
+    { key: 'modelo', header: 'Modelo', render: (item: EtiquetaListItem) => item.modelo },
+    { key: 'formato', header: 'Formato', render: (item: EtiquetaListItem) => item.formato },
+    { key: 'origem', header: 'Origem', render: (item: EtiquetaListItem) => item.moduloOrigem },
+    { key: 'copias', header: 'Cópias', render: (item: EtiquetaListItem) => item.quantidadeCopias },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (item: EtiquetaListItem) => {
+        const meta = getTone(item.status);
+        return <StatusBadge text={meta.text} tone={meta.tone} />;
+      },
+    },
+    {
+      key: 'acoes',
+      header: 'Ações',
+      render: (item: EtiquetaListItem) => (
+        <div className="table-actions">
+          {canEdit ? (
+            <TableIconButton label="Editar etiqueta" onClick={() => onEdit(item)}>
+              <IconPencil />
+            </TableIconButton>
+          ) : null}
+          {canAdminister ? (
+            <TableIconButton
+              disabled={item.status === 'impressa' || item.status === 'cancelada'}
+              label={
+                item.status === 'impressa'
+                  ? 'Já marcada como impressa'
+                  : item.status === 'cancelada'
+                    ? 'Etiqueta cancelada — não pode marcar impressa'
+                    : 'Marcar como impressa'
+              }
+              onClick={() => onStatus(item, 'impressa')}
+              tone="accent"
+            >
+              <IconCheck />
+            </TableIconButton>
+          ) : null}
+          {canAdminister ? (
+            <TableIconButton
+              disabled={item.status === 'cancelada' || item.status === 'impressa'}
+              label={
+                item.status === 'cancelada'
+                  ? 'Já cancelada'
+                  : item.status === 'impressa'
+                    ? 'Impressa — não pode cancelar neste fluxo'
+                    : 'Cancelar etiqueta'
+              }
+              onClick={() => onStatus(item, 'cancelada')}
+              tone="danger"
+            >
+              <IconBan />
+            </TableIconButton>
+          ) : null}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <DataTable
       columns={columns}
-      emptyText="Nenhuma etiqueta encontrada."
+      emptyDescription="Gere etiquetas a partir de um recebimento ou ajuste o filtro."
+      emptyText="Nenhuma etiqueta encontrada"
       getRowClassName={(item) =>
         getTableRowClassName(item.status === 'cancelada' ? 'critical' : item.status === 'pronta' ? 'warning' : 'normal')
       }

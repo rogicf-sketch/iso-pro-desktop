@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -68,6 +69,7 @@ export function useMateriais() {
   const [filters, setFilters] = useState<MaterialFiltro>(initialFilters);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [exportingMateriaisCsv, setExportingMateriaisCsv] = useState<'tudo' | 'filtro' | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Material | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -77,6 +79,7 @@ export function useMateriais() {
     linhaCount: number;
   } | null>(() => loadPersistedMateriaisImportStaging());
   const [importingMateriais, setImportingMateriais] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
   const [importResultado, setImportResultado] = useState<MateriaisImportacaoResumo | null>(null);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([]);
   const filterSelectionKey = `${filters.busca}\u0001${filters.disciplina}\u0001${filters.ativo}\u0001${filters.pageSize}`;
@@ -122,7 +125,7 @@ export function useMateriais() {
     }
   }
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -147,26 +150,42 @@ export function useMateriais() {
         staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
-    initialData: () => {
-      const page = listarMateriaisLocalSync(filtersForLista);
-      return {
-        items: page.items,
-        total: page.total,
-        disciplinas: [] as string[],
-        unidades: [] as string[],
-        listSource: 'local' as const,
-        staleWhileRevalidate: false,
-      };
-    },
-    initialDataUpdatedAt: 0,
+    // Com nuvem activa a copia local antiga (ex.: 3.862) nao pode aparecer como o cadastro.
+    ...(cloudMaterialsEnabled
+      ? {}
+      : {
+          initialData: () => {
+            const page = listarMateriaisLocalSync(filtersForLista);
+            return {
+              items: page.items,
+              total: page.total,
+              disciplinas: [] as string[],
+              unidades: [] as string[],
+              listSource: 'local' as const,
+              staleWhileRevalidate: false,
+            };
+          },
+          initialDataUpdatedAt: 0,
+        }),
   });
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
   const disciplinas = listQuery.data?.disciplinas ?? [];
   const unidades = listQuery.data?.unidades ?? [];
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
   const loading = listQuery.isLoading && items.length === 0;
   const refreshing = listQuery.isFetching && items.length > 0;
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig: cloudMaterialsEnabled,
+    queryClient,
+    queryKeyPrefix: ['materiais', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -396,14 +415,21 @@ export function useMateriais() {
       setError('Seu perfil nao possui permissao para exportar materiais.');
       return;
     }
+    if (exportingMateriaisCsv) return;
     setError('');
-    const result = await montarExportacaoMateriaisCsv();
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar a planilha.');
-      return;
+    setSuccess('');
+    setExportingMateriaisCsv('tudo');
+    try {
+      const result = await montarExportacaoMateriaisCsv();
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar a planilha.');
+        return;
+      }
+      baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
+      setSuccess('Exportacao concluida. O ficheiro CSV foi descarregado.');
+    } finally {
+      setExportingMateriaisCsv(null);
     }
-    baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
-    setSuccess('Exportacao Excel (CSV) - todos os materiais concluida.');
   }
 
   async function exportMateriaisCsvFiltrado() {
@@ -411,14 +437,21 @@ export function useMateriais() {
       setError('Seu perfil nao possui permissao para exportar materiais.');
       return;
     }
+    if (exportingMateriaisCsv) return;
     setError('');
-    const result = await montarExportacaoMateriaisCsv({ filtroLista: filtersForLista });
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar a planilha.');
-      return;
+    setSuccess('');
+    setExportingMateriaisCsv('filtro');
+    try {
+      const result = await montarExportacaoMateriaisCsv({ filtroLista: filtersForLista });
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar a planilha.');
+        return;
+      }
+      baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
+      setSuccess('Exportacao concluida. O ficheiro CSV (filtro) foi descarregado.');
+    } finally {
+      setExportingMateriaisCsv(null);
     }
-    baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
-    setSuccess('Exportacao Excel (CSV) - filtro atual da lista concluida.');
   }
 
   function openImportMateriaisPicker() {
@@ -533,28 +566,43 @@ export function useMateriais() {
     setError('');
     setSuccess('');
     setImportingMateriais(true);
-    const text = importStaging.text;
+    setImportProgress('A preparar o cadastro…');
+    const stagingAtual = importStaging;
+    const text = stagingAtual.text;
 
-    const result = await importarMateriaisDoArquivoCsv(text, { actorLogin: user?.login });
-    setImportingMateriais(false);
-    setImportStaging(null);
+    try {
+      const result = await importarMateriaisDoArquivoCsv(text, {
+        actorLogin: user?.login,
+        onProgress: (mensagem) => setImportProgress(mensagem),
+      });
 
-    if (!result.success) {
-      if (result.data?.detalhes.length) {
-        setError(`${result.error ?? 'Importacao nao concluida.'} Detalhes: ${result.data.detalhes.join(' | ')}`);
-      } else {
-        setError(result.error ?? 'Importacao nao concluida.');
+      if (!result.success) {
+        if (result.data?.detalhes.length) {
+          setImportResultado({
+            ...result.data,
+            mensagem: result.error ?? 'Nenhuma alteracao aplicada. Revise o ficheiro e os avisos abaixo.',
+            ficheiroOrigem: stagingAtual.fileName,
+          });
+        } else {
+          setError(result.error ?? 'Importacao nao concluida. Atualize a pagina e confira o total antes de importar de novo.');
+        }
+        return;
       }
-      return;
-    }
 
-    const r = result.data;
-    if (!r) {
-      setError('Resumo da importacao indisponivel.');
-      return;
+      const r = result.data;
+      if (!r) {
+        setError('Resumo da importacao indisponivel.');
+        return;
+      }
+      setImportResultado({ ...r, ficheiroOrigem: stagingAtual.fileName });
+      void invalidateMateriaisLista();
+    } catch {
+      setError('A importacao nao confirmou o fim. Atualize a pagina e confira o total antes de importar de novo.');
+    } finally {
+      setImportingMateriais(false);
+      setImportProgress('');
+      setImportStaging(null);
     }
-    await invalidateMateriaisLista();
-    setImportResultado(r);
   }
 
   return {
@@ -566,6 +614,8 @@ export function useMateriais() {
     success,
     hasCloudConfig,
     cloudMaterialsEnabled,
+    listSource,
+    staleWhileRevalidate,
     filters,
     disciplinas,
     unidades,
@@ -607,6 +657,7 @@ export function useMateriais() {
     downloadModeloCsvImportacaoMateriais,
     importStaging,
     importingMateriais,
+    importProgress,
     importResultado,
     stageImportMateriaisFromFile,
     cancelImportMateriaisStaging,
@@ -614,6 +665,7 @@ export function useMateriais() {
     closeImportMateriaisResultado,
     exportMateriaisCsv,
     exportMateriaisCsvFiltrado,
+    exportingMateriaisCsv,
     selectedMaterialIds,
     selectedMaterialIdSet,
     toggleSelectMaterialId,

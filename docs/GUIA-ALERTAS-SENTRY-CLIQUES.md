@@ -33,30 +33,48 @@ https://iso-pro-gestao-de-materiais.sentry.io/alerts/rules/
 Se pedir permissão / 404: a conta pode não ter role Admin — usa o email owner da org.
 
 
-1. Menu **Alerts** → **Create Alert** (ou **Create Alert Rule**)  
-2. Tipo: **Issues** (não Metric, se perguntar)  
-3. Condição sugerida: **A new issue is created**  
-   (ou: Number of events in an issue is more than `0` in `1 hour`)  
-4. Filtro / Filter:
-   - **Message** → **contains** → cola uma destas strings:
+## Passo B — Alerta crítico `dual_write_failure` (obrigatório P1)
+
+Link: https://iso-pro-gestao-de-materiais.sentry.io/alerts/rules/
+
+1. **Create Alert** → tipo **Issues**
+2. Condição: **A new issue is created** (ou events > 0 in 1 hour)
+3. Filtro (um dos dois):
+   - **Message** contains `iso.dual_write_failure`  ← mais simples
+   - **ou** Tag `iso_event` equals `dual_write_failure` (SDK passa a enviar tag)
+4. Acção: email TI
+5. Nome: `ISO PRO — dual_write_failure`
+6. **Save**
+
+Validar:
+
+```powershell
+cd iso-pro-desktop
+npm run sentry:dual-write-smoke
+```
+
+Em ~1 min: Issues deve mostrar o evento; se a regra existir, chega email. Depois **Resolve** o issue de smoke.
+
+---
+
+## Passo C — Outros alertas (opcional)
+
+1. Menu **Alerts** → **Create Alert**  
+2. Filtro message contains:
 
 | # | Mensagem (cola exacta) | Prioridade |
 |---|------------------------|------------|
 | 1 | `iso.snapshot_conflict` | Alta |
-| 2 | `iso.dual_write_failure` | Crítica |
 | 3 | `iso.offline_flush` | Alta |
 | 4 | `iso.outbox_flush_fail` | Crítica |
 
-5. Acção: **Send a notification** → o teu email (owner)  
-6. Nome do alerta: `ISO PRO — <mensagem>`  
-7. **Save Rule**
-
-**Não** cries alerta para `iso.sentry_smoke_test` nem `iso.mfa_challenge` (ruído).
+**Não** cries alerta para `iso.sentry_smoke_test`, `iso.mfa_challenge`, `iso.reconcile_ok`.  
+`iso.sot_divergence` = heal (digest opcional).
 
 ---
 
-## Passo C — Marcar feito
+## Passo D — Marcar feito
 
-Quando os 4 estiverem criados, responde **“alertas sentry ok”**.
+Quando `dual_write_failure` estiver criado e o smoke notificar, responde **“alertas sentry ok”**.
 
 Checklist: `docs/CHECKLIST-ALERTAS-SENTRY.md`

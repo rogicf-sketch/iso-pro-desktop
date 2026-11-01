@@ -1,400 +1,767 @@
 import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
+import { montarDocumentoHtmlInstitucionalPaged } from '../../../lib/relatorioPagedDocument';
+import type { RelatorioPdfMeta } from '../../../lib/relatorioPdfMeta';
+import { escapeHtmlRelatorio } from '../../../lib/htmlRelatorioInstitucional';
 import {
-  cssBarraPreVisualizacaoImpressaoHtml,
-  cssInstitucionalRelatorio,
-  escapeHtmlRelatorio,
-  htmlBarraPreVisualizacaoImpressao,
-  htmlBlocoLogoInstitucional,
-  segmentoInstituicaoRodapeEletronico,
-  scriptBarraPreVisualizacaoImpressao,
-} from '../../../lib/htmlRelatorioInstitucional';
+  cssLogoInstitucionalImpressaoDaConfig,
+  resolverUrlLogoInstitucionalParaHtmlImpresso,
+} from '../../../lib/logoInstitucional';
+import {
+  cssRodapeInstitucionalControle,
+  dataUrlQrDocumentoControle,
+  htmlRodapeInstitucionalControle,
+} from '../../../lib/relatorioDocControle';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { hydrateRncRegistro } from './rncFotoIdb';
-import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
-import type { RncItemLinha, RncRegistro } from '../types/qualidade.types';
+import { formatarQuantidadeRir } from './rirDescricaoCompacta';
+import type {
+  RncAssinaturaBloco,
+  RncEncerramentoParecer,
+  RncEvidencias,
+  RncItemLinha,
+  RncPlanoAcaoLinha,
+  RncRegistro,
+  RncTiposOcorrencia,
+} from '../types/qualidade.types';
 
-const statusLabel: Record<RncRegistro['status'], string> = {
+const DOC_VERSION = '7';
+
+const STATUS_LABEL: Record<RncRegistro['status'], string> = {
   aberto: 'Aberto',
   em_tratativa: 'Em tratativa',
-  concluido: 'Fechado (concluido)',
+  concluido: 'Fechado',
   cancelado: 'Cancelado',
 };
 
-const localLabel: Record<NonNullable<RncRegistro['localArmazenagem']>, string> = {
-  '': 'Nao informado',
+const LOCAL_LABEL: Record<Exclude<RncRegistro['localArmazenagem'], ''>, string> = {
   almoxarifado: 'Almoxarifado',
-  quarentena: 'Area de quarentena',
+  quarentena: 'Área de quarentena',
   outro: 'Outro',
 };
 
-const acaoImediataLabel: Record<NonNullable<RncRegistro['acaoImediataTipo']>, string> = {
-  '': 'Nao se aplica / a definir',
+const ACAO_IMEDIATA_LABEL: Record<Exclude<NonNullable<RncRegistro['acaoImediataTipo']>, ''>, string> = {
   devolvido_transportador: 'Material devolvido ao transportador',
   quarentena_bloqueado: 'Material segregado em quarentena (etiqueta BLOQUEADO)',
   parcial_item_defeito: 'Recebimento parcial (rejeitado apenas o item com defeito)',
 };
 
+const PARECER_LABEL: Record<Exclude<RncEncerramentoParecer, ''>, string> = {
+  aceito_desvio: 'Aceito (com desvio)',
+  rejeitado: 'Rejeitado',
+  reclassificado: 'Reclassificado',
+};
+
+const TIPO_OCORRENCIA_LABEL: Array<[Exclude<keyof RncTiposOcorrencia, 'outro' | 'outroTexto'>, string]> = [
+  ['avariaFisica', 'Avaria física / dano'],
+  ['quantidadeIncorreta', 'Quantidade incorreta'],
+  ['materialIncorreto', 'Material incorreto'],
+  ['documentacaoFaltante', 'Documentação / certificado faltante'],
+  ['validadeExpirada', 'Validade expirada ou curta'],
+];
+
+export function temConteudoUtil(valor: unknown): boolean {
+  return String(valor ?? '').trim().length > 0;
+}
+
+export function itensNcIncluidos(registro: RncRegistro): RncItemLinha[] {
+  return (registro.itensRnc ?? []).filter((linha) => linha.incluir);
+}
+
+export function tiposOcorrenciaActivos(tipos?: RncTiposOcorrencia | null): string[] {
+  if (!tipos) return [];
+  const activos: string[] = [];
+  for (const [chave, rotulo] of TIPO_OCORRENCIA_LABEL) {
+    if (tipos[chave]) activos.push(rotulo);
+  }
+  if (tipos.outro) {
+    const detalhe = tipos.outroTexto.trim();
+    activos.push(detalhe ? `Outro: ${detalhe}` : 'Outro');
+  }
+  return activos;
+}
+
+export function linhasPlanoPreenchidas(linhas?: RncPlanoAcaoLinha[] | null): RncPlanoAcaoLinha[] {
+  return (linhas ?? []).filter(
+    (linha) => temConteudoUtil(linha.acao) || temConteudoUtil(linha.responsavel) || temConteudoUtil(linha.prazo),
+  );
+}
+
+export function evidenciasObjectivasActivas(ev?: RncEvidencias | null, observacao?: string): string[] {
+  const activos: string[] = [];
+  if (ev?.copiaPedido) activos.push('Cópia do pedido / especificação');
+  if (ev?.copiaNf) activos.push('Cópia da NF');
+  if (ev?.laudoConferencia) activos.push('Laudo de conferência');
+  if (temConteudoUtil(observacao)) activos.push(observacao!.trim());
+  return activos;
+}
+
+export function deveIncluirParecerEncerramento(registro: RncRegistro): boolean {
+  return registro.status === 'concluido' || temConteudoUtil(registro.encerramentoParecer);
+}
+
+export function legendaEvidenciaRnc(_item: RncItemLinha, indice: number): string {
+  return `Figura ${indice + 1}`;
+}
+
 function formatDatePt(iso: string): string {
-  if (!iso) return '—';
+  if (!iso.trim()) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('pt-BR');
 }
 
-function simNao(v: boolean): string {
-  return v ? 'Sim' : 'Nao';
+function formatDateTimePt(): string {
+  return new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
-function htmlSecaoIdentificacaoGeral(registro: RncRegistro, loc: string): string {
-  const incl = (registro.itensRnc ?? []).filter((x) => x.incluir);
-  const legacyQty =
-    incl.length === 0
-      ? `<dt>Quantidade recebida (ref.)</dt><dd>${escapeHtmlRelatorio(String(registro.quantidadeRecebidaRef))}</dd>
-      <dt>Quantidade rejeitada</dt><dd>${escapeHtmlRelatorio(String(registro.quantidadeRejeitada))}</dd>`
-      : '';
-  const tabelaNc =
-    incl.length > 0
-      ? `<div class="rnc-ident-nc-resumo">
-    <p class="rnc-ident-nc-caption">Itens da NF com nao conformidade (${incl.length})</p>
-    <table class="rnc-table rnc-ident-nc-table">
-      <thead><tr><th>#</th><th>Codigo</th><th>Descricao material</th><th>Qtd recebida (ref.)</th><th>Qtd rejeitada</th></tr></thead>
-      <tbody>${incl
-        .map(
-          (it, idx) =>
-            `<tr><td>${idx + 1}</td><td>${escapeHtmlRelatorio(it.codigoMaterial)}</td><td>${escapeHtmlRelatorio(it.descricaoMaterial)}</td><td>${escapeHtmlRelatorio(String(it.quantidadeRecebida))}</td><td>${escapeHtmlRelatorio(String(it.quantidadeRejeitada))}</td></tr>`,
-        )
-        .join('')}</tbody>
-    </table>
-  </div>`
-      : '';
-  return `<section class="bloco rnc-sec">
-    <h2>1. Identificacao geral</h2>
-    <dl class="campos rnc-grid">
-      <dt>Fornecedor</dt><dd>${escapeHtmlRelatorio(registro.recebimentoFornecedor ?? '')}</dd>
-      <dt>NF / Fatura</dt><dd>${escapeHtmlRelatorio(registro.recebimentoNotaFiscal ?? '')}</dd>
-      <dt>Pedido de compra</dt><dd>${escapeHtmlRelatorio(registro.pedidoCompra)}</dd>
-      <dt>Romaneio</dt><dd>${escapeHtmlRelatorio(registro.recebimentoRomaneio ?? '')}</dd>
-      <dt>Data recebimento (NF)</dt><dd>${escapeHtmlRelatorio(registro.recebimentoData ?? '')}</dd>
-      <dt>Setor / area</dt><dd>${escapeHtmlRelatorio(registro.setor)}</dd>
-      ${legacyQty}
-      <dt>Local segregacao</dt><dd>${escapeHtmlRelatorio(loc)}</dd>
-    </dl>
-    ${tabelaNc}
-  </section>`;
+function formatQty(q: number | string): string {
+  return formatarQuantidadeRir(q);
 }
 
-function htmlTiposLista(t: RncItemLinha['tiposOcorrencia'] | RncRegistro['tiposOcorrencia']): string {
-  return `<ul class="rnc-list">
-      <li>Avaria fisica / dano: <strong>${simNao(!!t?.avariaFisica)}</strong></li>
-      <li>Quantidade incorreta: <strong>${simNao(!!t?.quantidadeIncorreta)}</strong></li>
-      <li>Material incorreto: <strong>${simNao(!!t?.materialIncorreto)}</strong></li>
-      <li>Documentacao / certificado faltante: <strong>${simNao(!!t?.documentacaoFaltante)}</strong></li>
-      <li>Validade expirada ou curta: <strong>${simNao(!!t?.validadeExpirada)}</strong></li>
-      <li>Outro: <strong>${simNao(!!t?.outro)}</strong>${t?.outro ? ` — ${escapeHtmlRelatorio(t.outroTexto)}` : ''}</li>
-    </ul>`;
+function textBlock(valor: string): string {
+  return escapeHtmlRelatorio(valor).replace(/\n/g, '<br>');
 }
 
-function montarHtmlItensNc(registro: RncRegistro): string {
-  const incl = (registro.itensRnc ?? []).filter((x) => x.incluir);
-  if (incl.length === 0) {
-    const t = registro.tiposOcorrencia;
-    return `<p><strong>Tipos de ocorrencia:</strong></p>
-    ${htmlTiposLista(t)}
-    <p><strong>Descricao detalhada (o que, onde, quando, como):</strong></p>
-    <p style="white-space: pre-wrap;">${escapeHtmlRelatorio(registro.descricaoDetalhada || registro.descricao)}</p>`;
+function joinFacts(parts: Array<string | undefined | null>): string {
+  return parts
+    .map((p) => String(p ?? '').trim())
+    .filter((s) => s.length > 0)
+    .join(' · ');
+}
+
+function localSegregacao(registro: RncRegistro): string {
+  if (registro.localArmazenagem === 'outro') {
+    const extra = registro.localArmazenagemOutro.trim();
+    return extra ? `Outro: ${extra}` : 'Outro';
   }
-  return incl
+  if (registro.localArmazenagem === 'almoxarifado' || registro.localArmazenagem === 'quarentena') {
+    return LOCAL_LABEL[registro.localArmazenagem];
+  }
+  return '';
+}
+
+function acaoImediataResumo(registro: RncRegistro): string {
+  const tipo = registro.acaoImediataTipo;
+  const rotulo =
+    tipo === 'devolvido_transportador' || tipo === 'quarentena_bloqueado' || tipo === 'parcial_item_defeito'
+      ? ACAO_IMEDIATA_LABEL[tipo]
+      : '';
+  const obs = registro.acaoImediataObservacoes.trim();
+  return [rotulo, obs].filter(Boolean).join('\n');
+}
+
+function parecerTexto(registro: RncRegistro): string {
+  if (!deveIncluirParecerEncerramento(registro)) return '';
+  const key = registro.encerramentoParecer;
+  if (key && key in PARECER_LABEL) return PARECER_LABEL[key as Exclude<RncEncerramentoParecer, ''>];
+  return key;
+}
+
+function montarLogoBlockRnc(): string {
+  const texto = `<div class="rnc-logo-badge"><span class="rnc-logo-iso">I · S · O <span class="rnc-logo-sep">|</span> <span class="rnc-logo-pro">PRO</span></span><small class="rnc-logo-sub">GESTÃO DE MATERIAIS</small></div>`;
+  const logo = resolverUrlLogoInstitucionalParaHtmlImpresso();
+  if (logo) {
+    return `<div class="rnc-logo-badge rnc-logo-badge--img"><img class="rnc-logo-img" src="${escapeHtmlRelatorio(logo)}" alt="Logo" decoding="async" /></div>`;
+  }
+  return texto;
+}
+
+function statusPillHtml(status: RncRegistro['status']): string {
+  const cls =
+    status === 'concluido'
+      ? 'rnc-st-pill--ok'
+      : status === 'em_tratativa'
+        ? 'rnc-st-pill--warn'
+        : status === 'cancelado'
+          ? 'rnc-st-pill--muted'
+          : 'rnc-st-pill--open';
+  return `<span class="rnc-st-pill ${cls}">${escapeHtmlRelatorio(STATUS_LABEL[status])}</span>`;
+}
+
+function montarFaixaTituloRnc(registro: RncRegistro, emitidoEm: string): string {
+  return `<header class="rnc-hdr">
+    <div class="rnc-hdr-logo">${montarLogoBlockRnc()}</div>
+    <div class="rnc-hdr-title">
+      <p class="rnc-hdr-eyebrow">Qualidade · Recebimento</p>
+      <h1>Relatório de não conformidade</h1>
+      <p class="rnc-hdr-sub">Documento oficial de registo e tratamento de NC</p>
+    </div>
+    <div class="rnc-hdr-meta">
+      <div class="rnc-hdr-code">${escapeHtmlRelatorio(registro.codigo)}</div>
+      <div class="rnc-hdr-date">${statusPillHtml(registro.status)}</div>
+      <div class="rnc-hdr-date">Registo ${escapeHtmlRelatorio(formatDatePt(registro.dataRegistro) || registro.dataRegistro)}</div>
+      <div class="rnc-hdr-date rnc-hdr-emit">Emitido ${escapeHtmlRelatorio(emitidoEm)}</div>
+    </div>
+  </header>`;
+}
+
+function montarLinhaContexto(registro: RncRegistro): string {
+  const nf = (registro.recebimentoNotaFiscal ?? '').trim();
+  const facts = joinFacts([
+    registro.recebimentoFornecedor,
+    nf,
+    formatDatePt(registro.recebimentoData ?? '') || registro.recebimentoData,
+    temConteudoUtil(registro.pedidoCompra) ? `Pedido ${registro.pedidoCompra.trim()}` : '',
+    registro.recebimentoRomaneio,
+    registro.setor,
+    registro.responsavel && registro.responsavel.trim() !== registro.setor.trim() ? registro.responsavel : '',
+    localSegregacao(registro),
+  ]);
+  if (!facts) return '';
+  return `<div class="rnc-context-wrap">
+    <span class="rnc-context-label">Contexto operacional</span>
+    <p class="rnc-context">${escapeHtmlRelatorio(facts)}</p>
+  </div>`;
+}
+
+type ItemImpressao = {
+  codigo: string;
+  descricao: string;
+  unidade: string;
+  qtdRecebida: number;
+  qtdRejeitada: number;
+  certificado?: string;
+  disciplina?: string;
+  localizacao?: string;
+  tipos: string[];
+  desvio: string;
+  fotos: string[];
+  fotosDeclaradasSemArquivo: boolean;
+};
+
+function itensParaImpressao(registro: RncRegistro): ItemImpressao[] {
+  const incl = itensNcIncluidos(registro);
+  if (incl.length > 0) {
+    return incl.map((it) => ({
+      codigo: it.codigoMaterial,
+      descricao: it.descricaoMaterial,
+      unidade: it.unidade,
+      qtdRecebida: it.quantidadeRecebida,
+      qtdRejeitada: it.quantidadeRejeitada,
+      certificado: it.certificado,
+      disciplina: it.disciplina,
+      localizacao: it.localizacao,
+      tipos: tiposOcorrenciaActivos(it.tiposOcorrencia),
+      desvio: it.descricaoDetalhada.trim() || registro.descricaoDetalhada.trim() || registro.descricao.trim(),
+      fotos: it.fotosDataUrls ?? [],
+      fotosDeclaradasSemArquivo: it.fotosDeclaradasSemArquivo,
+    }));
+  }
+  const codigo = registro.materialCodigo.trim();
+  const descricao = registro.materialDescricao.trim();
+  if (!codigo && !descricao && !temConteudoUtil(registro.descricaoDetalhada) && !temConteudoUtil(registro.descricao)) {
+    return [];
+  }
+  return [
+    {
+      codigo,
+      descricao,
+      unidade: '',
+      qtdRecebida: registro.quantidadeRecebidaRef,
+      qtdRejeitada: registro.quantidadeRejeitada,
+      tipos: tiposOcorrenciaActivos(registro.tiposOcorrencia),
+      desvio: registro.descricaoDetalhada.trim() || registro.descricao.trim(),
+      fotos: [],
+      fotosDeclaradasSemArquivo: false,
+    },
+  ];
+}
+
+function resumoQuantidades(it: ItemImpressao): string {
+  const un = temConteudoUtil(it.unidade) ? ` ${it.unidade.trim()}` : '';
+  const pluralRej = Number(it.qtdRejeitada) === 1 ? 'rejeitada' : 'rejeitadas';
+  const pluralRec = Number(it.qtdRecebida) === 1 ? 'recebida' : 'recebidas';
+  return `${formatQty(it.qtdRejeitada)}${un} ${pluralRej} · ${formatQty(it.qtdRecebida)} ${pluralRec}`;
+}
+
+function linhaMetaItem(it: ItemImpressao): string {
+  const cert =
+    temConteudoUtil(it.certificado) && it.certificado!.trim().toUpperCase() !== 'N/A' ? it.certificado!.trim() : '';
+  const linha = joinFacts([it.disciplina, it.localizacao, cert]);
+  if (!linha) return '';
+  return `<p class="rnc-item-meta">${escapeHtmlRelatorio(linha)}</p>`;
+}
+
+function htmlFotos(it: ItemImpressao): string {
+  if (it.fotos.length > 0) {
+    const figura = it.fotos
+      .map((url, fi) => {
+        const caption = `Figura ${fi + 1}`;
+        return `<figure class="rnc-photo">
+  <div class="rnc-photo-frame"><img src="${escapeHtmlRelatorio(url)}" alt="${escapeHtmlRelatorio(caption)}" /></div>
+  <figcaption>${escapeHtmlRelatorio(caption)}</figcaption>
+</figure>`;
+      })
+      .join('');
+    return `<div class="rnc-photos">${figura}</div>`;
+  }
+  if (it.fotosDeclaradasSemArquivo) {
+    return '<p class="rnc-note">Evidência fotográfica declarada fora do sistema.</p>';
+  }
+  return '';
+}
+
+function montarDossieMaterial(itens: ItemImpressao[]): string {
+  if (itens.length === 0) return '';
+  return itens
     .map((it, idx) => {
-      const fotos =
-        it.fotosDataUrls.length > 0
-          ? `<div class="rnc-print-fotos" role="group" aria-label="Fotos do item">${it.fotosDataUrls
-              .map(
-                (url, fi) =>
-                  `<figure class="rnc-print-photo-frame">
-  <div class="rnc-print-photo-inner"><img src="${url}" alt="Evidencia fotografica ${fi + 1}" /></div>
-  <figcaption>Foto ${fi + 1}</figcaption>
-</figure>`,
-              )
-              .join('')}</div>`
-          : it.fotosDeclaradasSemArquivo
-            ? '<p class="rnc-muted"><em>Evidencia fotografica declarada fora do sistema.</em></p>'
-            : '<p class="rnc-muted">—</p>';
-      return `<article class="rnc-item-print-bloco">
-    <header class="rnc-item-print-head">
-      <span class="rnc-item-print-badge">Item ${idx + 1}</span>
-      <h3 class="rnc-item-print-title">${escapeHtmlRelatorio(it.codigoMaterial || '—')}</h3>
-      <p class="rnc-item-print-sub">${escapeHtmlRelatorio(it.descricaoMaterial)}</p>
-    </header>
-    <div class="rnc-item-print-body">
-    <dl class="rnc-dl-grid">
-      <div class="rnc-dl-row"><dt>Unidade</dt><dd>${escapeHtmlRelatorio(it.unidade)}</dd></div>
-      <div class="rnc-dl-row"><dt>Disciplina</dt><dd>${escapeHtmlRelatorio(it.disciplina)}</dd></div>
-      <div class="rnc-dl-row"><dt>Localizacao</dt><dd>${escapeHtmlRelatorio(it.localizacao)}</dd></div>
-      <div class="rnc-dl-row"><dt>Qtd. recebida (NF)</dt><dd>${escapeHtmlRelatorio(String(it.quantidadeRecebida))}</dd></div>
-      <div class="rnc-dl-row"><dt>Qtd. conferida</dt><dd>${escapeHtmlRelatorio(String(it.quantidadeConferida))}</dd></div>
-      <div class="rnc-dl-row"><dt>Qtd. rejeitada (NC)</dt><dd>${escapeHtmlRelatorio(String(it.quantidadeRejeitada))}</dd></div>
-      <div class="rnc-dl-row rnc-dl-row--full"><dt>Certificado</dt><dd>${escapeHtmlRelatorio(it.certificado)}</dd></div>
-    </dl>
-    <div class="rnc-subsec">
-      <h4 class="rnc-subsec-title">Tipos de ocorrencia (neste item)</h4>
-      ${htmlTiposLista(it.tiposOcorrencia)}
-    </div>
-    <div class="rnc-subsec">
-      <h4 class="rnc-subsec-title">Descricao do desvio</h4>
-      <p class="rnc-text-block">${escapeHtmlRelatorio(it.descricaoDetalhada)}</p>
-    </div>
-    <div class="rnc-subsec rnc-subsec--fotos">
-      <h4 class="rnc-subsec-title">Evidencias fotograficas</h4>
-      ${fotos}
-    </div>
-    </div>
-  </article>`;
+      const kicker = itens.length > 1 ? `<p class="rnc-kicker">Item ${idx + 1}</p>` : '';
+      const tipo = it.tipos.length > 0 ? `<p class="rnc-tipo">${escapeHtmlRelatorio(it.tipos.join(' · '))}</p>` : '';
+      const desvio = temConteudoUtil(it.desvio) ? `<p class="rnc-prose">${textBlock(it.desvio)}</p>` : '';
+      return `<article class="rnc-dossie">
+      ${kicker}
+      <h2 class="rnc-codigo">${escapeHtmlRelatorio(it.codigo || '—')}</h2>
+      <p class="rnc-descricao">${escapeHtmlRelatorio(it.descricao || '—')}</p>
+      <p class="rnc-qtd">${escapeHtmlRelatorio(resumoQuantidades(it))}</p>
+      ${linhaMetaItem(it)}
+      <div class="rnc-finding">
+        ${tipo}
+        ${desvio}
+      </div>
+      ${htmlFotos(it)}
+    </article>`;
     })
     .join('');
 }
 
-export function montarHtmlRnc(registro: RncRegistro): string {
-  const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso();
-  const cfgRodape = readConfiguracoes();
-  const segRodapeInst = segmentoInstituicaoRodapeEletronico(
-    cfgRodape.documentoRodapeNome,
-    cfgRodape.documentoRodapeCnpj,
-  );
-  const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-  const ev = registro.evidencias;
-  const loc =
-    registro.localArmazenagem === 'outro' && registro.localArmazenagemOutro.trim()
-      ? `Outro: ${registro.localArmazenagemOutro.trim()}`
-      : localLabel[registro.localArmazenagem || ''];
+function montarFecho(opts: { disposicao: string; parecer: string; evidencias: string[] }): string {
+  const linhas: string[] = [];
+  if (temConteudoUtil(opts.disposicao)) {
+    linhas.push(
+      `<p><span class="rnc-fecho-k">Disposição</span> ${textBlock(opts.disposicao.replace(/\n/g, ' — '))}</p>`,
+    );
+  }
+  if (temConteudoUtil(opts.parecer)) {
+    linhas.push(`<p><span class="rnc-fecho-k">Parecer</span> ${escapeHtmlRelatorio(opts.parecer)}</p>`);
+  }
+  if (opts.evidencias.length > 0) {
+    linhas.push(`<p><span class="rnc-fecho-k">Anexos</span> ${escapeHtmlRelatorio(opts.evidencias.join(' · '))}</p>`);
+  }
+  if (linhas.length === 0) return '';
+  return `<div class="rnc-fecho">${linhas.join('')}</div>`;
+}
 
-  const linhasPlano = (registro.planoAcaoLinhas ?? []).filter((l) => l.acao.trim() || l.responsavel.trim() || l.prazo.trim());
-  const rowsPlano =
-    linhasPlano.length > 0
-      ? linhasPlano
-          .map(
-            (l) =>
-              `<tr><td>${escapeHtmlRelatorio(l.acao)}</td><td>${escapeHtmlRelatorio(l.responsavel)}</td><td>${escapeHtmlRelatorio(l.prazo)}</td></tr>`,
-          )
-          .join('')
-      : '<tr><td colspan="3">—</td></tr>';
+function htmlAssinatura(role: string, bloco: RncAssinaturaBloco): string {
+  return `<div class="rnc-sign-card">
+    <div class="rnc-sign-space"></div>
+    <div class="rnc-sign-line"></div>
+    <div class="rnc-sign-role">${escapeHtmlRelatorio(role)}</div>
+    <div class="rnc-sign-name">${escapeHtmlRelatorio(bloco.nome)}</div>
+    <div class="rnc-sign-date">${bloco.data ? formatDatePt(bloco.data) : '—'}</div>
+  </div>`;
+}
 
-  /** Titulo do documento: so o codigo evita repetir o mesmo texto do h1 no cabecalho do navegador ao imprimir. */
-  const codigoTitulo = registro.codigo.trim();
-  const documentTitle = codigoTitulo ? escapeHtmlRelatorio(codigoTitulo) : 'RNC';
-
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8" />
-  <title>${documentTitle}</title>
-  <style>${cssInstitucionalRelatorio()}${cssBarraPreVisualizacaoImpressaoHtml()}
-    .rnc-doc { max-width: 900px; margin: 0 auto; }
-    /* Cabecalho repetido em cada pagina na impressao (thead) */
-    table.rnc-print-frame { width: 100%; border-collapse: collapse; margin: 0; }
-    thead.rnc-print-head { display: table-header-group; }
-    tbody.rnc-print-body { display: table-row-group; }
-    thead.rnc-print-head td,
-    tbody.rnc-print-body td { border: none; padding: 0; vertical-align: top; }
-    thead.rnc-print-head .rnc-print-repeat-header { margin-bottom: 12px; }
-    @media print {
-      @page { margin: 10mm 12mm; }
-      thead.rnc-print-head td {
-        background: #fff;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-      }
-    }
-    .rnc-sec { margin-top: 20px; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; page-break-inside: avoid; }
-    .rnc-sec h2 { font-size: 0.72rem; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #334155; text-transform: uppercase; letter-spacing: 0.08em; color: #334155; font-weight: 800; }
-    .rnc-grid { display: grid; grid-template-columns: 160px 1fr 160px 1fr; gap: 4px 16px; font-size: 9.5pt; align-items: baseline; }
-    .rnc-grid dt { font-weight: 700; color: #475569; margin: 0; }
-    .rnc-grid dd { margin: 0 0 6px 0; color: #0f172a; grid-column: span 1; }
-    @media (max-width: 720px) { .rnc-grid { grid-template-columns: 1fr 1fr; } }
-    .rnc-list { margin: 6px 0 0 0; padding-left: 18px; font-size: 9.5pt; line-height: 1.45; }
-    .rnc-muted { color: #64748b; font-size: 9.5pt; margin: 6px 0 0 0; }
-    .rnc-text-block { white-space: pre-wrap; margin: 6px 0 0 0; font-size: 9.5pt; line-height: 1.45; color: #0f172a; }
-    /* Itens NC */
-    .rnc-item-print-bloco { border: 1px solid #cbd5e1; border-radius: 10px; overflow: hidden; margin-bottom: 18px; background: #fff; page-break-inside: avoid; box-shadow: 0 1px 3px rgba(15,23,42,0.06); }
-    .rnc-item-print-head { background: linear-gradient(135deg, #1e293b 0%, #334155 100%); color: #fff; padding: 12px 16px; }
-    .rnc-item-print-badge { display: inline-block; font-size: 7.5pt; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.9; margin-bottom: 4px; }
-    .rnc-item-print-title { margin: 0; font-size: 11pt; font-weight: 700; letter-spacing: 0.02em; }
-    .rnc-item-print-sub { margin: 6px 0 0 0; font-size: 9pt; opacity: 0.92; line-height: 1.35; }
-    .rnc-item-print-body { padding: 14px 16px 16px; }
-    .rnc-dl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; font-size: 9pt; margin: 0 0 14px 0; }
-    .rnc-dl-row { display: grid; grid-template-columns: 130px 1fr; gap: 8px; align-items: baseline; border-bottom: 1px dotted #e2e8f0; padding-bottom: 6px; }
-    .rnc-dl-row--full { grid-column: 1 / -1; }
-    .rnc-dl-row dt { font-weight: 700; color: #64748b; margin: 0; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.04em; }
-    .rnc-dl-row dd { margin: 0; color: #0f172a; }
-    .rnc-subsec { margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
-    .rnc-subsec-title { margin: 0 0 8px 0; font-size: 8.5pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: #475569; }
-    .rnc-subsec--fotos { border-top: 2px solid #cbd5e1; margin-top: 16px; padding-top: 14px; }
-    /* Fotos: quadros uniformes (mesma altura e largura de celula) */
-    .rnc-print-fotos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 4px; }
-    @media print {
-      .rnc-print-fotos { grid-template-columns: repeat(2, 1fr); }
-    }
-    .rnc-print-photo-frame { margin: 0; padding: 0; break-inside: avoid; page-break-inside: avoid; }
-    .rnc-print-photo-inner {
-      width: 100%;
-      height: 200px;
-      border: 2px solid #94a3b8;
-      border-radius: 8px;
-      background: #f1f5f9;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-sizing: border-box;
-      overflow: hidden;
-    }
-    .rnc-print-photo-inner img {
-      max-width: 100%;
-      max-height: 100%;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      vertical-align: middle;
-    }
-    .rnc-print-photo-frame figcaption {
-      margin-top: 6px;
-      font-size: 8pt;
-      color: #64748b;
-      font-weight: 600;
-      text-align: center;
-      letter-spacing: 0.03em;
-    }
-    table.rnc-table { width: 100%; border-collapse: collapse; font-size: 9pt; margin-top: 10px; }
-    table.rnc-table th, table.rnc-table td { border: 1px solid #cbd5e1; padding: 8px 10px; text-align: left; vertical-align: top; }
-    table.rnc-table th { background: #e2e8f0; color: #334155; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.05em; }
-    table.rnc-table tbody tr:nth-child(even) { background: #f8fafc; }
-    .rnc-sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; page-break-inside: avoid; }
-    .rnc-sign > div { text-align: center; }
-    .rnc-sign .line { border-top: 1px dashed #64748b; margin: 36px 8px 8px 8px; }
-    .rnc-sign .role { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; font-weight: 800; }
-    .rnc-sign .role--plain { text-transform: none; letter-spacing: 0.02em; font-size: 9.5px; }
-    .rnc-sign .sub { font-size: 8.5px; color: #94a3b8; margin-top: 2px; font-weight: 600; }
-    .rnc-ident-nc-resumo { margin-top: 14px; page-break-inside: avoid; }
-    .rnc-ident-nc-caption { margin: 0 0 8px 0; font-size: 8.5pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; }
-    .rnc-ident-nc-table { font-size: 8.5pt; }
-    .rnc-sign .nome { font-size: 12px; margin-top: 6px; color: #0f172a; font-weight: 600; }
-    .rnc-sign .data { font-size: 10px; color: #94a3b8; margin-top: 3px; }
-    .rnc-doc-foot {
-      margin-top: 16px;
-      padding-top: 10px;
-      border-top: 1px solid #cbd5e1;
-      font-size: 8pt;
-      color: #64748b;
-      line-height: 1.45;
-      text-align: center;
-      page-break-inside: avoid;
-    }
-  </style>
-</head>
-<body class="rnc-doc">
-  ${htmlBarraPreVisualizacaoImpressao()}
-  <table class="rnc-print-frame">
-    <thead class="rnc-print-head">
-      <tr>
-        <td>
-          <header class="inst-header rnc-print-repeat-header">
-            ${htmlBlocoLogoInstitucional(logoUrl)}
-            <div class="inst-title-col">
-              <h1>Relatorio de Nao Conformidade (RNC)</h1>
-              <p style="margin:4px 0 0 0;font-size:10pt;color:#555;">Recebimento de materiais</p>
-            </div>
-          </header>
-        </td>
-      </tr>
-    </thead>
-    <tbody class="rnc-print-body">
-      <tr>
-        <td>
-          <div class="inst-topbar">
-            <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
-            <span>${escapeHtmlRelatorio(registro.codigo)}</span>
-          </div>
-
-  <section class="bloco rnc-sec">
-    <h2>Cabecalho</h2>
-    <dl class="campos rnc-grid">
-      <dt>RNC Nº</dt><dd>${escapeHtmlRelatorio(registro.codigo)}</dd>
-      <dt>Data de abertura</dt><dd>${escapeHtmlRelatorio(registro.dataRegistro)}</dd>
-      <dt>Status do registro</dt><dd>${escapeHtmlRelatorio(statusLabel[registro.status])}</dd>
-      <dt>Responsavel pela RNC</dt><dd>${escapeHtmlRelatorio(registro.responsavel)}</dd>
-    </dl>
-  </section>
-
-  ${htmlSecaoIdentificacaoGeral(registro, loc)}
-
-  <section class="bloco rnc-sec">
-    <h2>2. Descricao da nao conformidade (por item da NF)</h2>
-    ${montarHtmlItensNc(registro)}
-  </section>
-
-  <section class="bloco rnc-sec">
-    <h2>3. Evidencias objetivas</h2>
-    <ul class="rnc-list">
-      <li>Fotos anexadas: <strong>${simNao(!!ev?.fotosAnexadas)}</strong></li>
-      <li>Copia pedido / especificacao: <strong>${simNao(!!ev?.copiaPedido)}</strong></li>
-      <li>Copia NF: <strong>${simNao(!!ev?.copiaNf)}</strong></li>
-      <li>Laudo de conferencia: <strong>${simNao(!!ev?.laudoConferencia)}</strong></li>
-    </ul>
-    <p style="white-space: pre-wrap;"><strong>Obs.:</strong> ${escapeHtmlRelatorio(registro.evidenciasObservacao)}</p>
-  </section>
-
-  <section class="bloco rnc-sec">
-    <h2>4. Acao imediata (segregacao)</h2>
-    <p>${escapeHtmlRelatorio(acaoImediataLabel[registro.acaoImediataTipo || ''])}</p>
-    <p style="white-space: pre-wrap;">${escapeHtmlRelatorio(registro.acaoImediataObservacoes)}</p>
-  </section>
-
-  <section class="bloco rnc-sec">
-    <h2>5. Analise da causa raiz</h2>
-    <p style="white-space: pre-wrap;">${escapeHtmlRelatorio(registro.analiseCausaRaiz)}</p>
-  </section>
-
-  <section class="bloco rnc-sec">
-    <h2>6. Plano de acao</h2>
-    <table class="rnc-table">
-      <thead><tr><th>Acao</th><th>Responsavel</th><th>Prazo</th></tr></thead>
-      <tbody>${rowsPlano}</tbody>
-    </table>
-    <p style="white-space: pre-wrap; margin-top:10px; font-size:0.88rem; color:#64748b;"><strong>Texto consolidado:</strong> ${escapeHtmlRelatorio(registro.planoAcao)}</p>
-  </section>
-
-  <section class="bloco rnc-sec">
-    <h2>7. Encerramento</h2>
-    <div class="rnc-sign">
-      <div>
-        <div class="line"></div>
-        <div class="role">Responsavel setor de materiais</div>
-        <div class="sub">Gestao do recebimento / materiais</div>
-        <div class="nome">${escapeHtmlRelatorio(registro.assinaturaResponsavelRnc.nome)}</div>
-        <div class="data">${registro.assinaturaResponsavelRnc.data ? formatDatePt(registro.assinaturaResponsavelRnc.data) : '—'}</div>
-      </div>
-      <div>
-        <div class="line"></div>
-        <div class="role">Qualidade</div>
-        <div class="sub">Analise e disposicao</div>
-        <div class="nome">${escapeHtmlRelatorio(registro.assinaturaQualidade.nome)}</div>
-        <div class="data">${registro.assinaturaQualidade.data ? formatDatePt(registro.assinaturaQualidade.data) : '—'}</div>
-      </div>
-      <div>
-        <div class="line"></div>
-        <div class="role role--plain">Ciencia da contraparte</div>
-        <div class="nome">${escapeHtmlRelatorio(registro.assinaturaFornecedor.nome)}</div>
-        <div class="data">${registro.assinaturaFornecedor.data ? formatDatePt(registro.assinaturaFornecedor.data) : '—'}</div>
-      </div>
+function montarAssinaturas(registro: RncRegistro, rodapeInstitucionalHtml: string): string {
+  const contraparte = temConteudoUtil(registro.assinaturaFornecedor.nome)
+    ? htmlAssinatura('Contraparte', registro.assinaturaFornecedor)
+    : '';
+  const cols = contraparte ? ' rnc-signatures--3' : '';
+  return `<section class="rnc-assin">
+    <div class="rnc-signatures${cols}">
+      ${htmlAssinatura('Materiais', registro.assinaturaResponsavelRnc)}
+      ${htmlAssinatura('Qualidade', registro.assinaturaQualidade)}
+      ${contraparte}
     </div>
-    <p style="white-space: pre-wrap; margin-top: 18px;"><strong>Observacoes gerais:</strong> ${escapeHtmlRelatorio(registro.observacoes)}</p>
-    <p class="rnc-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(registro.codigo)}.</p>
-  </section>
-        </td>
-      </tr>
-    </tbody>
-  </table>
-  ${scriptBarraPreVisualizacaoImpressao()}
-</body>
-</html>`;
+    ${rodapeInstitucionalHtml}
+  </section>`;
+}
+
+function cssEstilosRelatorioRnc(): string {
+  return `
+${cssLogoInstitucionalImpressaoDaConfig()}
+${cssRodapeInstitucionalControle()}
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+@page { size: A4; margin: 11mm 13mm 13mm 13mm; }
+body.rnc-print-body,
+body.rnc-print-body.iso-report-native-body {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+  font-family: 'Noto Sans', Arial, Helvetica, sans-serif;
+  color: #1c1917;
+  font-size: 10pt;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+.rnc-doc {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  max-width: 182mm;
+  position: relative;
+}
+.rnc-doc::before {
+  content: '';
+  display: block;
+  height: 3px;
+  margin: 0 0 12px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #047857 0%, #86efac 42%, #1c1917 100%);
+}
+.rnc-doc * { box-sizing: border-box; }
+.rnc-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #d6d3d1;
+  box-shadow: 0 1px 0 0 #fafaf9;
+}
+.rnc-hdr-logo { flex: 0 0 auto; max-width: 150px; }
+.rnc-logo-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #1c1917 0%, #292524 100%);
+  border-radius: 3px;
+  padding: 7px 11px 6px;
+  line-height: 1.1;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset;
+}
+.rnc-logo-badge--img { background: transparent; padding: 0; box-shadow: none; }
+.rnc-logo-iso { color: #fff; font-weight: 800; font-size: 10pt; letter-spacing: 0.08em; white-space: nowrap; }
+.rnc-logo-pro { color: #86efac; }
+.rnc-logo-sep { color: #a8a29e; margin: 0 2px; font-weight: 600; }
+.rnc-logo-sub { display: block; color: #86efac; font-size: 6.5pt; font-weight: 700; margin-top: 3px; letter-spacing: 0.06em; }
+.rnc-logo-img { display: block; width: auto; height: auto; max-width: var(--iso-logo-slot-w, 178px); max-height: var(--iso-logo-slot-h, 68px); object-fit: contain; }
+.rnc-hdr-title { flex: 1 1 auto; text-align: center; min-width: 0; padding-top: 0; }
+.rnc-hdr-eyebrow {
+  margin: 0 0 5px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #047857;
+}
+.rnc-hdr-title h1 {
+  margin: 0;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 12pt;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #1c1917;
+  line-height: 1.22;
+}
+.rnc-hdr-sub {
+  margin: 5px 0 0;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7.5pt;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #78716c;
+}
+.rnc-hdr-meta {
+  flex: 0 0 auto;
+  text-align: right;
+  min-width: 124px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+}
+.rnc-hdr-code {
+  font-weight: 800;
+  font-size: 12.5pt;
+  color: #1c1917;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.rnc-hdr-date { font-size: 7.5pt; color: #78716c; margin-top: 4px; line-height: 1.35; }
+.rnc-hdr-emit { color: #a8a29e; font-size: 7pt; }
+.rnc-st-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+.rnc-st-pill--open { color: #9f1239; background: #fff1f2; border-color: #fecdd3; }
+.rnc-st-pill--warn { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+.rnc-st-pill--ok { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+.rnc-st-pill--muted { color: #57534e; background: #f5f5f4; border-color: #e7e5e4; }
+.rnc-context-wrap {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
+  border-radius: 4px;
+}
+.rnc-context-label {
+  display: block;
+  margin: 0 0 4px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #a8a29e;
+}
+.rnc-context {
+  margin: 0;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 9.5pt;
+  color: #44403c;
+  line-height: 1.5;
+}
+.rnc-dossie {
+  margin: 0 0 5mm;
+  padding: 0 0 0 12px;
+  border-left: 3px solid #9f1239;
+}
+.rnc-kicker {
+  margin: 0 0 4px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #a8a29e;
+}
+.rnc-codigo {
+  margin: 0;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 15pt;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #1c1917;
+  line-height: 1.15;
+  word-break: break-word;
+}
+.rnc-descricao {
+  margin: 7px 0 0;
+  font-size: 10.5pt;
+  line-height: 1.52;
+  color: #44403c;
+}
+.rnc-qtd {
+  margin: 8px 0 0;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 9.5pt;
+  font-weight: 700;
+  color: #9f1239;
+  letter-spacing: 0.01em;
+}
+.rnc-item-meta {
+  margin: 5px 0 0;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 8pt;
+  color: #78716c;
+}
+.rnc-finding {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 4px;
+  background: #fafaf9;
+}
+.rnc-tipo {
+  margin: 0 0 6px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 8.5pt;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #9f1239;
+  text-transform: uppercase;
+}
+.rnc-prose { margin: 0; font-size: 10.5pt; line-height: 1.58; color: #292524; }
+.rnc-note { margin: 8px 0 0; font-size: 9pt; color: #78716c; font-style: italic; }
+.rnc-photos {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin: 14px 0 0;
+}
+.rnc-photo { margin: 0; break-inside: auto; page-break-inside: auto; }
+.rnc-photo-frame {
+  border: 1px solid #e7e5e4;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(28,25,23,0.06);
+}
+.rnc-photo img {
+  display: block;
+  width: 100%;
+  height: 132px;
+  object-fit: contain;
+  background: #f5f5f4;
+}
+.rnc-photo figcaption {
+  margin-top: 4px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7.5pt;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #78716c;
+  text-align: center;
+}
+.rnc-fecho {
+  margin: 14px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid #d6d3d1;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 9.5pt;
+  color: #292524;
+}
+.rnc-fecho p { margin: 0 0 6px; line-height: 1.45; }
+.rnc-fecho-k {
+  display: inline-block;
+  min-width: 82px;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #047857;
+}
+.rnc-block { margin: 14px 0 0; padding-top: 2px; }
+.rnc-block > h2 {
+  margin: 0 0 8px;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #047857;
+}
+.rnc-plano { margin: 0; padding: 0; list-style: none; counter-reset: rnc-plano; }
+.rnc-plano li {
+  padding: 6px 0 6px 28px;
+  position: relative;
+  border-bottom: 1px solid #f5f5f4;
+}
+.rnc-plano li:last-child { border-bottom: none; }
+.rnc-plano li::before {
+  counter-increment: rnc-plano;
+  content: counter(rnc-plano);
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ecfdf5;
+  color: #047857;
+  font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+  font-size: 7pt;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+}
+.rnc-plano-acao { display: block; font-size: 10pt; font-weight: 600; color: #1c1917; }
+.rnc-plano-meta { display: block; font-size: 8pt; color: #78716c; margin-top: 2px; }
+.rnc-assin {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #e7e5e4;
+}
+.rnc-signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 8px; }
+.rnc-signatures--3 { grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.rnc-sign-card { text-align: center; padding: 0 6px; }
+.rnc-sign-space { min-height: 28px; }
+.rnc-sign-line { width: 85%; border-top: 1.5px solid #1c1917; margin: 0 auto 8px; }
+.rnc-sign-role {
+  font-size: 7pt;
+  font-weight: 700;
+  color: #44403c;
+  margin-bottom: 4px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.rnc-sign-name { font-weight: 700; font-size: 10pt; color: #1c1917; margin-bottom: 3px; }
+.rnc-sign-date { font-size: 7.5pt; color: #78716c; }
+.rnc-list { margin: 0; padding-left: 16px; }
+.rnc-prose { font-family: 'Noto Sans', Arial, Helvetica, sans-serif; }
+@media print {
+  .rnc-hdr { break-after: avoid; }
+  .rnc-dossie { break-inside: avoid; page-break-inside: avoid; }
+  .rnc-photo { break-inside: auto; page-break-inside: auto; }
+  .rnc-assin { break-inside: auto; page-break-inside: auto; }
+}
+`;
+}
+
+function montarPdfMetaRnc(registro: RncRegistro): RelatorioPdfMeta {
+  return {
+    headerTitle: 'Relatório de não conformidade',
+    headerSub: 'Recebimento de materiais',
+    headerCode: (registro.codigo || '').trim() || 'RNC',
+    footerPrefix: 'Folha',
+    footerOnly: true,
+  };
+}
+
+function montarSecaoOpcional(titulo: string, corpoHtml: string): string {
+  if (!corpoHtml.trim()) return '';
+  return `<section class="rnc-block"><h2>${escapeHtmlRelatorio(titulo)}</h2>${corpoHtml}</section>`;
+}
+
+async function montarConteudoRnc(registro: RncRegistro): Promise<string> {
+  const cfg = readConfiguracoes();
+  const emitidoEm = formatDateTimePt();
+  const itens = itensParaImpressao(registro);
+  const evidencias = evidenciasObjectivasActivas(registro.evidencias, registro.evidenciasObservacao);
+  const plano = linhasPlanoPreenchidas(registro.planoAcaoLinhas);
+  const planoTexto = registro.planoAcao.trim();
+  const qrDataUrl = await dataUrlQrDocumentoControle({
+    tipo: 'RNC',
+    codigo: registro.codigo,
+    emitidoEm: new Date().toISOString(),
+    versaoDoc: DOC_VERSION,
+  });
+  const rodapeInstitucionalHtml = htmlRodapeInstitucionalControle({
+    nomeEmpresa: cfg.documentoRodapeNome,
+    cnpj: cfg.documentoRodapeCnpj,
+    codigo: registro.codigo,
+    versaoDoc: DOC_VERSION,
+    qrDataUrl,
+  });
+
+  const planoHtmlParts: string[] = [];
+  if (plano.length > 0) {
+    planoHtmlParts.push(
+      `<ol class="rnc-plano">${plano
+        .map(
+          (l) =>
+            `<li><strong class="rnc-plano-acao">${escapeHtmlRelatorio(l.acao)}</strong><span class="rnc-plano-meta">${escapeHtmlRelatorio(
+              [l.responsavel, l.prazo].filter((x) => temConteudoUtil(x)).join(' · '),
+            )}</span></li>`,
+        )
+        .join('')}</ol>`,
+    );
+  }
+  if (planoTexto) {
+    planoHtmlParts.push(`<p class="rnc-prose">${textBlock(planoTexto)}</p>`);
+  }
+
+  return `<div class="iso-report-sheet rnc-doc" lang="pt-BR">
+  ${montarFaixaTituloRnc(registro, emitidoEm)}
+  ${montarLinhaContexto(registro)}
+  ${montarDossieMaterial(itens)}
+  ${montarFecho({
+    disposicao: acaoImediataResumo(registro),
+    parecer: parecerTexto(registro),
+    evidencias,
+  })}
+  ${montarSecaoOpcional('Análise da causa', temConteudoUtil(registro.analiseCausaRaiz) ? `<p class="rnc-prose">${textBlock(registro.analiseCausaRaiz)}</p>` : '')}
+  ${montarSecaoOpcional('Plano de ação', planoHtmlParts.join(''))}
+  ${montarSecaoOpcional('Observações', temConteudoUtil(registro.observacoes) ? `<p class="rnc-prose">${textBlock(registro.observacoes)}</p>` : '')}
+  ${montarAssinaturas(registro, rodapeInstitucionalHtml)}
+</div>`;
+}
+
+export async function montarHtmlRnc(registro: RncRegistro, opts?: { paraPdf?: boolean }): Promise<string> {
+  const codigo = (registro.codigo || '').trim() || 'RNC';
+  return montarDocumentoHtmlInstitucionalPaged({
+    title: `I.S.O PRO — RNC ${codigo}`,
+    bodyClass: 'rnc-print-body',
+    reportStyles: cssEstilosRelatorioRnc(),
+    contentHtml: await montarConteudoRnc(registro),
+    usePagedJs: false,
+    includeToolbar: opts?.paraPdf !== true,
+    pdfMeta: montarPdfMetaRnc(registro),
+  });
 }
 
 export function imprimirRncHtml(registro: RncRegistro): boolean {
@@ -405,7 +772,7 @@ export function imprimirRncHtml(registro: RncRegistro): boolean {
 /** Hidrata fotos em IndexedDB antes de montar o HTML (impressão a partir da lista). */
 export async function imprimirRncHtmlAsync(registro: RncRegistro): Promise<boolean> {
   const h = await hydrateRncRegistro(registro);
-  const html = montarHtmlRnc(h);
+  const html = await montarHtmlRnc(h);
   const fileName = nomeArquivoRelatorioPdf(h.codigo, 'RNC');
   return imprimirRelatorioProfissional({ html, fileName, tipoNuvem: 'rnc' });
 }

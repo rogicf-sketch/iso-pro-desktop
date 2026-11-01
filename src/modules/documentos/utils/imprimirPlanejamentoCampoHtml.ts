@@ -14,6 +14,7 @@ import {
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import {
   resolverLocalizacaoExibicaoPlanejamento,
+  resolverStatusDocumentoPlanejamento,
   resolverStatusLinhaDocumento,
   type MetricasPorCodigoMaterial,
 } from '../services/documentoPlanejamento';
@@ -316,6 +317,10 @@ export function montarHtmlPlanejamentoCampo(
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso();
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const tituloDoc = `${doc.numero} Rev. ${doc.revisao}`;
+  const statusDocumento =
+    doc.status === 'cancelado' || metricas.size === 0
+      ? doc.status
+      : resolverStatusDocumentoPlanejamento(doc, metricas);
   const observacaoBloco = doc.observacao?.trim()
     ? `<section class="bloco fc-obs"><h2>Observacoes do documento</h2><p class="fc-obs-text">${escapeHtmlRelatorio(doc.observacao)}</p></section>`
     : '';
@@ -384,7 +389,7 @@ export function montarHtmlPlanejamentoCampo(
     <div class="fc-meta-grid">
       <div class="fc-meta-card">
         <span class="fc-meta-k">Status do documento</span>
-        <span class="${badgeDocClass(doc.status)}">${escapeHtmlRelatorio(labelStatusDoc(doc.status))}</span>
+        <span class="${badgeDocClass(statusDocumento)}">${escapeHtmlRelatorio(labelStatusDoc(statusDocumento))}</span>
       </div>
       <div class="fc-meta-card">
         <span class="fc-meta-k">Responsavel</span>

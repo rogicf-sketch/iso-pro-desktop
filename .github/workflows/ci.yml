@@ -37,6 +37,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Blindagem (SoT gates + shared hash)
+        run: npm run check:blindagem
+
       - name: Test
         run: npm run test
 

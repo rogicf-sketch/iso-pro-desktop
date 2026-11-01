@@ -14,10 +14,11 @@ describe('dataReadPolicy', () => {
       expect(shouldTryRemoteRead()).toBe(false);
     });
 
-    it('retorna false no desktop mesmo com Supabase', () => {
+    it('retorna true no desktop online com Supabase (paridade web)', () => {
       vi.spyOn(supabase, 'hasSupabaseConfig').mockReturnValue(true);
       vi.spyOn(pdfCloudConfig, 'isIsoProDesktop').mockReturnValue(true);
-      expect(shouldTryRemoteRead()).toBe(false);
+      Object.defineProperty(navigator, 'onLine', { configurable: true, value: true });
+      expect(shouldTryRemoteRead()).toBe(true);
     });
 
     it('retorna false offline no browser', () => {

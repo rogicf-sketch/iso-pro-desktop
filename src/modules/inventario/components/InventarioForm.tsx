@@ -3,13 +3,11 @@ import { useModalFormDirty, useModalGuardedClose } from '../../../components/ui/
 import { AutocompleteField } from '../../../components/ui/AutocompleteField';
 import { Button } from '../../../components/ui/Button';
 import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
-import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
-import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
+import { carregarSaldoMapFromAgregadosNuvem } from '../../../lib/operacaoEscalaContagens';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import type { ServiceWriteResult } from '../../../types/common.types';
-import { buildSaldoMap } from '../../estoque/saldoFromSnapshot';
 import { listarColaboradores } from '../../colaboradores/services/colaboradores.service';
 import { carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
 import type { InventarioFormData, InventarioItem } from '../types/inventario.types';
@@ -47,9 +45,9 @@ export function InventarioForm({ initialValue, onSubmit, onCancel, onReloadAfter
     let cancelled = false;
     void (async () => {
       try {
-        const payload = await readSnapshotRemoteSliceOrFull(SNAPSHOT_SALDO_SLICE_KEYS);
+        const map = await carregarSaldoMapFromAgregadosNuvem();
         if (!cancelled) {
-          setSaldoPorCodigo(buildSaldoMap(payload));
+          setSaldoPorCodigo(map ?? new Map());
         }
       } catch {
         if (!cancelled) {

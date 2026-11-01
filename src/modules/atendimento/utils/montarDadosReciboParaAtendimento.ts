@@ -1,4 +1,7 @@
-import { buscarColaboradorPorId, listarColaboradoresAtivos } from '../../colaboradores/services/colaboradores.service';
+import {
+  buscarColaboradorPorIdLocal,
+  listarColaboradoresAtivosLocais,
+} from '../../colaboradores/services/colaboradores.service';
 import type { Atendimento, DadosReciboAtendimento } from '../types/atendimento.types';
 import { montarMetadadosDocumentoAtendimento } from './montarMetadadosDocumentoAtendimento';
 import { resolverColaboradorPorTextoAtendente } from './resolverColaboradorPorTextoAtendente';
@@ -12,17 +15,17 @@ export async function montarDadosReciboParaAtendimento(at: Atendimento): Promise
     (!atRecibo.recebedorMatricula?.trim() || !atRecibo.recebedorFuncao?.trim()) &&
     atRecibo.recebedorColaboradorId?.trim()
   ) {
-    const r = await buscarColaboradorPorId(atRecibo.recebedorColaboradorId.trim());
-    if (r.success && r.data) {
+    const r = buscarColaboradorPorIdLocal(atRecibo.recebedorColaboradorId.trim());
+    if (r) {
       atRecibo = {
         ...atRecibo,
-        recebedorMatricula: atRecibo.recebedorMatricula?.trim() || String(r.data.matricula ?? '').trim(),
-        recebedorFuncao: atRecibo.recebedorFuncao?.trim() || String(r.data.funcao ?? '').trim(),
+        recebedorMatricula: atRecibo.recebedorMatricula?.trim() || String(r.matricula ?? '').trim(),
+        recebedorFuncao: atRecibo.recebedorFuncao?.trim() || String(r.funcao ?? '').trim(),
       };
     }
   }
   if ((!atRecibo.atendenteMatricula?.trim() || !atRecibo.atendenteFuncao?.trim()) && atRecibo.atendente.trim()) {
-    const lista = await listarColaboradoresAtivos();
+    const lista = listarColaboradoresAtivosLocais();
     const c = resolverColaboradorPorTextoAtendente(atRecibo.atendente, lista);
     if (c) {
       atRecibo = {

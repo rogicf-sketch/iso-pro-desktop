@@ -1,18 +1,18 @@
-import { buildSaldoMap, codigoMaterialKey, type SaldoSnapshotPayload } from '../../estoque/saldoFromSnapshot';
-import { SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
-import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
+import {
+  carregarSaldoMapFromAgregadosNuvem,
+  fetchQuantidadeRecebidaPorCodigo,
+  listDocumentosPorCodigoMaterialFromCloud,
+} from '../../../lib/operacaoEscalaContagens';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
-import { listarHistoricoAtendimentos } from '../../atendimento/services/atendimento.service';
-import { carregarTodosDocumentosOrdenados } from '../../documentos/services/documentos.service';
+import { listarHistoricoAtendimentosPagina } from '../../atendimento/services/atendimento.service';
+import { codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
 import {
   calcularStatusMaterialPorMetricas,
-  montarMetricasPorCodigoMaterial,
   normalizeCodigoPlanejamento,
-  resolverStatusLinhaDocumento,
+  type MetricasPorCodigoMaterial,
   type StatusPlanejamentoMaterial,
 } from '../../documentos/services/documentoPlanejamento';
-import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
 import type {
   ConsultaMaterialDocumentoLinha,
   ConsultaMaterialLote,
@@ -43,8 +43,8 @@ export function labelStatusPlanejamento(status: StatusPlanejamentoMaterial): str
 async function aplicarSaldoNoMaterial(material: Material): Promise<Material> {
   if (!hasSupabaseConfig()) return material;
   try {
-    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
-    const saldoMap = buildSaldoMap(payload);
+    const saldoMap = await carregarSaldoMapFromAgregadosNuvem();
+    if (!saldoMap) return material;
     return {
       ...material,
       saldoAtual: saldoMap.get(codigoMaterialKey(material.codigo)) ?? 0,
@@ -87,13 +87,24 @@ async function resolverMaterialParaConsulta(query: string): Promise<Material | n
 async function lerSaldoPorCodigo(codigoKey: string): Promise<number | null> {
   if (!hasSupabaseConfig()) return null;
   try {
-    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
-    const saldoMap = buildSaldoMap(payload);
-    if (!saldoMap.has(codigoKey)) return null;
+    const saldoMap = await carregarSaldoMapFromAgregadosNuvem();
+    if (!saldoMap || !saldoMap.has(codigoKey)) return null;
     return saldoMap.get(codigoKey) ?? 0;
   } catch {
     return null;
   }
+}
+
+function statusLinhaConsulta(
+  qProj: number,
+  qAtd: number,
+  qRec: number,
+): StatusPlanejamentoMaterial {
+  if (qProj > 0 && qAtd + 1e-9 >= qProj) return 'atendido';
+  if (qAtd > 1e-9) return 'parcial';
+  if (qRec + 1e-9 >= qProj && qProj > 0) return 'recebido';
+  if (qRec > 1e-9) return 'parcial';
+  return 'pendente';
 }
 
 export async function consultarMaterialPorCodigo(raw: string): Promise<ServiceResult<ConsultaMaterialResult>> {
@@ -107,32 +118,44 @@ export async function consultarMaterialPorCodigo(raw: string): Promise<ServiceRe
     return { success: false, error: 'Codigo invalido.' };
   }
 
-  const [material, docsResult, recebimentos, historico] = await Promise.all([
+  // 100k-safe: tabelas + agregados — nunca catálogo completo de documentos/recebimentos.
+  const [material, cloudDocs, recebidoMap, histPage] = await Promise.all([
     resolverMaterialParaConsulta(codigoConsultado),
-    carregarTodosDocumentosOrdenados(),
-    carregarRecebimentosCompletos(),
-    listarHistoricoAtendimentos(),
+    hasSupabaseConfig()
+      ? listDocumentosPorCodigoMaterialFromCloud(codigoNormalizado, MAX_DOCUMENTOS_LINHAS)
+      : Promise.resolve({
+          documentos: [] as Awaited<ReturnType<typeof listDocumentosPorCodigoMaterialFromCloud>>['documentos'],
+          error: undefined as string | undefined,
+        }),
+    hasSupabaseConfig()
+      ? fetchQuantidadeRecebidaPorCodigo().catch(() => null)
+      : Promise.resolve(null),
+    listarHistoricoAtendimentosPagina({
+      page: 1,
+      pageSize: Math.min(MAX_LOTES * 3, 60),
+      q: codigoNormalizado,
+    }),
   ]);
 
-  if (!docsResult.success) {
-    return { success: false, error: docsResult.error ?? 'Falha ao carregar planejamento.' };
+  if (cloudDocs.error && cloudDocs.documentos.length === 0) {
+    return { success: false, error: cloudDocs.error };
   }
 
-  const documentos = docsResult.data ?? [];
-  const metricas = montarMetricasPorCodigoMaterial(documentos, recebimentos);
-  const metricaGlobal = metricas.get(codigoNormalizado) ?? null;
+  const historico = histPage.success && histPage.data ? histPage.data.items : [];
 
-  const saldoMaterial = material != null ? Number(material.saldoAtual) : await lerSaldoPorCodigo(codigoNormalizado);
-
+  const qRecGlobal = recebidoMap?.get(codigoNormalizado) ?? 0;
+  let prevista = 0;
+  let atendida = 0;
   const linhasDocumentos: ConsultaMaterialDocumentoLinha[] = [];
-  for (const doc of documentos) {
-    if (doc.status === 'cancelado') continue;
+
+  for (const doc of cloudDocs.documentos) {
     for (const item of doc.itens) {
-      if (normalizeCodigoPlanejamento(item.codigoMaterial) !== codigoNormalizado) continue;
-      const qtd = Number(item.quantidadeProjeto) || 0;
+      if (normalizeCodigoPlanejamento(item.codigo) !== codigoNormalizado) continue;
+      const qtd = Number(item.quantidade) || 0;
       const atd = Number(item.quantidadeAtendida) || 0;
-      const pendente = Math.max(0, qtd - atd);
-      const statusLinha = resolverStatusLinhaDocumento(item, metricas);
+      prevista += qtd;
+      atendida += atd;
+      const statusLinha = statusLinhaConsulta(qtd, atd, qRecGlobal);
       linhasDocumentos.push({
         documentoId: doc.id,
         numero: doc.numero,
@@ -140,7 +163,7 @@ export async function consultarMaterialPorCodigo(raw: string): Promise<ServiceRe
         descricao: doc.descricao,
         quantidadeProjeto: qtd,
         quantidadeAtendida: atd,
-        quantidadePendente: pendente,
+        quantidadePendente: Math.max(0, qtd - atd),
         statusLinha,
         statusLabel: labelStatusPlanejamento(statusLinha),
       });
@@ -148,6 +171,13 @@ export async function consultarMaterialPorCodigo(raw: string): Promise<ServiceRe
     }
     if (linhasDocumentos.length >= MAX_DOCUMENTOS_LINHAS) break;
   }
+
+  const metricaGlobal: MetricasPorCodigoMaterial | null =
+    prevista > 0 || atendida > 0 || qRecGlobal > 0
+      ? { prevista, recebido: qRecGlobal, atendido: atendida }
+      : null;
+
+  const saldoMaterial = material != null ? Number(material.saldoAtual) : await lerSaldoPorCodigo(codigoNormalizado);
 
   const lotes: ConsultaMaterialLote[] = [];
   for (const at of historico) {

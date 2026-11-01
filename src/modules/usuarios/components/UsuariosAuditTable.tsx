@@ -1,4 +1,6 @@
 import { DataTable } from '../../../components/tables/DataTable';
+import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { authAuditLabel, authAuditTone } from '../../auth/services/authAuditLabels';
 import type { AuthAuditEvent } from '../../auth/services/authAudit.service';
 
 type Props = {
@@ -17,7 +19,11 @@ export function UsuariosAuditTable({ items }: Props) {
         {
           key: 'evento',
           header: 'Evento',
-          render: (item) => item.type,
+          render: (item) => (
+            <span title={item.type}>
+              <StatusBadge text={authAuditLabel(item.type)} tone={authAuditTone(item.type)} />
+            </span>
+          ),
         },
         {
           key: 'ator',

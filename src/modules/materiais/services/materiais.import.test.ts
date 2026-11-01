@@ -22,6 +22,15 @@ describe('materialRegistroCsvParaFormData', () => {
     expect(form.ativo).toBe(true);
   });
 
+  it('aceita estoque_minimo_percentual como percentual', () => {
+    const form = materialRegistroCsvParaFormData({
+      codigo: 'TB-1',
+      descricao: 'Tubo',
+      estoque_minimo_percentual: '20',
+    });
+    expect(form.estoqueMinimo).toBe(20);
+  });
+
   it('parses decimal with comma', () => {
     const form = materialRegistroCsvParaFormData({
       codigo: 'X',
@@ -60,6 +69,7 @@ describe('montarModeloCsvImportacaoMateriais', () => {
   it('gera CSV aceito pelo preview de importacao', () => {
     const { csv, fileName } = montarModeloCsvImportacaoMateriais();
     expect(fileName).toBe('iso-pro-materiais-modelo-importacao.csv');
+    expect(csv).toContain('estoque_minimo_percentual');
     const p = previewImportacaoMateriaisCsv(csv);
     expect(p.ok).toBe(true);
     if (!p.ok) return;

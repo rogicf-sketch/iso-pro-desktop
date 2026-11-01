@@ -1,4 +1,5 @@
-import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
+import { resolveSupabaseCredentials, getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
+import { canUseDesktopSupabaseFetch, createDesktopSupabaseFetch } from '../../../lib/supabaseDesktopFetch';
 import type { ServiceResult } from '../../../types/common.types';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 
@@ -21,6 +22,9 @@ export type IsoProAdminUserUpsertInput = {
   actorSenha: string;
   mode: 'create' | 'update';
   usuarioId?: string;
+  /** Por omissão true no create: cria Auth user + auth_user_id. */
+  provisionAuth?: boolean;
+  authEmail?: string;
   user: {
     login: string;
     nome: string;
@@ -40,18 +44,27 @@ export function isIsoProAdminUserEdgeConfigured(): boolean {
   return readConfiguracoes().isoProAdminUserSecret.trim().length > 0;
 }
 
+/** Erros de rede/CORS do cliente Supabase Functions — permitem fallback directo no update. */
+export function isIsoProAdminUserEdgeUnreachableError(message: string | undefined | null): boolean {
+  const msg = String(message ?? '');
+  return (
+    /Failed to send a request to the Edge Function/i.test(msg) ||
+    /Nao foi possivel contactar a funcao de gravacao de utilizadores/i.test(msg) ||
+    /Failed to fetch/i.test(msg) ||
+    /NetworkError/i.test(msg) ||
+    /Load failed/i.test(msg)
+  );
+}
+
 /**
- * Invoca `iso_pro_admin_user` com cabeçalho de segredo (ver `supabase/functions/README.md`).
+ * Invoca `iso_pro_admin_user` via fetch directo (mais fiavel que functions.invoke no browser/Electron).
+ * Segredo vai no corpo (`adminUserSecret`) para evitar CORS com cabecalho custom.
  */
 export async function executarIsoProAdminUserUpsert(
   input: IsoProAdminUserUpsertInput,
 ): Promise<ServiceResult<{ user: Record<string, unknown> }>> {
   if (!hasSupabaseConfig()) {
     return { success: false, error: 'Supabase nao configurado.' };
-  }
-  const supabase = getSupabase();
-  if (!supabase) {
-    return { success: false, error: 'Cliente Supabase indisponivel.' };
   }
 
   const secret = input.secret.trim();
@@ -62,6 +75,11 @@ export async function executarIsoProAdminUserUpsert(
     };
   }
 
+  const { url, key } = resolveSupabaseCredentials();
+  if (!url || !key) {
+    return { success: false, error: 'URL/chave Supabase em falta.' };
+  }
+
   const body: Record<string, unknown> = {
     tenantId: input.tenantId,
     actorLogin: input.actorLogin,
@@ -69,24 +87,65 @@ export async function executarIsoProAdminUserUpsert(
     mode: input.mode,
     user: input.user,
     permissoes: input.permissoes,
+    provisionAuth: input.provisionAuth !== false,
+    adminUserSecret: secret,
   };
+  if (input.authEmail?.trim()) {
+    body.authEmail = input.authEmail.trim();
+  }
   if (input.mode === 'update' && input.usuarioId) {
     body.usuarioId = input.usuarioId;
   }
 
-  const { data, error } = await supabase.functions.invoke<AdminUserResponseBody>('iso_pro_admin_user', {
-    body,
-    headers: {
-      'x-iso-pro-admin-user-secret': secret,
-    },
-  });
+  let accessToken = key;
+  try {
+    const supabase = getSupabase();
+    const session = supabase ? (await supabase.auth.getSession()).data.session : null;
+    if (session?.access_token) {
+      accessToken = session.access_token;
+    }
+  } catch {
+    /* anon key basta com verify_jwt=false */
+  }
 
-  if (error) {
-    const msg = await extrairMensagemErroFunctionsInvoke(error);
+  const endpoint = `${url.replace(/\/$/, '')}/functions/v1/iso_pro_admin_user`;
+  const fetchImpl = canUseDesktopSupabaseFetch() ? createDesktopSupabaseFetch() : fetch;
+
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'erro de rede';
+    return {
+      success: false,
+      error: `Nao foi possivel contactar a funcao de gravacao de utilizadores (rede/CORS). Detalhe: ${detail}`,
+    };
+  }
+
+  let bodyOut: AdminUserResponseBody | null = null;
+  try {
+    bodyOut = (await response.json()) as AdminUserResponseBody;
+  } catch {
+    bodyOut = null;
+  }
+
+  if (!response.ok) {
+    const msg =
+      bodyOut?.message ||
+      (response.status === 401
+        ? 'Segredo ISO_PRO_ADMIN_USER_SECRET incorrecto. Em Configuracoes > Supabase e nuvem, cole o mesmo valor dos Secrets da Edge no Dashboard e grave.'
+        : `Falha ao gravar utilizador (HTTP ${response.status}).`);
     return { success: false, error: msg };
   }
 
-  const bodyOut = data;
   if (bodyOut && bodyOut.ok === false && bodyOut.message) {
     return { success: false, error: bodyOut.message };
   }
@@ -98,20 +157,4 @@ export async function executarIsoProAdminUserUpsert(
   }
 
   return { success: true, data: { user: bodyOut.user } };
-}
-
-async function extrairMensagemErroFunctionsInvoke(error: unknown): Promise<string> {
-  if (error instanceof Error && error.message) {
-    const ctx = (error as { context?: Response }).context;
-    if (ctx && typeof ctx.json === 'function') {
-      try {
-        const j = (await ctx.json()) as AdminUserResponseBody;
-        if (j?.message) return j.message;
-      } catch {
-        /* ignora */
-      }
-    }
-    return error.message;
-  }
-  return 'Falha ao invocar iso_pro_admin_user.';
 }

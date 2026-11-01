@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
@@ -87,13 +88,15 @@ export function AtendimentoSyncAdminPanel({ canAdminister }: Props) {
         </div>
       </div>
 
-      <OperationalNotice>
-        Auditoria dos comandos idempotentes enviados pelo <strong>mobile</strong> e pelo <strong>PC</strong>. Cada linha representa uma
-        baixa ou operacao registada via <code>iso_pro_submit_atendimento_comando</code>.{' '}
-        <a href="/checklist-ativacao-jwt.html" target="_blank" rel="noopener noreferrer">
-          Checklist JWT (TI)
-        </a>
-      </OperationalNotice>
+      <ModuleHelp>
+        <OperationalNotice>
+          Auditoria dos comandos idempotentes enviados pelo <strong>mobile</strong> e pelo <strong>PC</strong>. Cada linha representa uma
+          baixa ou operacao registada via <code>iso_pro_submit_atendimento_comando</code>.{' '}
+          <a href="/checklist-ativacao-jwt.html" target="_blank" rel="noopener noreferrer">
+            Checklist JWT (TI)
+          </a>
+        </OperationalNotice>
+      </ModuleHelp>
 
       {!cloudOk ? (
         <OperationalNotice tone="warning">Configure o Supabase em Configuracoes para ver a auditoria de sync.</OperationalNotice>

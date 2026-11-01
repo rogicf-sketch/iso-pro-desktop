@@ -3,12 +3,15 @@ import { hydrateRncRegistro } from '../utils/rncFotoIdb';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../../lib/relatorioProfissional';
 import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { RncFilters } from '../components/RncFilters';
 import { RncForm } from '../components/RncForm';
@@ -35,7 +38,7 @@ export function RncPage() {
 
   const visualizarRncRelatorio = useCallback(async (reg: RncRegistro) => {
     const h = await hydrateRncRegistro(reg);
-    const html = montarHtmlRnc(h);
+    const html = await montarHtmlRnc(h);
     const res = await preVisualizarRelatorioProfissional({
       html,
       fileName: nomeArquivoRelatorioPdf(h.codigo, 'RNC'),
@@ -59,6 +62,8 @@ export function RncPage() {
     error,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     senhaConfigurada,
     filters,
@@ -77,13 +82,26 @@ export function RncPage() {
   } = useRnc();
   const canEdit = canAccessAction('rnc', 'editar');
 
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource,
+    hasCloudConfig,
+    staleWhileRevalidate,
+    fallbackReason,
+  });
+
+  usePageChrome(
+    {
+      meta:
+        loading && total === 0
+          ? 'A carregar…'
+          : `${total.toLocaleString('pt-BR')} RNC · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, total, fonteNuvemOk],
+  );
+
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Qualidade</p>
-          <h2>RNC</h2>
-        </div>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
         {canEdit ? (
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Cadastro">
@@ -102,18 +120,21 @@ export function RncPage() {
         </p>
       </ModuleHelp>
       {dicaRirTexto ? <OperationalNotice>{dicaRirTexto}</OperationalNotice> : null}
-      <OperationalNotice>
-        {cloudStatus === 'ready' && hasCloudConfig
-          ? 'Fonte atual: Supabase. RNC sincronizada com a base em nuvem.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
-      </OperationalNotice>
+      <FonteDadosNotice
+        healthy={fonteNuvemOk}
+        fallbackMessage={
+          hasCloudConfig
+            ? 'Fonte atual: fallback local. A lista ainda nao veio da nuvem (rede ou sync).'
+            : cloudStatus === 'partial'
+              ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        }
+      />
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
       <RncFilters filters={filters} onChange={setFilters} />
       {error ? <div className="error-box">{error}</div> : null}
       {rncImpressaoAviso ? <OperationalNotice tone="critical">{rncImpressaoAviso}</OperationalNotice> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
       {loading ? (
         <OperationalNotice>Carregando RNC...</OperationalNotice>
       ) : (
@@ -140,6 +161,7 @@ export function RncPage() {
             }}
           />
           <Pagination
+            itemLabel="RNC"
             onPageChange={(page) => setFilters({ ...filters, page })}
             page={filters.page}
             pageSize={filters.pageSize}

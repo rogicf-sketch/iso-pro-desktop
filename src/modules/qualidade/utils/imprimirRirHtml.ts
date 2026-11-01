@@ -2,10 +2,18 @@ import { montarDocumentoHtmlInstitucionalPaged } from '../../../lib/relatorioPag
 import type { RelatorioPdfMeta } from '../../../lib/relatorioPdfMeta';
 import {
   abrirPreVisualizacaoHtmlRelatorio,
+  cssFontesNotoRelatorioInline,
   escapeHtmlRelatorio,
-  segmentoInstituicaoRodapeEletronico,
 } from '../../../lib/htmlRelatorioInstitucional';
-import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
+import {
+  cssLogoInstitucionalImpressaoDaConfig,
+  resolverUrlLogoInstitucionalParaHtmlImpresso,
+} from '../../../lib/logoInstitucional';
+import {
+  cssRodapeInstitucionalControle,
+  dataUrlQrDocumentoControle,
+  htmlRodapeInstitucionalControle,
+} from '../../../lib/relatorioDocControle';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { LOGO_INSTITUCIONAL_PRINT_PNG } from '../pdf/rirPdfLogo';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
@@ -13,9 +21,12 @@ import type { RirRegistro } from '../types/qualidade.types';
 import { rirObraDefaultsFromConfig } from './rirConfigDefaults';
 import { formatarDisciplinaExibicaoRir, resolverDisciplinaRir } from './rirDisciplina';
 import { formatarQuantidadeRir } from './rirDescricaoCompacta';
+import { juntarEscopoLinhaRir } from './rirEscopoLinha';
 
-/** v73 — fluxo contínuo; rodapé na tabela para repetir cabeçalho na folha de assinaturas. */
-const DOC_VERSION = '73';
+export { juntarEscopoLinhaRir } from './rirEscopoLinha';
+
+/** v7 — rodapé controlado + QR de arquivo/auditoria. */
+const DOC_VERSION = '7';
 
 export type CabecalhoRirParams = {
   logoBlock: string;
@@ -90,13 +101,15 @@ function folhaMetaHtml(params: CabecalhoRirParams): string {
     </div>`;
 }
 
-/** Faixa titulo (logo + titulo + meta) — padrão INS institucional. */
+/** Faixa titulo (logo + titulo + meta) — marca premium v6. Repete em cada folha via thead. */
 export function montarFaixaTituloInstitucionalRirHtml(params: CabecalhoRirParams): string {
   return `<header class="rir-hdr">
     <div class="rir-hdr-logo">${params.logoBlock}</div>
     <div class="rir-hdr-title">
-      <h1>RELATÓRIO DE INSPEÇÃO DE RECEBIMENTO</h1>
-      <div class="rir-hdr-badge">RIR · ${escapeHtmlRelatorio(params.escopoLinha)}</div>
+      <p class="rir-hdr-eyebrow">Qualidade · Recebimento</p>
+      <h1>Relatório de inspeção de recebimento</h1>
+      <p class="rir-hdr-sub">Documento oficial de inspeção de materiais</p>
+      <p class="rir-hdr-escopo">RIR · ${escapeHtmlRelatorio(params.escopoLinha)}</p>
     </div>
     ${folhaMetaHtml(params)}
   </header>`;
@@ -110,7 +123,9 @@ function montarBlocoInfoRir(params: CabecalhoRirParams): string {
   const obsHtml = params.obsCurta.trim()
     ? `<div class="rir-info-cell rir-info-cell--full"><span class="rir-info-label">Obs.</span><span class="rir-info-value">${escapeHtmlRelatorio(params.obsCurta)}</span></div>`
     : '';
-  return `<div class="rir-info-grid">
+  return `<div class="rir-context-wrap">
+    <span class="rir-context-label">Contexto do recebimento</span>
+    <div class="rir-info-grid">
     ${montarCelulaInfoRir('UO (Obra/Depto)', escapeHtmlRelatorio(params.uoExibir))}
     ${montarCelulaInfoRir('Local', escapeHtmlRelatorio(params.localExibir))}
     ${montarCelulaInfoRir('Contrato', escapeHtmlRelatorio(params.contratoExibir))}
@@ -126,6 +141,7 @@ function montarBlocoInfoRir(params: CabecalhoRirParams): string {
     ${mkTagInspecao('Quantitativa', params.inspecaoQuantitativa)}
     ${mkTagInspecao('Qualitativa', params.inspecaoQualitativa)}
     ${mkTagInspecao('Dimensional', params.inspecaoDimensional)}
+  </div>
   </div>`;
 }
 
@@ -143,6 +159,7 @@ export function montarCabecalhoFolhaContinuacaoRirHtml(params: CabecalhoRirParam
   return `<header class="rir-hdr rir-hdr--compact">
     <div class="rir-hdr-logo">${params.logoBlock}</div>
     <div class="rir-hdr-title rir-hdr-title--compact">
+      <p class="rir-hdr-eyebrow">Qualidade · Recebimento</p>
       <h1>${escapeHtmlRelatorio(params.codigo)}</h1>
       <p>NF ${escapeHtmlRelatorio(params.nf) || '—'} · ${escapeHtmlRelatorio(params.fornecedor)} · ${escapeHtmlRelatorio(params.localExibir) || '—'}</p>
     </div>
@@ -183,10 +200,17 @@ export function montarTheadRirInspecao(): string {
   </tr>`;
 }
 
-function montarTabelaMaterialRir(cabecalhoHtml: string, linhas: string, rodapeHtml: string): string {
+function montarTabelaMaterialRir(
+  faixaTituloHtml: string,
+  blocoInfoHtml: string,
+  linhas: string,
+  rodapeHtml: string,
+): string {
   const linhaRodape = `<tr class="rir-footer-row">
     <td colspan="6" class="rir-footer-cell">${rodapeHtml}</td>
   </tr>`;
+  // Titulo no thead (repete em cada folha, como o modelo INS antigo).
+  // Contexto do recebimento só na 1.ª folha (tbody), para não empurrar a tabela.
   return `<div class="rir-table-wrap">
     <table class="rir-table">
       <colgroup>
@@ -199,11 +223,16 @@ function montarTabelaMaterialRir(cabecalhoHtml: string, linhas: string, rodapeHt
       </colgroup>
       <thead>
         <tr class="rir-thead-repeat">
-          <td colspan="6" class="rir-thead-repeat-cell">${cabecalhoHtml}</td>
+          <td colspan="6" class="rir-thead-repeat-cell">${faixaTituloHtml}</td>
         </tr>
         ${montarTheadRirInspecao()}
       </thead>
-      <tbody>${linhas}${linhaRodape}</tbody>
+      <tbody>
+        <tr class="rir-context-row">
+          <td colspan="6" class="rir-context-cell">${blocoInfoHtml}</td>
+        </tr>
+        ${linhas}${linhaRodape}
+      </tbody>
     </table>
   </div>`;
 }
@@ -214,9 +243,9 @@ function montarRodapeRir(params: {
   laudoTxt: string;
   statusTxt: string;
   refReceb: string;
-  segRodapeInst: string;
+  rodapeInstitucionalHtml: string;
 }): string {
-  const { r, laudo, laudoTxt, statusTxt, refReceb, segRodapeInst } = params;
+  const { r, laudo, laudoTxt, statusTxt, refReceb, rodapeInstitucionalHtml } = params;
   const obs = escapeHtmlRelatorio(r.observacoesQc || '—');
   return `<div class="rir-print-tail">
   <div class="rir-laudo-block">
@@ -258,30 +287,48 @@ function montarRodapeRir(params: {
       <div class="rir-sign-date">${r.assinaturaCliente.data ? formatDatePt(r.assinaturaCliente.data) : '—'}</div>
     </div>
   </div>
-  <div class="rir-doc-foot">
-    Documento gerado eletronicamente pelo I.S.O PRO Desktop${segRodapeInst}. Conteúdo para arquivo e auditoria. Referência: ${escapeHtmlRelatorio(r.codigo)}.
-  </div>
+  ${rodapeInstitucionalHtml}
 </div>`;
 }
 
 function cssEstilosRelatorioRir(): string {
   return `
+${cssLogoInstitucionalImpressaoDaConfig()}
+${cssRodapeInstitucionalControle()}
 html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 @page {
   size: A4;
-  margin: 7.5mm 7.5mm 10mm 7.5mm;
+  margin: 8mm 9mm 11mm 9mm;
 }
 body.rir-print-body,
 body.rir-print-body.iso-report-native-body {
   margin: 0 !important;
   padding: 0 !important;
   width: 100%;
-  font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif;
-  color: #0f172a;
+  font-family: 'Noto Sans', Arial, Helvetica, sans-serif;
+  color: #1c1917;
   font-size: 9pt;
-  line-height: 1.2;
+  line-height: 1.35;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: auto;
+  hyphens: none;
 }
-.rir-doc { max-width: none; width: 100%; margin: 0; padding: 0; }
+.rir-doc {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+.rir-doc::before {
+  content: '';
+  display: block;
+  height: 3px;
+  margin: 0 0 10px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #047857 0%, #86efac 42%, #1c1917 100%);
+}
 .rir-doc * { box-sizing: border-box; }
 .rir-print-main { display: block; width: 100%; }
 .rir-thead-repeat-cell {
@@ -290,78 +337,119 @@ body.rir-print-body.iso-report-native-body {
   background: #fff !important;
   vertical-align: top;
 }
+.rir-context-cell {
+  padding: 0 !important;
+  border: none !important;
+  background: #fff !important;
+  vertical-align: top;
+}
+.rir-context-row {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
 .rir-hdr {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: nowrap;
-  padding-bottom: 8px;
-  margin-bottom: 4mm;
-  border-bottom: 2px solid #0f172a;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #d6d3d1;
 }
 .rir-hdr--compact {
-  margin-bottom: 2mm;
-  padding-bottom: 5px;
-  border-bottom-color: #e2e8f0;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
 }
-.rir-hdr-logo { flex: 0 0 auto; max-width: 170px; min-width: 80px; }
+.rir-hdr-logo { flex: 0 0 auto; max-width: var(--iso-logo-slot-w, 220px); min-width: 96px; }
 .rir-logo-badge {
   display: inline-block;
-  background: #0f172a;
-  border-radius: 8px;
-  padding: 6px 10px 5px;
+  background: linear-gradient(135deg, #1c1917 0%, #292524 100%);
+  border-radius: 3px;
+  padding: 7px 11px 6px;
   line-height: 1.1;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset;
 }
-.rir-logo-badge--img { background: transparent; padding: 0; border-radius: 0; }
-.rir-logo-iso { color: #fff; font-weight: 800; font-size: 11pt; letter-spacing: 0.05em; white-space: nowrap; }
-.rir-logo-pro { color: #22c55e; }
-.rir-logo-sep { color: #64748b; margin: 0 1px; font-weight: 600; }
-.rir-logo-sub { display: block; color: #22c55e; font-size: 7pt; font-weight: 700; margin-top: 2px; letter-spacing: 0.03em; }
-.rir-logo-img { display: block; height: 44px; width: auto; max-width: 165px; object-fit: contain; }
+.rir-logo-badge--img { background: transparent; padding: 0; border-radius: 0; box-shadow: none; }
+.rir-logo-iso { color: #fff; font-weight: 700; font-size: 10pt; letter-spacing: 0.08em; white-space: nowrap; }
+.rir-logo-pro { color: #86efac; }
+.rir-logo-sep { color: #a8a29e; margin: 0 2px; font-weight: 600; }
+.rir-logo-sub { display: block; color: #86efac; font-size: 6.5pt; font-weight: 700; margin-top: 3px; letter-spacing: 0.06em; }
+.rir-logo-img { display: block; width: auto; height: auto; max-width: var(--iso-logo-slot-w, 178px); max-height: var(--iso-logo-slot-h, 68px); object-fit: contain; }
 .rir-hdr-title { flex: 1 1 220px; text-align: center; min-width: 0; }
+.rir-hdr-eyebrow {
+  margin: 0 0 5px;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #047857;
+}
 .rir-hdr-title h1 {
   margin: 0;
-  font-size: 11pt;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #0f172a;
-  line-height: 1.2;
+  font-size: 12pt;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #1c1917;
+  line-height: 1.22;
+  text-transform: none;
 }
-.rir-hdr-badge {
-  margin-top: 4px;
-  display: inline-block;
-  background: #dbeafe;
-  color: #1e40af;
-  padding: 2px 10px;
-  border-radius: 20px;
-  font-size: 8pt;
+.rir-hdr-sub {
+  margin: 5px 0 0;
+  font-size: 7.5pt;
+  font-weight: 400;
+  color: #78716c;
+}
+.rir-hdr-escopo {
+  margin: 6px 0 0;
+  font-size: 7.5pt;
   font-weight: 600;
-  max-width: 100%;
+  color: #57534e;
   line-height: 1.35;
 }
-.rir-hdr-title--compact h1 { font-size: 11pt; text-transform: none; font-weight: 700; }
+.rir-hdr-title--compact h1 { font-size: 11pt; font-weight: 700; }
 .rir-hdr-title--compact p {
   margin: 3px 0 0;
-  font-size: 9pt;
-  color: #475569;
-  font-weight: 500;
+  font-size: 8pt;
+  color: #78716c;
+  font-weight: 400;
   line-height: 1.3;
 }
-.rir-hdr-meta { flex: 0 0 auto; text-align: right; min-width: 110px; }
-.rir-hdr-rir-num { font-weight: 800; font-size: 11pt; color: #2563eb; line-height: 1.2; }
-.rir-hdr-date { font-size: 8.5pt; color: #64748b; margin-top: 2px; line-height: 1.3; }
-.rir-hdr-date strong { color: #0f172a; }
+.rir-hdr-meta { flex: 0 0 auto; text-align: right; min-width: 118px; }
+.rir-hdr-rir-num {
+  font-weight: 700;
+  font-size: 12pt;
+  color: #1c1917;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.rir-hdr-date { font-size: 7.5pt; color: #78716c; margin-top: 4px; line-height: 1.35; }
+.rir-hdr-date strong { color: #1c1917; }
+.rir-context-wrap {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: #fafaf9;
+  border: 1px solid #e7e5e4;
+  border-radius: 4px;
+}
+.rir-context-label {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #a8a29e;
+}
 .rir-info-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 5px 10px;
-  background: #f8fafc;
-  padding: 6px 10px;
-  border-radius: 6px;
-  margin-bottom: 3mm;
-  border: 1px solid #e2e8f0;
+  gap: 6px 12px;
+  background: transparent;
+  padding: 0;
+  border: none;
+  margin: 0;
 }
 .rir-info-cell { display: flex; flex-direction: column; min-width: 0; }
 .rir-info-cell--full { grid-column: 1 / -1; }
@@ -369,40 +457,43 @@ body.rir-print-body.iso-report-native-body {
   font-size: 7pt;
   font-weight: 700;
   text-transform: uppercase;
-  color: #64748b;
+  color: #78716c;
   letter-spacing: 0.04em;
   line-height: 1.2;
 }
 .rir-info-value {
   font-size: 9pt;
-  font-weight: 600;
-  color: #0f172a;
+  font-weight: 400;
+  color: #1c1917;
   margin-top: 1px;
-  word-break: break-word;
-  line-height: 1.25;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: none;
+  line-height: 1.3;
 }
 .rir-inspecao-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-top: 10px;
   align-items: center;
 }
 .rir-tag {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 8.5pt;
-  font-weight: 600;
+  font-size: 7.5pt;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
-  background: #f1f5f9;
+  letter-spacing: 0.04em;
+  background: #f5f5f4;
   padding: 3px 10px;
-  border-radius: 4px;
-  color: #64748b;
+  border-radius: 999px;
+  color: #a8a29e;
+  border: 1px solid #e7e5e4;
 }
-.rir-tag--on { background: #dcfce7; color: #166534; }
-.rir-tag--off { background: #fff; color: #94a3b8; border: 1px solid #e2e8f0; }
+.rir-tag--on { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+.rir-tag--off { background: #fff; color: #a8a29e; border: 1px solid #e7e5e4; }
 .rir-table-wrap {
   overflow: visible;
   width: 100%;
@@ -423,14 +514,15 @@ body.rir-print-body.iso-report-native-body {
 .rir-col-u { width: 7%; }
 .rir-col-cert { width: 17%; }
 .rir-table thead tr.rir-thead-cols th {
-  background: #0f172a !important;
+  background: #1c1917 !important;
   color: #fff !important;
   padding: 8px 10px !important;
-  font-weight: 600;
-  font-size: 8pt;
+  font-weight: 700;
+  font-size: 7.5pt;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   border: none !important;
+  border-top: 2px solid #047857 !important;
 }
 .rir-table thead tr.rir-thead-cols th:nth-child(1),
 .rir-table thead tr.rir-thead-cols th:nth-child(5) { text-align: center; }
@@ -443,17 +535,18 @@ body.rir-print-body.iso-report-native-body {
 .rir-table th {
   padding: 7px 10px;
   border: none;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e7e5e4;
 }
 .rir-table td {
-  color: #334155;
+  color: #44403c;
   vertical-align: middle;
   line-height: 1.35;
   white-space: normal;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: none;
 }
-.rir-table tbody tr.rir-item-row:nth-child(even) { background: #f8fafc; }
+.rir-table tbody tr.rir-item-row:nth-child(even) { background: #fafaf9; }
 .rir-table tbody tr.rir-item-row {
   break-inside: avoid;
   page-break-inside: avoid;
@@ -474,7 +567,7 @@ body.rir-print-body.iso-report-native-body {
 .rir-table tbody td.rir-c-q { text-align: right; font-variant-numeric: tabular-nums; }
 .rir-c-item {
   font-weight: 600;
-  color: #64748b;
+  color: #78716c;
   font-size: 9pt;
   white-space: nowrap;
   word-break: normal;
@@ -483,92 +576,104 @@ body.rir-print-body.iso-report-native-body {
   padding-left: 5px !important;
   padding-right: 5px !important;
 }
-.rir-c-q { font-weight: 600; color: #0f172a; font-size: 9pt; }
-.rir-c-u { font-size: 9pt; color: #64748b; }
+.rir-c-q { font-weight: 700; color: #1c1917; font-size: 9pt; }
+.rir-c-u { font-size: 9pt; color: #78716c; }
 .rir-c-desc {
-  line-height: 1.3;
+  line-height: 1.35;
   font-size: 8.5pt;
   font-weight: 400;
   vertical-align: top;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: none;
 }
 .rir-c-cod {
   font-weight: 600;
-  color: #0f172a;
+  color: #1c1917;
   font-size: 8.5pt;
   line-height: 1.25;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  hyphens: none;
   vertical-align: top;
 }
 .rir-c-cert {
   font-weight: 600;
-  color: #0f172a;
+  color: #1c1917;
   font-size: 8.5pt;
   line-height: 1.25;
-  word-break: break-all;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  hyphens: none;
   vertical-align: top;
 }
 .rir-norms-disclaimer { display: none; }
-.rir-empty-row { text-align: center; color: #94a3b8; padding: 12px !important; font-style: italic; }
+.rir-empty-row { text-align: center; color: #a8a29e; padding: 12px !important; font-style: italic; }
 .rir-laudo-block {
-  margin-top: 8px;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 5px;
+  gap: 6px;
   break-inside: avoid;
   page-break-inside: avoid;
 }
 .rir-laudo-box {
   width: 100%;
-  background: #fefce8;
-  border: 1px solid #fde047;
-  border-radius: 8px;
-  padding: 7px 10px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  padding: 8px 12px;
 }
 .rir-laudo-obs { min-width: 0; }
-.rir-laudo-obs strong { font-size: 9.5pt; color: #854d0e; display: block; margin-bottom: 2px; }
-.rir-laudo-obs p { margin: 0; font-size: 9pt; color: #854d0e; line-height: 1.35; white-space: pre-wrap; }
+.rir-laudo-obs strong { font-size: 7.5pt; color: #b45309; display: block; margin-bottom: 3px; letter-spacing: 0.06em; text-transform: uppercase; }
+.rir-laudo-obs p { margin: 0; font-size: 9pt; color: #78716c; line-height: 1.4; white-space: pre-wrap; }
 .rir-laudo-pill {
   text-align: center;
   padding: 4px 14px;
-  border-radius: 20px;
+  border-radius: 999px;
   flex-shrink: 0;
   break-inside: avoid;
   page-break-inside: avoid;
 }
-.rir-laudo-pill span { color: #fff; font-weight: 800; font-size: 8.5pt; letter-spacing: 0.02em; line-height: 1.2; }
-.rir-laudo-pill--aprovado { background: #16a34a; }
-.rir-laudo-pill--reprovado { background: #dc2626; }
-.rir-laudo-pill--obs { background: #d97706; }
+.rir-laudo-pill span { color: #fff; font-weight: 700; font-size: 8pt; letter-spacing: 0.06em; line-height: 1.2; text-transform: uppercase; }
+.rir-laudo-pill--aprovado { background: #047857; }
+.rir-laudo-pill--reprovado { background: #9f1239; }
+.rir-laudo-pill--obs { background: #b45309; }
 .rir-trace {
-  background: #f1f5f9;
-  padding: 5px 8px;
-  border-radius: 6px;
-  margin-top: 6px;
-  font-size: 8.5pt;
-  color: #475569;
-  border-left: 4px solid #2563eb;
+  background: #fafaf9;
+  padding: 8px 10px;
+  border-radius: 4px;
+  margin-top: 8px;
+  font-size: 7.5pt;
+  color: #78716c;
+  border-left: 3px solid #047857;
 }
-.rir-trace code { font-family: ui-monospace, monospace; background: #e2e8f0; padding: 1px 4px; border-radius: 3px; font-size: 7.5pt; }
+.rir-trace code { font-family: ui-monospace, monospace; background: #e7e5e4; padding: 1px 4px; border-radius: 3px; font-size: 7pt; color: #44403c; }
 .rir-signatures {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-top: 8px;
-  padding-bottom: 3px;
-  border-bottom: 2px solid #2563eb;
+  gap: 20px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #d6d3d1;
+  border-bottom: none;
   break-inside: avoid;
   page-break-inside: avoid;
 }
-.rir-sign-card { text-align: center; padding: 0 6px 2px; }
-.rir-sign-space { min-height: 38px; }
-.rir-sign-line { width: 88%; border-top: 1px dashed #94a3b8; margin: 0 auto 6px; }
-.rir-sign-role { font-size: 9pt; font-weight: 700; color: #2563eb; margin-bottom: 4px; }
-.rir-sign-name { font-weight: 800; font-size: 10.5pt; color: #0f172a; margin-bottom: 3px; }
-.rir-sign-date { font-size: 8.5pt; color: #64748b; }
-.rir-doc-foot { margin-top: 4px; margin-bottom: 0; font-size: 7.5pt; color: #94a3b8; text-align: center; line-height: 1.35; }
+.rir-sign-card { text-align: center; padding: 0 6px; }
+.rir-sign-space { min-height: 28px; }
+.rir-sign-line { width: 85%; border-top: 1.5px solid #1c1917; margin: 0 auto 8px; }
+.rir-sign-role {
+  font-size: 7pt;
+  font-weight: 700;
+  color: #44403c;
+  margin-bottom: 4px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.rir-sign-name { font-weight: 700; font-size: 10pt; color: #1c1917; margin-bottom: 3px; }
+.rir-sign-date { font-size: 7.5pt; color: #78716c; }
 .rir-print-tail {
   margin-top: 6px;
   padding-top: 4px;
@@ -589,9 +694,7 @@ body.rir-print-body.iso-report-native-body {
     padding: 0 !important;
     box-sizing: border-box;
   }
-  .rir-table thead {
-    display: table-header-group;
-  }
+  .rir-table thead { display: table-header-group; }
   .rir-footer-cell {
     border: none !important;
     background: #fff !important;
@@ -606,21 +709,17 @@ body.rir-print-body.iso-report-native-body {
     print-color-adjust: exact;
   }
   .rir-table tbody tr.rir-item-row:nth-child(even) {
-    background: #f8fafc !important;
+    background: #fafaf9 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .rir-signatures {
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-  .rir-laudo-block {
+  .rir-signatures, .rir-laudo-block {
     break-inside: avoid;
     page-break-inside: avoid;
   }
   .rir-tag--on {
-    background: #dcfce7 !important;
-    color: #166534 !important;
+    background: #ecfdf5 !important;
+    color: #047857 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
@@ -638,7 +737,7 @@ body.rir-print-body.iso-report-native-body {
     margin: 0 auto 18px;
     padding: 12mm 10mm 14mm;
     background: #fff;
-    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.14);
+    box-shadow: 0 6px 20px rgba(28, 25, 23, 0.12);
     box-sizing: border-box;
   }
 }
@@ -674,10 +773,9 @@ function montarLogoBlockRir(paraPdf: boolean): string {
   return texto;
 }
 
-function montarConteudoRir(r: RirRegistro, opts?: { paraPdf?: boolean }): string {
+async function montarConteudoRir(r: RirRegistro, opts?: { paraPdf?: boolean }): Promise<string> {
   const paraPdf = opts?.paraPdf === true;
   const cfg = readConfiguracoes();
-  const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfg.documentoRodapeNome, cfg.documentoRodapeCnpj);
   const clienteNome = cfg.cliente || '';
   const projetoNome = cfg.projeto || '';
   const obCfg = rirObraDefaultsFromConfig(cfg);
@@ -698,10 +796,22 @@ function montarConteudoRir(r: RirRegistro, opts?: { paraPdf?: boolean }): string
     });
   const disciplinaExibir = formatarDisciplinaExibicaoRir(disciplinaSigla);
   const logoBlock = montarLogoBlockRir(paraPdf);
-  const escopoPartes = [clienteNome, projetoNome, uoExibir].filter((s) => !!String(s).trim());
-  const escopoLinha =
-    [...new Set(escopoPartes.map((s) => String(s).trim()))].join(' · ') || uoExibir || '—';
+  const escopoLinha = juntarEscopoLinhaRir(clienteNome, projetoNome, uoExibir);
   const refReceb = r.recebimentoId ? escapeHtmlRelatorio(r.recebimentoId) : '—';
+  const emitidoIso = new Date().toISOString();
+  const qrDataUrl = await dataUrlQrDocumentoControle({
+    tipo: 'RIR',
+    codigo: r.codigo,
+    emitidoEm: emitidoIso,
+    versaoDoc: DOC_VERSION,
+  });
+  const rodapeInstitucionalHtml = htmlRodapeInstitucionalControle({
+    nomeEmpresa: cfg.documentoRodapeNome,
+    cnpj: cfg.documentoRodapeCnpj,
+    codigo: r.codigo,
+    versaoDoc: DOC_VERSION,
+    qrDataUrl,
+  });
 
   const cabecalhoParams: CabecalhoRirParams = {
     logoBlock,
@@ -724,20 +834,21 @@ function montarConteudoRir(r: RirRegistro, opts?: { paraPdf?: boolean }): string
     inspecaoDimensional: !!r.inspecaoDimensional,
   };
 
-  const cabecalho = montarCabecalhoInspecaoRirHtml(cabecalhoParams);
+  const faixaTitulo = montarFaixaTituloInstitucionalRirHtml(cabecalhoParams);
+  const blocoInfo = montarBlocoInfoRir(cabecalhoParams);
   const linhas = montarLinhasTabelaRir(itens, 0);
-  const rodapeParams = { r, laudo, laudoTxt, statusTxt, refReceb, segRodapeInst };
+  const rodapeParams = { r, laudo, laudoTxt, statusTxt, refReceb, rodapeInstitucionalHtml };
 
   return `<div class="rir-doc" lang="pt-BR">
 <div class="rir-print-main">
-${montarTabelaMaterialRir(cabecalho, linhas, montarRodapeRir(rodapeParams))}
+${montarTabelaMaterialRir(faixaTitulo, blocoInfo, linhas, montarRodapeRir(rodapeParams))}
 </div>
 </div>`;
 }
 
 function montarPdfMetaRir(r: RirRegistro, escopoLinha: string): RelatorioPdfMeta {
   return {
-    headerTitle: 'RELATÓRIO DE INSPEÇÃO DE RECEBIMENTO',
+    headerTitle: 'Relatório de inspeção de recebimento',
     headerSub: escopoLinha,
     headerCode: (r.codigo || '').trim() || '—',
     footerPrefix: 'Folha',
@@ -745,37 +856,36 @@ function montarPdfMetaRir(r: RirRegistro, escopoLinha: string): RelatorioPdfMeta
   };
 }
 
-export function montarDocumentoHtmlImpressaoRir(
+export async function montarDocumentoHtmlImpressaoRir(
   registro: RirRegistro,
   opts?: { paraPdf?: boolean },
-): string {
+): Promise<string> {
   const codigo = (registro.codigo || '').trim() || '—';
   const cfg = readConfiguracoes();
   const clienteNome = cfg.cliente || '';
   const projetoNome = cfg.projeto || '';
   const obCfg = rirObraDefaultsFromConfig(cfg);
   const uoExibir = (registro.uo || '').trim() || obCfg.uo;
-  const escopoPartes = [clienteNome, projetoNome, uoExibir].filter((s) => !!String(s).trim());
-  const escopoLinha =
-    [...new Set(escopoPartes.map((s) => String(s).trim()))].join(' · ') || uoExibir || '—';
+  const escopoLinha = juntarEscopoLinhaRir(clienteNome, projetoNome, uoExibir);
+  const fontesCss = await cssFontesNotoRelatorioInline();
 
   return montarDocumentoHtmlInstitucionalPaged({
     title: `I.S.O PRO — RIR ${codigo}`,
     bodyClass: 'rir-print-body',
-    reportStyles: cssEstilosRelatorioRir(),
-    contentHtml: montarConteudoRir(registro, { paraPdf: opts?.paraPdf }),
+    reportStyles: `${fontesCss}${cssEstilosRelatorioRir()}`,
+    contentHtml: await montarConteudoRir(registro, { paraPdf: opts?.paraPdf }),
     usePagedJs: false,
     includeToolbar: !opts?.paraPdf,
     pdfMeta: montarPdfMetaRir(registro, escopoLinha),
   });
 }
 
-export function montarHtmlRelatorioRirCompleto(registro: RirRegistro): string {
+export async function montarHtmlRelatorioRirCompleto(registro: RirRegistro): Promise<string> {
   return montarDocumentoHtmlImpressaoRir(registro);
 }
 
 /** HTML optimizado para printToPDF / Playwright (sem barra de pré-visualização). */
-export function montarHtmlRelatorioRirParaPdf(registro: RirRegistro): string {
+export async function montarHtmlRelatorioRirParaPdf(registro: RirRegistro): Promise<string> {
   return montarDocumentoHtmlImpressaoRir(registro, { paraPdf: true });
 }
 
@@ -786,5 +896,5 @@ export function montarHtmlRelatorioRirParaPdf(registro: RirRegistro): string {
 export async function preVisualizarRirRelatorioHtmlLegado(
   registro: RirRegistro,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  return abrirPreVisualizacaoHtmlRelatorio(montarDocumentoHtmlImpressaoRir(registro));
+  return abrirPreVisualizacaoHtmlRelatorio(await montarDocumentoHtmlImpressaoRir(registro));
 }

@@ -6,12 +6,13 @@ export type AuthContextValue = {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (payload: LoginPayload) => Promise<void>;
-  /** Completa login após código TOTP (quando `IsoProMfaRequiredError`). */
+  /** Completa login após código TOTP (challenge ou enroll). */
   completeMfaLogin: (
     factorId: string,
     code: string,
     pendingUser: AuthUser,
     permanecerLogado: boolean,
+    options?: { enroll?: boolean },
   ) => Promise<void>;
   /** Cancela desafio MFA (limpa sessão Auth aal1). */
   cancelMfaLogin: () => void;

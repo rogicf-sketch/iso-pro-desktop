@@ -35,6 +35,7 @@ export type ResultadoImportacaoColaboradoresCsv = {
   ignorados: number;
   ignoradosPorDuplicidadeNoArquivo: number;
   detalhes: string[];
+  mensagem?: string;
 };
 
 export function colaboradorRowToFormData(row: Record<string, string>): ColaboradorFormData {

@@ -1,5 +1,10 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  listAllDocumentosPlanejamentoIndiceFromCloud,
+  upsertDocumentosPlanejamentoEmLotes,
+  writeDocumentosSotOnCloud,
+} from '../../../lib/documentosPlanejamentoTabelas';
 import { importarDocumentosDoArquivoJson } from './documentos.service';
 
 const STORAGE_KEY = 'iso-pro-desktop-documentos';
@@ -20,7 +25,32 @@ vi.mock('../../../lib/snapshotSliceRead', () => ({
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
   shouldUseCloudMaterials: vi.fn(() => false),
+  getSupabase: vi.fn(() => null),
 }));
+
+vi.mock('../../../lib/documentosPlanejamentoTabelas', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/documentosPlanejamentoTabelas')>();
+  return {
+    ...actual,
+    writeDocumentosSotOnCloud: vi.fn(async () => ({
+      updatedAt: new Date().toISOString(),
+      missing: false,
+    })),
+    listAllDocumentosPlanejamentoIndiceFromCloud: vi.fn(async () => ({
+      documentos: [],
+      source: 'tables',
+    })),
+    listAllDocumentosPlanejamentoCompletosFromCloud: vi.fn(async () => ({
+      documentos: [],
+      source: 'tables',
+    })),
+    upsertDocumentosPlanejamentoEmLotes: vi.fn(async () => ({
+      ok: true,
+      documentos: 1,
+      itens: 1,
+    })),
+  };
+});
 
 vi.mock('../../recebimentos/services/recebimentos.service', () => ({
   carregarRecebimentosCompletos: vi.fn(async () => []),
@@ -86,6 +116,19 @@ describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', ()
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeDocumentosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(listAllDocumentosPlanejamentoIndiceFromCloud).mockResolvedValue({
+      documentos: [],
+      source: 'tables',
+    });
+    vi.mocked(upsertDocumentosPlanejamentoEmLotes).mockResolvedValue({
+      ok: true,
+      documentos: 1,
+      itens: 1,
+    });
     mockListarMateriais.mockResolvedValue({
       success: true,
       data: { items: [mkMaterial('MAT-1')], total: 1, page: 1, pageSize: 999999 },
@@ -141,7 +184,8 @@ describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', ()
 
     expect(result.success).toBe(false);
     expect(String(result.error)).toMatch(/Gravacao bloqueada|nao batem com o planejamento/i);
-    expect(mockCommitWrite).toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).not.toHaveBeenCalled();
+    expect(upsertDocumentosPlanejamentoEmLotes).not.toHaveBeenCalled();
   });
 
   it('importa na nuvem quando substituirELimparHistoricoIncompativel remove historico orfao', async () => {
@@ -173,25 +217,24 @@ describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', ()
 
     expect(result.success).toBe(true);
     expect(result.data?.criados).toBe(1);
-    expect(mockCommitWrite).toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).toHaveBeenCalled();
   });
 
-  /** Regressao incidente 12/07/2026: baseline errado no cliente nao pode apagar desenhos da nuvem. */
-  it('bloqueia gravacao que removeria desenhos existentes na nuvem (baseline incompleto no cliente)', async () => {
-    const docNuvem = {
-      id: 'doc-nuvem-1',
-      numero: 'ANTIGO-001',
-      revisao: 'A',
-      data: '2026-05-01',
-      descricao: 'Desenho real ja na nuvem',
-      responsavel: 'R',
-      itens: [],
-    };
-    // Baseline lido pela importacao: nuvem devolve vazio (ex.: sessao com leitura falhada).
-    mockReadPayload.mockResolvedValue({ documentos: [] });
-    // Mas na hora de gravar, o snapshot da nuvem TEM desenhos que nao estao na lista a gravar.
+  /** Import delta acrescenta sem apagar o catalogo existente (nao faz rewrite SoT completo). */
+  it('import delta acrescenta desenho sem rewrite completo quando ja existem desenhos na nuvem', async () => {
+    vi.mocked(listAllDocumentosPlanejamentoIndiceFromCloud).mockResolvedValue({
+      documentos: [
+        {
+          id: 'doc-nuvem-1',
+          numero: 'ANTIGO-001',
+          revisao: 'A',
+          status: 'pendente',
+        },
+      ],
+      source: 'tables',
+    });
     mockReadForWrite.mockResolvedValue({
-      payload: { documentos: [docNuvem], atendimentoHistorico: [] },
+      payload: { documentos: [], atendimentoHistorico: [] },
       baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
     });
 
@@ -218,8 +261,9 @@ describe('importarDocumentosDoArquivoJson / integridade atendimento (nuvem)', ()
 
     const result = await importarDocumentosDoArquivoJson(json);
 
-    expect(result.success).toBe(false);
-    expect(String(result.error)).toMatch(/Gravacao bloqueada por seguranca/i);
-    expect(String(result.error)).toMatch(/ANTIGO-001/);
+    expect(result.success).toBe(true);
+    expect(result.data?.criados).toBe(1);
+    expect(upsertDocumentosPlanejamentoEmLotes).toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).not.toHaveBeenCalled();
   });
 });

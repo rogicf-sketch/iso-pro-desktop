@@ -1,0 +1,33 @@
+---
+description: Não regressar a lenta (~20s) do atendimento na nuvem
+globs: supabase/migrations/*.sql,iso_pro_mobile/src/lib/{isoProSnapshot,config,atendimentoComando,atendimentoSincroniaConfiavel}.ts
+alwaysApply: false
+---
+
+# Atendimento — invariantes de performance
+
+Incidente resolvido (staging SP, 2026-08): baixa ~20s para menos de 2s. **Não desfazer.**
+
+## Servidor (migrations)
+
+1. **`iso_pro_registrar_atendimento_mobile`** deve manter o ramo **BAIXA RAPIDA** (só `updated_at` + tabelas). Nunca voltar a `SELECT`/`UPDATE` do `payload` JSON multi‑MB na baixa normal.
+2. **`iso_pro_documento_status_derivado`**: caminho rápido na baixa — **preservar `'recebido'`** com `qAt` parcial (não descer para parcial); early-return `'parcial'` só se a coluna já não era recebido. Heal set-based (`iso_pro_heal_status_documentos_planejamento`) sobe parcial→recebido quando o estoque cobre.
+3. **`iso_pro_list_documentos_planejamento_page`**: ler a **coluna** `status` (healada). **Não** chamar `status_derivado` por linha da página (timeout 30s).
+4. **Trigger `trg_iso_pro_snapshot_escala_outbox`**: `AFTER INSERT OR UPDATE OF payload, documentos` — **sem `updated_at`**. Cada baixa table-first só mexe em `updated_at`; incluir `updated_at` no trigger voltava a degradar.
+5. Preferir `skip_escala_outbox` em writes que tocam o snapshot.
+6. Manter `_server_ms` no payload de `iso_pro_submit_atendimento_comando` (telemetria).
+
+## Mobile
+
+1. `ATENDIMENTO_RPC_TIMEOUT_MS` ≥ 45000 (18s causava «Nuvem incompleta» com ACK atrasado).
+2. Após timeout/erro: `peekAtendimentoComandoComRetry` antes de falhar/enfileirar.
+3. Gateway BR (`isoprogestaodemateriais.com.br`) **só** com host de produção; staging SP = RPC directo.
+
+## Verificação
+
+```bash
+cd iso-pro-desktop && node scripts/check-atendimento-perf-invariants.mjs
+# também em: npm run check:blindagem
+```
+
+Qualquer `CREATE OR REPLACE` destas funções/triggers tem de preservar os invariantes acima (o check estático falha no CI/blindagem).

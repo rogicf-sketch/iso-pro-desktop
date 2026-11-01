@@ -111,7 +111,8 @@ export async function montarHtmlEtiquetasItensRecebimento(params: {
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso();
   const geradoEm = new Date().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
   const compacto = formato === 'termica_58' || formato === 'termica_80';
-  const gridCols = formato === 'a4_2col' && !compacto ? 2 : 1;
+  const gridCols = formato === 'a4_3col' ? 3 : formato === 'a4_2col' && !compacto ? 2 : 1;
+  const gapMm = formato === 'a4_3col' ? 4 : 12;
 
   const tarefas: Promise<string>[] = [];
   for (const item of itens) {
@@ -134,7 +135,12 @@ export async function montarHtmlEtiquetasItensRecebimento(params: {
   }
   const blocos = await Promise.all(tarefas);
 
-  const gridClass = gridCols === 2 ? 'etiq-lote-grid etiq-lote-a4-2' : 'etiq-lote-grid etiq-lote-single';
+  const gridClass =
+    gridCols === 3
+      ? 'etiq-lote-grid etiq-lote-a4-3'
+      : gridCols === 2
+        ? 'etiq-lote-grid etiq-lote-a4-2'
+        : 'etiq-lote-grid etiq-lote-single';
   const logoBlock = htmlBlocoLogoInstitucional(logoUrl, compacto);
   const nfLabel = escapeHtmlRelatorio(notaFiscalSufixoParaRotuloEtiqueta(recebimento.notaFiscal));
   const runningName = 'etiqRunningHdr';
@@ -178,7 +184,8 @@ export async function montarHtmlEtiquetasItensRecebimento(params: {
       border-radius: 8px;
       border: 1px solid #cbd5e1;
     }
-    .etiq-lote-grid { display: grid; gap: 12px; }
+    .etiq-lote-grid { display: grid; gap: ${gapMm}px; }
+    .etiq-lote-a4-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .etiq-lote-a4-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .etiq-lote-single { grid-template-columns: 1fr; max-width: ${compacto ? `${larguraMm}mm` : '720px'}; margin: 0 auto; }
     .etiq-card {

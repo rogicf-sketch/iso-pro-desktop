@@ -1,7 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconLock, IconLockOpen, IconShieldCheck, IconTrash } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { MobileDevice } from '../types/mobileDevice.types';
 
@@ -11,6 +12,7 @@ type Props = {
   onBlock: (id: string) => void;
   onUnblock: (id: string) => void;
   onRevoke: (id: string) => void;
+  onDelete: (id: string) => void;
   canAdminister: boolean;
 };
 
@@ -24,7 +26,15 @@ function getStatusMeta(status: MobileDevice['status']) {
   return createStatusMeta('Pendente', 'warning');
 }
 
-export function MobileDevicesTable({ items, onAuthorize, onBlock, onUnblock, onRevoke, canAdminister }: Props) {
+export function MobileDevicesTable({
+  items,
+  onAuthorize,
+  onBlock,
+  onUnblock,
+  onRevoke,
+  onDelete,
+  canAdminister,
+}: Props) {
   return (
     <DataTable
       getRowClassName={(item) =>
@@ -78,33 +88,47 @@ export function MobileDevicesTable({ items, onAuthorize, onBlock, onUnblock, onR
             canAdminister ? (
               <div className="table-actions">
                 {item.status !== 'autorizado' ? (
-                  <ActionButton
-                    onClick={() => onAuthorize(item.id)}
-                    enabledLabel={item.status === 'bloqueado' ? 'Autorizar novamente' : 'Autorizar'}
-                    enabledTitle={
+                  <TableIconButton
+                    label={
                       item.status === 'bloqueado'
                         ? 'Autorizar novamente o aparelho bloqueado.'
                         : 'Autorizar aparelho para acesso ao sistema.'
                     }
-                    variant="primary"
-                  />
+                    onClick={() => onAuthorize(item.id)}
+                    tone="accent"
+                  >
+                    <IconShieldCheck />
+                  </TableIconButton>
                 ) : null}
                 {item.status !== 'bloqueado' ? (
-                  <ActionButton enabledLabel="Bloquear" enabledTitle="Bloquear acesso do aparelho." onClick={() => onBlock(item.id)} variant="danger" />
+                  <TableIconButton label="Bloquear acesso do aparelho." onClick={() => onBlock(item.id)} tone="danger">
+                    <IconLock />
+                  </TableIconButton>
                 ) : (
-                  <ActionButton enabledLabel="Desbloquear" enabledTitle="Remover bloqueio e voltar para autorizado." onClick={() => onUnblock(item.id)} variant="ghost" />
+                  <TableIconButton label="Remover bloqueio e voltar para autorizado." onClick={() => onUnblock(item.id)}>
+                    <IconLockOpen />
+                  </TableIconButton>
                 )}
-                <ActionButton
-                  enabledLabel="Revogar"
-                  enabledTitle="Retira a autorizacao (fica pendente) e exige nova aprovacao no app."
+                <TableIconButton
+                  label="Retira a autorizacao (fica pendente) e exige nova aprovacao no app."
                   onClick={() => onRevoke(item.id)}
-                  variant="ghost"
-                />
+                  tone="danger"
+                >
+                  <IconBan />
+                </TableIconButton>
+                <TableIconButton
+                  label="Excluir o registo da lista. O aparelho so volta a aparecer se o app se registar de novo."
+                  onClick={() => onDelete(item.id)}
+                  tone="danger"
+                >
+                  <IconTrash />
+                </TableIconButton>
               </div>
             ) : null,
         },
       ]}
-      emptyText="Nenhum aparelho encontrado."
+      emptyDescription="Aparelhos aparecem após o primeiro pedido de autorização no app."
+      emptyText="Nenhum aparelho encontrado"
       items={items}
     />
   );

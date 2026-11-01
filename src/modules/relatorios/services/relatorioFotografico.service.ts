@@ -5,13 +5,15 @@ import {
   isStorageRef,
   resolveEvidenciaToBlob,
   resolveEvidenciaToDataUrl,
+  resolveEvidenciaToDisplayUrl,
   uploadEvidenciaBlob,
 } from '../../../lib/evidenciasStorage';
 import { getScopedIsoProStorageKey, isStorageKeyForAmbienteAtivo } from '../../../lib/isoProAmbiente';
 import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { isMediaRefKey, mediaBlobDeleteByPrefix, mediaBlobGet, mediaBlobPut, MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
-import { shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
+import { canUseDesktopSupabaseFetch } from '../../../lib/supabaseDesktopFetch';
 import { getErrorMessage, withLocalFallback } from '../../../lib/service-result';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { ServiceResult } from '../../../types/common.types';
@@ -61,39 +63,132 @@ export function relatorioFotoBlobKey(reportId: string, fotoId: string): string {
   return `${MEDIA_REF_PREFIX}rf:${reportId.trim()}:${fotoId.trim()}`;
 }
 
+async function hydrateUmaFoto(
+  rid: string,
+  f: RelatorioFotograficoFoto,
+  mode: 'print' | 'preview',
+): Promise<RelatorioFotograficoFoto> {
+  const pref = f.imageRef?.trim() ?? '';
+  const du = f.dataUrl?.trim() ?? '';
+
+  /**
+   * Preview + Storage:
+   * - EXE: data URL via IPC (signed HTTPS no iframe/srcdoc falha no renderer;
+   *   empresa 02 só tem nuvem — por isso partia).
+   * - Web: URL assinada (rápido).
+   * Ignora dataUrl prévio do hydrate print (pode estar corrompido/vazio).
+   */
+  if (mode === 'preview' && isStorageRef(pref)) {
+    if (canUseDesktopSupabaseFetch()) {
+      const url = await resolveEvidenciaToDataUrl(pref);
+      return { ...f, dataUrl: url ?? '', imageRef: pref };
+    }
+    let url = await resolveEvidenciaToDisplayUrl(pref);
+    if (!url) url = await resolveEvidenciaToDataUrl(pref);
+    return { ...f, dataUrl: url ?? '', imageRef: pref };
+  }
+
+  if (du.startsWith('data:image/') || (mode === 'preview' && (du.startsWith('http://') || du.startsWith('https://')))) {
+    return f;
+  }
+  if (isStorageRef(pref)) {
+    const url = await resolveEvidenciaToDataUrl(pref);
+    return { ...f, dataUrl: url ?? '', imageRef: pref };
+  }
+  if (typeof indexedDB === 'undefined') {
+    return { ...f, dataUrl: '', imageRef: pref || undefined };
+  }
+  const ref = (pref && isMediaRefKey(pref) ? pref : relatorioFotoBlobKey(rid, f.id)) as string;
+  if (mode === 'preview') {
+    const url = await resolveEvidenciaToDisplayUrl(ref);
+    return { ...f, dataUrl: url ?? '', imageRef: ref };
+  }
+  const blob = await mediaBlobGet(ref);
+  if (!blob) return { ...f, dataUrl: '', imageRef: ref };
+  return { ...f, dataUrl: await blobToDataUrl(blob), imageRef: ref };
+}
+
+/** Hidrata fotos em paralelo (data URL) — impressão / PDF. */
 export async function hydrateRelatorioFotograficoPayload(p: RelatorioFotograficoPayload): Promise<RelatorioFotograficoPayload> {
   const rid = p.reportId.trim();
   if (!rid) return p;
   try {
-    const fotos: RelatorioFotograficoFoto[] = [];
-    for (const f of p.fotos) {
-      const du = f.dataUrl?.trim() ?? '';
-      if (du.startsWith('data:image/')) {
-        fotos.push(f);
-        continue;
-      }
-      const pref = f.imageRef?.trim() ?? '';
-      if (isStorageRef(pref)) {
-        const dataUrl = await resolveEvidenciaToDataUrl(pref);
-        fotos.push({ ...f, dataUrl: dataUrl ?? '', imageRef: pref });
-        continue;
-      }
-      if (typeof indexedDB === 'undefined') {
-        fotos.push({ ...f, dataUrl: '', imageRef: pref || undefined });
-        continue;
-      }
-      const ref = (pref && isMediaRefKey(pref) ? pref : relatorioFotoBlobKey(rid, f.id)) as string;
-      const blob = await mediaBlobGet(ref);
-      if (!blob) {
-        fotos.push({ ...f, dataUrl: '', imageRef: ref });
-        continue;
-      }
-      fotos.push({ ...f, dataUrl: await blobToDataUrl(blob), imageRef: ref });
-    }
+    const fotos = await Promise.all(p.fotos.map((f) => hydrateUmaFoto(rid, f, 'print')));
     return { ...p, fotos };
   } catch {
     return p;
   }
+}
+
+/**
+ * Pré-visualizar: URLs assinadas em paralelo (rápido).
+ * No EXE, o processo principal grava as fotos em ficheiros ao lado do HTML
+ * (file:// não carrega bem https/data enormes — daí imagens partidas).
+ */
+export async function hydrateRelatorioFotograficoPayloadForPreview(
+  p: RelatorioFotograficoPayload,
+): Promise<RelatorioFotograficoPayload> {
+  const rid = p.reportId.trim();
+  if (!rid) return p;
+  try {
+    const fotos = await Promise.all(p.fotos.map((f) => hydrateUmaFoto(rid, f, 'preview')));
+    return { ...p, fotos };
+  } catch {
+    return p;
+  }
+}
+
+async function blobToBase64Raw(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * EXE: baixa cada foto e devolve HTML com src=foto-N.jpg + assets base64
+ * para o main gravar ao lado do index.html (fiável em loadFile).
+ */
+export async function prepararPreVisualizacaoRelatorioFotograficoDesktop(
+  p: RelatorioFotograficoPayload,
+): Promise<{
+  payload: RelatorioFotograficoPayload;
+  assets: Array<{ name: string; base64: string }>;
+  fotosOk: number;
+}> {
+  const assets: Array<{ name: string; base64: string }> = [];
+  const fotos: RelatorioFotograficoFoto[] = [];
+  let fotosOk = 0;
+
+  await Promise.all(
+    p.fotos.map(async (f, i) => {
+      const pref = f.imageRef?.trim() || f.dataUrl?.trim() || '';
+      const blob = pref ? await resolveEvidenciaToBlob(pref) : null;
+      const name = `rf-${String(i).padStart(3, '0')}.jpg`;
+      if (blob && blob.size > 24) {
+        try {
+          const base64 = await blobToBase64Raw(blob);
+          assets.push({ name, base64 });
+          fotos[i] = { ...f, dataUrl: name };
+          fotosOk += 1;
+          return;
+        } catch {
+          /* cai abaixo */
+        }
+      }
+      fotos[i] = { ...f, dataUrl: '' };
+    }),
+  );
+
+  return {
+    payload: { ...p, fotos: fotos.map((x, i) => x ?? { ...p.fotos[i]!, dataUrl: '' }) },
+    assets,
+    fotosOk,
+  };
 }
 
 export async function persistRelatorioFotograficoFotosToIdb(p: RelatorioFotograficoPayload): Promise<RelatorioFotograficoPayload> {
@@ -619,6 +714,7 @@ export async function carregarRelatorioFotografico(
     },
     loadLocal: async () => local,
     fallbackMessage: 'Falha ao carregar relatorio fotografico na nuvem.',
+    preferMs: REMOTE_READ_TIMEOUT_MS,
   });
 
   return {
@@ -634,6 +730,15 @@ export async function salvarRelatorioFotografico(
   const id = payload.reportId.trim();
   if (!id) {
     return { success: false, error: 'Identificador do relatório em falta. Recarregue a página.' };
+  }
+
+  const nf = payload.notaFiscal.trim();
+  const recId = payload.recebimentoId.trim();
+  if (!nf || !recId) {
+    return {
+      success: false,
+      error: 'Vincule um recebimento (nota fiscal) antes de salvar o relatório fotográfico.',
+    };
   }
 
   const next: RelatorioFotograficoPayload = {

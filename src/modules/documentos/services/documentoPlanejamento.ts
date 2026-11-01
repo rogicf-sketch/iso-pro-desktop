@@ -94,6 +94,45 @@ export function calcularStatusMaterialPorMetricas(m: MetricasPorCodigoMaterial):
   return 'pendente';
 }
 
+/**
+ * Semente instantanea a partir das linhas do documento (sem nuvem).
+ * Suficiente para «Atendido» (qtd. atendida da linha); recebido fica 0 ate a RPC.
+ */
+export function metricasSementeDoDocumento(doc: Documento): Map<string, MetricasPorCodigoMaterial> {
+  const map = new Map<string, MetricasPorCodigoMaterial>();
+  for (const item of doc.itens) {
+    const cod = normalizeCodigoPlanejamento(item.codigoMaterial);
+    if (!cod) continue;
+    const cur = map.get(cod) ?? { prevista: 0, recebido: 0, atendido: 0 };
+    cur.prevista += Number(item.quantidadeProjeto) || 0;
+    cur.atendido += Number(item.quantidadeAtendida) || 0;
+    map.set(cod, cur);
+  }
+  return map;
+}
+
+/** Junta memoria/nuvem por cima da semente (recebido/atendido globais ganham). */
+export function fundirMetricasPlanejamento(
+  base: Map<string, MetricasPorCodigoMaterial>,
+  overlay: Map<string, MetricasPorCodigoMaterial>,
+): Map<string, MetricasPorCodigoMaterial> {
+  if (!overlay.size) return new Map(base);
+  const out = new Map(base);
+  for (const [k, v] of overlay) {
+    const prev = out.get(k);
+    if (!prev) {
+      out.set(k, { ...v });
+      continue;
+    }
+    out.set(k, {
+      prevista: Number(v.prevista) || prev.prevista,
+      recebido: Math.max(Number(v.recebido) || 0, Number(prev.recebido) || 0),
+      atendido: Math.max(Number(v.atendido) || 0, Number(prev.atendido) || 0),
+    });
+  }
+  return out;
+}
+
 /** Status da linha no documento (prioriza baixa da linha e depois estoque global). */
 export function resolverStatusLinhaDocumento(
   item: DocumentoItem,

@@ -26,4 +26,15 @@ npx supabase db push
 Botoes «Activar estrutura de escala» para desenhos, recebimentos e inventario+RIR+RNC.
 
 ## Nota
-Snapshot JSON continua a ser dual-escrito para mobile/legado. Contagens e listas UI ja preferem tabelas.
+Snapshot JSON continua a existir para mobile/legado. Contagens e listas UI ja preferem tabelas.
+
+**SoT table-first** (2026-08-03):
+- Recebimentos / inventarios / documentos / **RIR / RNC** / fornecedores / equipamentos / etiquetas: `iso_pro_write_*_sot`
+  (tabelas + projecao snapshot com `skip_escala_outbox`).
+- Documentos: **preserva `quantidade_atendida` das tabelas** (nao ressuscita qAt apos estorno).
+- Historico atendimento: merge tabelas∪snapshot + backfill + `iso_pro_reconcile_atendimento_historico`.
+- Fallback patch legado se a RPC faltar.
+- Reconciliador: `iso_pro_reconcile_escala_sot` + historico ATD.
+
+Retencao de historico no patch: `snapshotHistoricoRetencao.ts` (90 dias / 3000 itens).
+Ver `docs/POLITICA-RETENCAO-SNAPSHOT.md`.

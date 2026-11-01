@@ -45,6 +45,11 @@ function refCobertaPorDocumentos(ref: { id: string; num: string }, docs: Documen
   return false;
 }
 
+/** Baixas multi-desenho gravam `documento`/`documentoNumero` = "Multiplos" (nao e um numero de desenho). */
+function isRefSentinelMultiplos(ref: { id: string; num: string }): boolean {
+  return ref.num.replace(/\s/g, '').toLowerCase() === 'multiplos';
+}
+
 /**
  * Devolve mensagem de erro em portugues ou `null` se a gravacao pode prosseguir.
  * @param dispensarValidacao — exclusao definitiva ja validada por `listarDocumentosComAtendimentoVinculado`;
@@ -59,7 +64,7 @@ export function mensagemSePlanejamentoIncompativelComRefsAtendimento(
     return null;
   }
 
-  const refs = coletarRefsAtendimentoDoPayload(payload);
+  const refs = coletarRefsAtendimentoDoPayload(payload).filter((r) => !isRefSentinelMultiplos(r));
   if (!refs.length) {
     return null;
   }
@@ -112,6 +117,7 @@ export function limparRefsAtendimentoIncompativeisComPlanejamento(
     const id = row.documentoId != null ? String(row.documentoId).trim() : '';
     const num = row.documento != null ? String(row.documento).trim().toLowerCase() : '';
     if (!id && !num) return true;
+    if (isRefSentinelMultiplos({ id, num })) return true;
     return refCobertaPorDocumentos({ id, num }, nextDocs);
   });
 
@@ -119,6 +125,7 @@ export function limparRefsAtendimentoIncompativeisComPlanejamento(
     const id = row.documentoId != null ? String(row.documentoId).trim() : '';
     const num = row.documentoNumero != null ? String(row.documentoNumero).trim().toLowerCase() : '';
     if (!id && !num) return true;
+    if (isRefSentinelMultiplos({ id, num })) return true;
     return refCobertaPorDocumentos({ id, num }, nextDocs);
   });
 

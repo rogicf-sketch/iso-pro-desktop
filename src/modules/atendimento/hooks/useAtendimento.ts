@@ -14,14 +14,25 @@ import {
   aquecerSaldoOperacionalAtendimento,
   buscarDocumentosPendentesPorCodigoMaterialNuvem,
   estornarAtendimento,
+  hidratarDocumentoPendenteAtendimento,
   listarDocumentosPendentesComMeta,
-  listarHistoricoAtendimentosComMeta,
-  montarExportacaoAtendimentosPacoteZip,
+  listarHistoricoAtendimentosPagina,
+  montarExportacaoAtendimentosCsvItens,
+  montarExportacaoEstornosCsv,
   registrarAtendimento,
   registrarAtendimentosSessao,
+  type HistoricoAtendimentosPage,
 } from '../services/atendimento.service';
+
+export type HistoricoPeriodoFiltro = 'hoje' | '7d' | '30d' | 'todos';
 import { buildEstornoV2IdempotencyKey } from '../services/estornoAtendimentoV2';
 import { captureOperationalEvent } from '../../../lib/errorReporting';
+import {
+  claimAtendimentoDocumentoLock,
+  isAtendimentoLockHeldByOther,
+  mensagemAtendimentoLockBloqueado,
+  releaseAtendimentoDocumentoLock,
+} from '../../../lib/atendimentoDocumentoLock';
 import type { Colaborador } from '../../colaboradores/types/colaborador.types';
 import type {
   Atendimento,
@@ -61,14 +72,74 @@ type AtendimentoCorePayload = {
   documentos: AtendimentoDocumento[];
   colaboradores: Colaborador[];
   fallbackReason: string;
+  listSource: 'supabase' | 'local';
 };
 
 function atendimentoCoreQueryKey(userLogin: string | undefined) {
   return ['atendimento', 'core', userLogin ?? ''] as const;
 }
 
-function atendimentoHistoricoQueryKey(userLogin: string | undefined) {
-  return ['atendimento', 'historico', userLogin ?? ''] as const;
+function atendimentoHistoricoQueryKey(
+  userLogin: string | undefined,
+  page: number,
+  pageSize: number,
+  busca: string,
+  periodo: HistoricoPeriodoFiltro,
+) {
+  return ['atendimento', 'historico', userLogin ?? '', page, pageSize, busca, periodo] as const;
+}
+
+function desdeIsoDePeriodo(periodo: HistoricoPeriodoFiltro): string | null {
+  if (periodo === 'todos') return null;
+  const agora = Date.now();
+  if (periodo === 'hoje') {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }
+  const dias = periodo === '7d' ? 7 : 30;
+  return new Date(agora - dias * 24 * 60 * 60 * 1000).toISOString();
+}
+
+type HistoricoQueryData = HistoricoAtendimentosPage & { source?: 'supabase' | 'local' };
+
+function prependHistoricoCache(
+  prev: HistoricoQueryData | Atendimento[] | undefined,
+  novos: Atendimento[],
+  pageSize: number,
+): HistoricoQueryData | undefined {
+  if (!prev) return prev;
+  if (Array.isArray(prev)) {
+    const merged = [...novos, ...prev.filter((a) => !novos.some((n) => n.id === a.id))];
+    return { items: merged.slice(0, pageSize), totalCount: merged.length, limit: pageSize, offset: 0 };
+  }
+  const merged = [...novos, ...prev.items.filter((a) => !novos.some((n) => n.id === a.id))];
+  return {
+    ...prev,
+    items: merged.slice(0, pageSize),
+    totalCount: prev.totalCount + novos.filter((n) => !prev.items.some((p) => p.id === n.id)).length,
+  };
+}
+
+/** Seed do desenho ja na UI — evita re-fetch na nuvem no Confirmar (critico no leitor). */
+function documentoSeedFromUi(doc: AtendimentoDocumento) {
+  return {
+    id: doc.id,
+    numero: doc.numero,
+    revisao: doc.revisao,
+    descricao: doc.descricao,
+    responsavel: doc.responsavel,
+    status: doc.status,
+    itens: doc.linhas.map((l) => ({
+      id: l.documentoItemId,
+      codigoMaterial: l.codigoMaterial,
+      descricaoMaterial: l.descricaoMaterial,
+      unidade: l.unidade,
+      quantidadeProjeto: l.quantidadeProjeto,
+      quantidadeAtendida: l.quantidadeAtendida,
+      localizacao: '',
+    })),
+  };
 }
 
 /** Lotes por pagina na zona Historico (WMS: poucas linhas no DOM — setas Anterior/Proxima). */
@@ -110,8 +181,8 @@ export function obterErroRegistroAtendimento(
       (linha) => idsMarcados.has(linha.documentoItemId) && linha.quantidadeNestaOperacao <= 0,
     );
     return haMarcadoSemQuantidade
-      ? 'Ha itens marcados, mas nenhuma quantidade valida nesta operacao. Verifique a coluna Saldo: se estiver 0, o material nao foi encontrado no cadastro ou nao ha estoque; ajuste em Materiais/Recebimentos. Informe uma quantidade maior que zero (ate o saldo e ao pendente).'
-      : 'Marque ao menos um item e informe quantidade maior que zero para registrar o atendimento.';
+      ? 'Ha itens marcados sem quantidade valida. Ajuste a quantidade (ate o saldo e o pendente).'
+      : 'Marque ao menos um item e informe quantidade maior que zero.';
   }
 
   const duplicateDocumentoItemIds = new Set<string>();
@@ -199,12 +270,24 @@ export function reterDocumentosProtegidos(
   protegidos: ReadonlySet<string>,
 ): AtendimentoDocumento[] {
   if (!protegidos.size) return base;
-  const idsBase = new Set(base.map((d) => d.id));
+  const prevById = new Map(prev.map((d) => [d.id, d]));
+  // Refetch pode trazer doc protegido so com cabecalho — reaplicar linhas da sessao.
+  const comLinhas = base.map((doc) => {
+    if (doc.linhas.length > 0 || !protegidos.has(doc.id)) return doc;
+    const prevDoc = prevById.get(doc.id);
+    if (!prevDoc?.linhas.length) return doc;
+    return { ...doc, linhas: prevDoc.linhas };
+  });
+  const idsBase = new Set(comLinhas.map((d) => d.id));
   const faltantes = prev.filter((d) => protegidos.has(d.id) && !idsBase.has(d.id));
-  return faltantes.length ? [...base, ...faltantes] : base;
+  return faltantes.length ? [...comLinhas, ...faltantes] : comLinhas;
 }
 
-function mergeDocumentosPendentesPreservandoOperacao(
+/**
+ * Junta lista da nuvem com a sessao aberta.
+ * A lista rapida vem so com cabecalho (linhas:[]); nao pode apagar itens ja hidratados.
+ */
+export function mergeDocumentosPendentesPreservandoOperacao(
   prev: AtendimentoDocumento[],
   next: AtendimentoDocumento[],
 ): AtendimentoDocumento[] {
@@ -212,13 +295,25 @@ function mergeDocumentosPendentesPreservandoOperacao(
   return next.map((doc) => {
     const prevDoc = prevById.get(doc.id);
     if (!prevDoc) return doc;
+    // Refetch ao voltar a janela: cabecalho sem itens — manter linhas e quantidades digitadas.
+    if (!doc.linhas.length && prevDoc.linhas.length > 0) {
+      return {
+        ...prevDoc,
+        numero: doc.numero || prevDoc.numero,
+        revisao: doc.revisao || prevDoc.revisao,
+        descricao: doc.descricao || prevDoc.descricao,
+        responsavel: doc.responsavel || prevDoc.responsavel,
+        status: doc.status || prevDoc.status,
+        linhas: prevDoc.linhas,
+      };
+    }
     const prevLinha = new Map(prevDoc.linhas.map((l) => [l.documentoItemId, l]));
     return {
       ...doc,
       linhas: doc.linhas.map((linha) => {
         const pl = prevLinha.get(linha.documentoItemId);
         if (!pl) return linha;
-        const cap = quantidadeSugeridaNestaOperacao(linha);
+        const cap = quantidadeMaximaAtendimentoLinha(linha);
         const q = Math.min(pl.quantidadeNestaOperacao, cap);
         return { ...linha, quantidadeNestaOperacao: Math.max(0, q) };
       }),
@@ -230,49 +325,20 @@ export function useAtendimento() {
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
 
-  async function exportarAtendimentosMateriaisExcel() {
-    if (!canAccessAction('atendimento', 'visualizar')) {
-      setError('Seu perfil nao possui permissao para exportar o relatorio de atendimentos.');
-      return;
-    }
-    setError('');
-    setSuccess('');
-    // Export precisa do arquivo completo — ativa a query de historico se ainda nao foi pedida.
-    setHistoricoArquivoAtivo(true);
-    try {
-      await queryClient.fetchQuery({
-        queryKey: atendimentoHistoricoQueryKey(user?.login),
-        queryFn: async () => {
-          const histResult = await listarHistoricoAtendimentosComMeta();
-          if (!histResult.success) {
-            throw new Error(histResult.error ?? 'Nao foi possivel carregar o historico de atendimento.');
-          }
-          return histResult.data ?? [];
-        },
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Nao foi possivel carregar o historico para exportar.');
-      return;
-    }
-    const result = await montarExportacaoAtendimentosPacoteZip();
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar o arquivo.');
-      return;
-    }
-    const url = URL.createObjectURL(result.data.zipBlob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = result.data.fileName;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    setSuccess(
-      'Exportacao concluida — ZIP com atendimentos-materiais.csv (saldo no lote) e estornos-log.csv (historico de estornos).',
-    );
-  }
   const hasCloudConfig = hasSupabaseConfig();
   const [documentos, setDocumentos] = useState<AtendimentoDocumento[]>([]);
   const [historico, setHistorico] = useState<Atendimento[]>([]);
+  const [historicoTotalCount, setHistoricoTotalCount] = useState(0);
+  const [historicoPage, setHistoricoPage] = useState(1);
+  const [historicoBusca, setHistoricoBusca] = useState('');
+  const [historicoBuscaDebounced, setHistoricoBuscaDebounced] = useState('');
+  const [historicoPeriodo, setHistoricoPeriodo] = useState<HistoricoPeriodoFiltro>('7d');
   const [selectedDocumentoId, setSelectedDocumentoId] = useState('');
+  const [documentoLockAviso, setDocumentoLockAviso] = useState('');
+  /** True quando outro posto detém o desenho selecionado — bip/gravação bloqueados. */
+  const [documentoLockBloqueado, setDocumentoLockBloqueado] = useState(false);
+  const lockHeldDocRef = useRef('');
+  const documentoLockBloqueadoRef = useRef(false);
   const [atendente, setAtendente] = useState('');
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
   const [recebedorTipo, setRecebedorTipo] = useState<AtendimentoRecebedorTipo>('interno');
@@ -286,11 +352,77 @@ export function useAtendimento() {
   const [manualReplaceLoading, setManualReplaceLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [exportingRelatorio, setExportingRelatorio] = useState<'atendimentos' | 'estornos' | null>(
+    null,
+  );
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const [fallbackReason, setFallbackReason] = useState('');
+  const [listSource, setListSource] = useState<'supabase' | 'local'>('local');
   /** Itens marcados para esta operacao (checkbox). Ao trocar de documento, todos comecam marcados. */
   const [idsMarcados, setIdsMarcados] = useState<Set<string>>(new Set());
-  /**
+
+  function baixarCsv(csv: string, fileName: string) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function rotuloPeriodoExport(periodo: HistoricoPeriodoFiltro): string {
+    if (periodo === 'hoje') return 'hoje';
+    if (periodo === '7d') return '7 dias';
+    if (periodo === '30d') return '30 dias';
+    return 'todo o historico';
+  }
+
+  async function exportarAtendimentosMateriaisExcel() {
+    if (!canAccessAction('atendimento', 'visualizar')) {
+      setError('Seu perfil nao possui permissao para exportar o relatorio de atendimentos.');
+      return;
+    }
+    if (exportingRelatorio) return;
+    setError('');
+    setSuccess('');
+    setExportingRelatorio('atendimentos');
+    try {
+      const desde = desdeIsoDePeriodo(historicoPeriodo);
+      const result = await montarExportacaoAtendimentosCsvItens({ desde });
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar o arquivo de atendimentos.');
+        return;
+      }
+      baixarCsv(result.data.csv, result.data.fileName);
+      setSuccess(`Exportacao de atendimentos concluida (${rotuloPeriodoExport(historicoPeriodo)}).`);
+    } finally {
+      setExportingRelatorio(null);
+    }
+  }
+
+  async function exportarEstornosExcel() {
+    if (!canAccessAction('atendimento', 'visualizar')) {
+      setError('Seu perfil nao possui permissao para exportar o relatorio de estornos.');
+      return;
+    }
+    if (exportingRelatorio) return;
+    setError('');
+    setSuccess('');
+    setExportingRelatorio('estornos');
+    try {
+      const desde = desdeIsoDePeriodo(historicoPeriodo);
+      const result = await montarExportacaoEstornosCsv({ desde });
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar o arquivo de estornos.');
+        return;
+      }
+      baixarCsv(result.data.csv, result.data.fileName);
+      setSuccess(`Exportacao de estornos concluida (${rotuloPeriodoExport(historicoPeriodo)}).`);
+    } finally {
+      setExportingRelatorio(null);
+    }
+  }  /**
    * Evita sobrescrever quantidades ao digitar (documentos muda a cada tecla).
    * Reseta em load() para reaplicar sugestao apos o servidor devolver lista nova.
    */
@@ -312,13 +444,26 @@ export function useAtendimento() {
   const leitorBuscaSeqRef = useRef(0);
   /** Fila multi-desenho antes de confirmar retirada unica + recibo consolidado. */
   const [sessaoRetirada, setSessaoRetirada] = useState<SessaoRetiradaLinha[]>([]);
-  /** Ids de documentos que o refetch nao pode descartar (sessao em curso + painel do leitor aberto). */
+  /** Ids que o refetch nao pode descartar (aberto na UI, sessao, painel do leitor). */
   const documentosProtegidosRef = useRef<Set<string>>(new Set());
+  const selectedDocumentoIdRef = useRef(selectedDocumentoId);
+  selectedDocumentoIdRef.current = selectedDocumentoId;
+
+  const protegerDocumentoId = useCallback((documentoId: string) => {
+    const id = documentoId.trim();
+    if (!id) return;
+    const next = new Set(documentosProtegidosRef.current);
+    next.add(id);
+    documentosProtegidosRef.current = next;
+  }, []);
+
   useEffect(() => {
     const ids = new Set(sessaoRetirada.map((l) => l.documentoId));
     for (const c of leitorPainel?.candidatos ?? []) ids.add(c.documento.id);
+    const aberto = selectedDocumentoId.trim();
+    if (aberto) ids.add(aberto);
     documentosProtegidosRef.current = ids;
-  }, [sessaoRetirada, leitorPainel]);
+  }, [sessaoRetirada, leitorPainel, selectedDocumentoId]);
   /** Confirmacao da sessao multi-desenho. */
   const [confirmacaoSessaoRetirada, setConfirmacaoSessaoRetirada] = useState<{
     documentoCount: number;
@@ -379,6 +524,8 @@ export function useAtendimento() {
     refetchInterval: () => {
       if (!hasCloudConfig) return false;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+      // Nao competir com o Confirmar (canteiro: 1 ligacao lenta engole a RPC).
+      if (gravandoAtendimento || estornoConfirmando) return false;
       /** Fase A: 2 min em vez de 30 s — menos pressão no Supabase com snapshot grande. */
       return 120_000;
     },
@@ -422,6 +569,7 @@ export function useAtendimento() {
                     ...prev,
                     documentos: late.data ?? [],
                     fallbackReason: late.meta?.fallbackReason ?? '',
+                    listSource: late.meta?.source === 'supabase' ? 'supabase' : prev.listSource,
                   }
                 : prev,
             );
@@ -434,6 +582,7 @@ export function useAtendimento() {
           documentos: [],
           colaboradores: colaboradoresAtivos,
           fallbackReason: docsResult.error ?? '',
+          listSource: 'local' as const,
         };
       }
 
@@ -441,39 +590,75 @@ export function useAtendimento() {
         documentos: docsResult.data ?? [],
         colaboradores: colaboradoresAtivos,
         fallbackReason: docsResult.meta?.fallbackReason ?? '',
+        listSource: (docsResult.meta?.source === 'supabase' ? 'supabase' : 'local') as 'supabase' | 'local',
       };
     },
   });
 
+  useEffect(() => {
+    const t = window.setTimeout(() => setHistoricoBuscaDebounced(historicoBusca.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [historicoBusca]);
+
+  useEffect(() => {
+    setHistoricoPage(1);
+  }, [historicoBuscaDebounced, historicoPeriodo]);
+
   /** Arquivo de lotes: so dispara quando a zona Historico e pedida (ou export/estorno). */
   const [historicoArquivoAtivo, setHistoricoArquivoAtivo] = useState(false);
   const historicoQuery = useQuery({
-    queryKey: atendimentoHistoricoQueryKey(user?.login),
+    queryKey: atendimentoHistoricoQueryKey(
+      user?.login,
+      historicoPage,
+      ATENDIMENTO_HISTORICO_PAGE_SIZE,
+      historicoBuscaDebounced,
+      historicoPeriodo,
+    ),
     enabled: historicoArquivoAtivo,
     placeholderData: keepPreviousData,
+    staleTime: 0,
+    refetchOnMount: 'always',
     refetchOnWindowFocus: false,
     refetchInterval: () => {
       if (!historicoArquivoAtivo || !hasCloudConfig) return false;
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
       return 180_000;
     },
-    queryFn: async (): Promise<Atendimento[]> => {
-      const histResult = await listarHistoricoAtendimentosComMeta();
-      if (!histResult.success) {
+    queryFn: async (): Promise<HistoricoQueryData> => {
+      const histResult = await listarHistoricoAtendimentosPagina({
+        page: historicoPage,
+        pageSize: ATENDIMENTO_HISTORICO_PAGE_SIZE,
+        q: historicoBuscaDebounced,
+        desde: desdeIsoDePeriodo(historicoPeriodo),
+      });
+      if (!histResult.success || !histResult.data) {
         throw new Error(histResult.error ?? 'Nao foi possivel carregar o historico de atendimento.');
       }
-      return histResult.data ?? [];
+      return {
+        ...histResult.data,
+        source: histResult.meta?.source === 'supabase' ? 'supabase' : 'local',
+      };
     },
   });
 
   const ensureHistoricoCarregado = useCallback(() => {
     setHistoricoArquivoAtivo(true);
-  }, []);
+    // Sempre refetch: apos Confirmar o cache pode ter so o lote novo (lista incompleta).
+    void queryClient.invalidateQueries({ queryKey: ['atendimento', 'historico'] });
+  }, [queryClient]);
 
   const recarregarHistorico = useCallback(async () => {
     setHistoricoArquivoAtivo(true);
     await queryClient.invalidateQueries({ queryKey: ['atendimento', 'historico'] });
   }, [queryClient]);
+
+  const setHistoricoPeriodoFiltro = useCallback((periodo: HistoricoPeriodoFiltro) => {
+    setHistoricoPeriodo(periodo);
+  }, []);
+
+  const setHistoricoBuscaFiltro = useCallback((busca: string) => {
+    setHistoricoBusca(busca);
+  }, []);
 
   /** Volta ao separador / janela: alinha pendências (merge), com debounce como no fluxo anterior ao React Query. */
   useEffect(() => {
@@ -515,18 +700,31 @@ export function useAtendimento() {
     }
 
     setSnapshotConflict(false);
-    if (mode === 'merge') {
-      setDocumentos((prev) =>
-        reterDocumentosProtegidos(
-          prev,
-          mergeDocumentosPendentesPreservandoOperacao(prev, payload.documentos),
-          documentosProtegidosRef.current,
-        ),
-      );
-    } else {
-      setDocumentos((prev) => reterDocumentosProtegidos(prev, payload.documentos, documentosProtegidosRef.current));
-      setDocumentosListaTick((n) => n + 1);
-      ultimoDocumentoComSugestaoAplicadaRef.current = '';
+
+    /** Timeout do boot (2.5s) devolve lista vazia — nao pode apagar pendentes/selecao ja na UI. */
+    const placeholderSegundoPlano =
+      payload.documentos.length === 0 &&
+      (payload.fallbackReason?.includes('segundo plano') ?? false);
+
+    if (!placeholderSegundoPlano) {
+      const protegidos = new Set(documentosProtegidosRef.current);
+      const aberto = selectedDocumentoIdRef.current.trim();
+      if (aberto) protegidos.add(aberto);
+
+      if (mode === 'merge') {
+        setDocumentos((prev) =>
+          reterDocumentosProtegidos(
+            prev,
+            mergeDocumentosPendentesPreservandoOperacao(prev, payload.documentos),
+            protegidos,
+          ),
+        );
+      } else {
+        setDocumentos((prev) => reterDocumentosProtegidos(prev, payload.documentos, protegidos));
+        setDocumentosListaTick((n) => n + 1);
+        ultimoDocumentoComSugestaoAplicadaRef.current = '';
+      }
+      setListSource(payload.listSource ?? 'local');
     }
     // Historico nao vem do core — zona Arquivo tem query propria.
     setColaboradores(payload.colaboradores);
@@ -537,7 +735,8 @@ export function useAtendimento() {
     if (!historicoArquivoAtivo || !historicoQuery.data) return;
     if (historicoQuery.dataUpdatedAt === lastHistoricoAppliedRef.current) return;
     lastHistoricoAppliedRef.current = historicoQuery.dataUpdatedAt;
-    setHistorico(historicoQuery.data);
+    setHistorico(historicoQuery.data.items);
+    setHistoricoTotalCount(historicoQuery.data.totalCount);
   }, [historicoArquivoAtivo, historicoQuery.data, historicoQuery.dataUpdatedAt]);
 
   const invalidateAtendimentoReplace = useCallback(async () => {
@@ -586,10 +785,77 @@ export function useAtendimento() {
   /** Documento encontrado pela busca remota (fora dos primeiros pendentes do boot): entra na lista local. */
   const adicionarDocumentoPendenteRemoto = useCallback(
     (documento: AtendimentoDocumento) => {
+      protegerDocumentoId(documento.id);
       setDocumentos((prev) => (prev.some((d) => d.id === documento.id) ? prev : [...prev, documento]));
     },
-    [setDocumentos],
+    [protegerDocumentoId],
   );
+
+  const selecionarDocumentoId = useCallback(
+    (documentoId: string) => {
+      protegerDocumentoId(documentoId);
+      selectedDocumentoIdRef.current = documentoId;
+      setSelectedDocumentoId(documentoId);
+    },
+    [protegerDocumentoId],
+  );
+
+  useEffect(() => {
+    const login = (user?.login ?? '').trim();
+    const docId = selectedDocumentoId.trim();
+    let cancelled = false;
+
+    async function syncLock() {
+      const prev = lockHeldDocRef.current;
+      if (prev && prev !== docId && login) {
+        void releaseAtendimentoDocumentoLock({ documentoId: prev, holderLogin: login });
+        lockHeldDocRef.current = '';
+      }
+      if (!docId || !login) {
+        setDocumentoLockAviso('');
+        setDocumentoLockBloqueado(false);
+        documentoLockBloqueadoRef.current = false;
+        return;
+      }
+      const claim = await claimAtendimentoDocumentoLock({
+        documentoId: docId,
+        holderLogin: login,
+        holderLabel: (user?.nome ?? login).trim(),
+        ttlSeconds: 120,
+      });
+      if (cancelled) return;
+      if (isAtendimentoLockHeldByOther(claim)) {
+        const msg = mensagemAtendimentoLockBloqueado(claim);
+        setDocumentoLockAviso(msg);
+        setDocumentoLockBloqueado(true);
+        documentoLockBloqueadoRef.current = true;
+        lockHeldDocRef.current = '';
+        return;
+      }
+      setDocumentoLockAviso('');
+      setDocumentoLockBloqueado(false);
+      documentoLockBloqueadoRef.current = false;
+      if (claim.ok) {
+        lockHeldDocRef.current = docId;
+      }
+    }
+
+    void syncLock();
+    // Revalida mesmo quando bloqueado (outro posto pode libertar).
+    const heartbeat = setInterval(() => {
+      void syncLock();
+    }, 45_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(heartbeat);
+      const held = lockHeldDocRef.current;
+      if (held && login) {
+        lockHeldDocRef.current = '';
+        void releaseAtendimentoDocumentoLock({ documentoId: held, holderLogin: login });
+      }
+    };
+  }, [selectedDocumentoId, user?.login, user?.nome]);
 
   useEffect(() => {
     if (!selectedDocumentoId) {
@@ -598,8 +864,31 @@ export function useAtendimento() {
       return;
     }
     const doc = documentos.find((d) => d.id === selectedDocumentoId);
-    if (!doc?.linhas.length) {
-      return;
+    if (!doc) return;
+
+    // Lista rápida: cabeçalho sem itens — hidrata ao seleccionar.
+    if (!doc.linhas.length) {
+      let cancelled = false;
+      void hidratarDocumentoPendenteAtendimento(selectedDocumentoId).then((full) => {
+        if (cancelled || !full) return;
+        // Parcial-first: abre com quantidade vazia; atalho «máx» ou * preenche o teto.
+        const linhasAbertas = full.linhas.map((linha) => ({
+          ...linha,
+          quantidadeNestaOperacao: 0,
+        }));
+        setDocumentos((current) =>
+          current.map((d) =>
+            d.id === full.id ? { ...d, ...full, linhas: linhasAbertas } : d,
+          ),
+        );
+        if (linhasAbertas.length) {
+          ultimoDocumentoComSugestaoAplicadaRef.current = selectedDocumentoId;
+          setIdsMarcados(new Set(linhasAbertas.map((l) => l.documentoItemId)));
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
     }
 
     const somenteLeitor = leitorAplicarSomenteLinhaRef.current;
@@ -642,7 +931,7 @@ export function useAtendimento() {
               ...d,
               linhas: d.linhas.map((linha) => ({
                 ...linha,
-                quantidadeNestaOperacao: quantidadeSugeridaNestaOperacao(linha),
+                quantidadeNestaOperacao: 0,
               })),
             },
       ),
@@ -659,23 +948,14 @@ export function useAtendimento() {
   );
 
   /** Mensagem exata do que falta para liberar o registro (null = pode registrar). */
-  const motivoBloqueioAtendimento = useMemo(
-    () =>
-      obterErroRegistroAtendimento(
-        selectedDocumento,
-        atendente,
-        recebedorTipo,
-        recebedorColaboradorId,
-        recebedor,
-        recebedorEmpresa,
-        recebedorDocumento,
-        recebedorTelefone,
-        autorizadorInterno,
-        motivoRetirada,
-        itensSelecionados,
-        idsMarcados,
-      ),
-    [
+  const motivoBloqueioAtendimento = useMemo(() => {
+    if (documentoLockBloqueado) {
+      return (
+        documentoLockAviso ||
+        'Desenho em uso por outro posto. Atendimento bloqueado neste documento.'
+      );
+    }
+    return obterErroRegistroAtendimento(
       selectedDocumento,
       atendente,
       recebedorTipo,
@@ -688,13 +968,35 @@ export function useAtendimento() {
       motivoRetirada,
       itensSelecionados,
       idsMarcados,
-    ],
-  );
+    );
+  }, [
+    documentoLockBloqueado,
+    documentoLockAviso,
+    selectedDocumento,
+    atendente,
+    recebedorTipo,
+    recebedorColaboradorId,
+    recebedor,
+    recebedorEmpresa,
+    recebedorDocumento,
+    recebedorTelefone,
+    autorizadorInterno,
+    motivoRetirada,
+    itensSelecionados,
+    idsMarcados,
+  ]);
 
   const podeRegistrarAtendimento = motivoBloqueioAtendimento === null;
 
   const toggleMarcaItem = useCallback(
     (documentoItemId: string, marcado: boolean) => {
+      if (documentoLockBloqueadoRef.current) {
+        setError(
+          documentoLockAviso ||
+            'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+        );
+        return;
+      }
       setIdsMarcados((prev) => {
         const next = new Set(prev);
         if (marcado) next.add(documentoItemId);
@@ -708,14 +1010,15 @@ export function useAtendimento() {
             ...doc,
             linhas: doc.linhas.map((linha) => {
               if (linha.documentoItemId !== documentoItemId) return linha;
+              // Marcar nao inventa quantidade — digitar ou «máx».
               if (!marcado) return { ...linha, quantidadeNestaOperacao: 0 };
-              return { ...linha, quantidadeNestaOperacao: quantidadeSugeridaNestaOperacao(linha) };
+              return linha;
             }),
           };
         }),
       );
     },
-    [selectedDocumentoId, setDocumentos],
+    [documentoLockAviso, selectedDocumentoId, setDocumentos],
   );
 
   function aplicarLinhaNoDocumento(
@@ -741,10 +1044,32 @@ export function useAtendimento() {
   }
 
   const confirmarLeitorComQuantidade = useCallback(
-    (documentoId: string, quantidadeInformada: number) => {
+    async (documentoId: string, quantidadeInformada: number) => {
       if (!leitorPainel) return;
       const cand = leitorPainel.candidatos.find((c) => c.documento.id === documentoId);
       if (!cand) return;
+
+      const login = (user?.login ?? '').trim();
+      if (login) {
+        const claim = await claimAtendimentoDocumentoLock({
+          documentoId,
+          holderLogin: login,
+          holderLabel: (user?.nome ?? login).trim(),
+          ttlSeconds: 120,
+        });
+        if (isAtendimentoLockHeldByOther(claim)) {
+          tocarFeedbackLeitor('erro');
+          setError(mensagemAtendimentoLockBloqueado(claim));
+          return;
+        }
+        if (claim.ok && selectedDocumentoId === documentoId) {
+          lockHeldDocRef.current = documentoId;
+          setDocumentoLockBloqueado(false);
+          documentoLockBloqueadoRef.current = false;
+          setDocumentoLockAviso('');
+        }
+      }
+
       const { documento, linha } = cand;
       const maxLinha = quantidadeMaximaLinhaDocumento(linha);
       const max = quantidadeMaximaRestanteLeitor(linha, sessaoRetirada, documentoId);
@@ -801,7 +1126,7 @@ export function useAtendimento() {
       );
       tocarFeedbackLeitor('confirmado');
     },
-    [leitorPainel, sessaoRetirada],
+    [leitorPainel, selectedDocumentoId, sessaoRetirada, user?.login, user?.nome],
   );
 
   const removerLinhaSessaoRetirada = useCallback((documentoId: string, documentoItemId: string) => {
@@ -818,7 +1143,7 @@ export function useAtendimento() {
             },
       ),
     );
-  }, [setDocumentos]);
+  }, [setDocumentos, setSessaoRetirada]);
 
   const limparSessaoRetirada = useCallback(() => {
     setSessaoRetirada([]);
@@ -829,7 +1154,7 @@ export function useAtendimento() {
       })),
     );
     setIdsMarcados(new Set());
-  }, [setDocumentos]);
+  }, [setDocumentos, setSessaoRetirada, setIdsMarcados]);
 
   /** Mensagem exata do bloqueio (ou null) — exibida junto ao botao «Confirmar retirada». */
   const motivoBloqueioSessaoRetirada = useMemo(
@@ -871,6 +1196,13 @@ export function useAtendimento() {
       setError('Seu perfil nao possui permissao para registrar atendimento.');
       return;
     }
+    if (documentoLockBloqueado) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
+      return;
+    }
     const erro = obterErroRegistroSessaoRetirada(
       sessaoRetirada,
       documentos,
@@ -889,6 +1221,7 @@ export function useAtendimento() {
       return;
     }
     const docs = new Set(sessaoRetirada.map((l) => l.documentoId));
+    void aquecerBaselineAtendimentoNuvem();
     setConfirmacaoSessaoRetirada({
       documentoCount: docs.size,
       itemCount: sessaoRetirada.length,
@@ -902,6 +1235,20 @@ export function useAtendimento() {
 
   async function confirmarSessaoRetiradaNoModal() {
     if (!confirmacaoSessaoRetirada) return;
+    if (documentoLockBloqueado) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
+      setConfirmacaoSessaoRetirada(null);
+      return;
+    }
+
+    const tConfirm0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // Progresso ja no modal — nao reclamar locks aqui (ja feitos ao incluir no leitor);
+    // cada claim RPC no canteiro podia somar varios segundos antes da gravacao.
+    setGravandoAtendimento(true);
+
     const erro = obterErroRegistroSessaoRetirada(
       sessaoRetirada,
       documentos,
@@ -917,6 +1264,7 @@ export function useAtendimento() {
     );
     if (erro) {
       setError(erro);
+      setGravandoAtendimento(false);
       setConfirmacaoSessaoRetirada(null);
       return;
     }
@@ -945,9 +1293,17 @@ export function useAtendimento() {
     const extAuth = autorizadorInterno;
     const extMotivo = motivoRetirada;
 
-    // Modal aberto com progresso ate a nuvem confirmar todos os lotes.
-    setGravandoAtendimento(true);
+    // Seed da UI (desenhos do leitor ja na memoria) — sem isto o Confirmar re-busca cada desenho.
+    const docIdsSessao = [...new Set(sessaoRetirada.map((l) => l.documentoId))];
+    const documentosSeed = docIdsSessao
+      .map((id) => documentos.find((d) => d.id === id))
+      .filter((d): d is AtendimentoDocumento => d != null)
+      .map(documentoSeedFromUi);
+
     try {
+    // Cursor em fundo — prepare resolve sozinho se ainda estiver frio.
+    void aquecerBaselineAtendimentoNuvem();
+    const tReg0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const result = await registrarAtendimentosSessao({
       atendente,
       recebedorTipo,
@@ -959,7 +1315,15 @@ export function useAtendimento() {
       autorizadorInterno,
       motivoRetirada,
       documentos: montarPayloadDocumentosSessao(sessaoRetirada),
+      documentosSeed,
     });
+    if (typeof console !== 'undefined' && console.info) {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      console.info(
+        `[atendimento] confirmar_sessao total=${Math.round(now - tConfirm0)}ms ` +
+          `registro=${Math.round(now - tReg0)}ms seed=${documentosSeed.length}/${docIdsSessao.length}`,
+      );
+    }
 
     if (!result.success || !result.data?.length) {
       setError(result.error ?? 'Nao foi possivel registrar a sessao de retirada.');
@@ -1019,7 +1383,8 @@ export function useAtendimento() {
         return mudou ? { ...doc, linhas } : doc;
       });
 
-    setHistorico((prev) => [...novos, ...prev]);
+    setHistorico((prev) => [...novos, ...prev].slice(0, ATENDIMENTO_HISTORICO_PAGE_SIZE));
+    setHistoricoTotalCount((prev) => prev + novos.length);
     setDocumentos((prev) => aplicarBaixasDocs(prev));
     queryClient.setQueryData(
       atendimentoCoreQueryKey(user?.login),
@@ -1031,10 +1396,20 @@ export function useAtendimento() {
         };
       },
     );
-    queryClient.setQueryData(
-      atendimentoHistoricoQueryKey(user?.login),
-      (prev: Atendimento[] | undefined) => [...novos, ...(prev ?? [])],
-    );
+    if (historicoArquivoAtivo && historicoPage === 1) {
+      queryClient.setQueryData(
+        atendimentoHistoricoQueryKey(
+          user?.login,
+          historicoPage,
+          ATENDIMENTO_HISTORICO_PAGE_SIZE,
+          historicoBuscaDebounced,
+          historicoPeriodo,
+        ),
+        (prev: HistoricoQueryData | undefined) => prependHistoricoCache(prev, novos, ATENDIMENTO_HISTORICO_PAGE_SIZE),
+      );
+    } else {
+      void queryClient.removeQueries({ queryKey: ['atendimento', 'historico'] });
+    }
 
     setSessaoRetirada([]);
     setRecebedorTipo('interno');
@@ -1097,7 +1472,7 @@ export function useAtendimento() {
   const continuarLeitorBipando = useCallback(() => {
     leitorBuscaSeqRef.current += 1;
     setLeitorPainel(null);
-  }, []);
+  }, [setLeitorPainel]);
 
   const processarLeituraCodigoBarras = useCallback(
     async (scanRaw: string) => {
@@ -1105,6 +1480,14 @@ export function useAtendimento() {
       if (!scan) return;
       if (!canAccessAction('atendimento', 'editar')) {
         setError('Seu perfil nao possui permissao para registrar atendimento.');
+        return;
+      }
+      if (documentoLockBloqueadoRef.current) {
+        tocarFeedbackLeitor('erro');
+        setError(
+          documentoLockAviso ||
+            'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+        );
         return;
       }
       setError('');
@@ -1189,13 +1572,13 @@ export function useAtendimento() {
         tocarFeedbackLeitor('sucesso');
       }
     },
-    [documentos, sessaoRetirada, canAccessAction, setDocumentos],
+    [documentos, sessaoRetirada, canAccessAction, setDocumentos, documentoLockAviso],
   );
 
   const fecharLeitorPainel = useCallback(() => {
     leitorBuscaSeqRef.current += 1;
     setLeitorPainel(null);
-  }, []);
+  }, [setLeitorPainel]);
 
   const sessaoDocumentoCount = useMemo(
     () => new Set(sessaoRetirada.map((l) => l.documentoId)).size,
@@ -1222,6 +1605,13 @@ export function useAtendimento() {
 
   const marcarTodosItens = useCallback(
     (marcado: boolean) => {
+      if (documentoLockBloqueadoRef.current) {
+        setError(
+          documentoLockAviso ||
+            'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+        );
+        return;
+      }
       setDocumentos((current) => {
         const doc = current.find((d) => d.id === selectedDocumentoId);
         if (!doc) return current;
@@ -1234,23 +1624,20 @@ export function useAtendimento() {
           );
         }
         queueMicrotask(() => setIdsMarcados(new Set(doc.linhas.map((l) => l.documentoItemId))));
-        return current.map((d) =>
-          d.id !== selectedDocumentoId
-            ? d
-            : {
-                ...d,
-                linhas: doc.linhas.map((linha) => ({
-                  ...linha,
-                  quantidadeNestaOperacao: quantidadeSugeridaNestaOperacao(linha),
-                })),
-              },
-        );
+        return current;
       });
     },
-    [selectedDocumentoId, setDocumentos],
+    [documentoLockAviso, selectedDocumentoId, setDocumentos],
   );
 
   function updateLinha(lineId: string, quantidadeNestaOperacao: number) {
+    if (documentoLockBloqueadoRef.current) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
+      return;
+    }
     setDocumentos((current) =>
       current.map((doc) =>
         doc.id !== selectedDocumentoId
@@ -1265,6 +1652,56 @@ export function useAtendimento() {
     );
   }
 
+  /** Atalho parcial: preenche o teto (min pendente, saldo) na linha. */
+  function preencherMaximoLinha(lineId: string) {
+    if (documentoLockBloqueadoRef.current) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
+      return;
+    }
+    setIdsMarcados((prev) => new Set([...prev, lineId]));
+    setDocumentos((current) =>
+      current.map((doc) =>
+        doc.id !== selectedDocumentoId
+          ? doc
+          : {
+              ...doc,
+              linhas: doc.linhas.map((linha) =>
+                linha.documentoItemId === lineId
+                  ? { ...linha, quantidadeNestaOperacao: quantidadeMaximaAtendimentoLinha(linha) }
+                  : linha,
+              ),
+            },
+      ),
+    );
+  }
+
+  /** Preenche o teto em todas as linhas marcadas (atendimento total rapido). */
+  function preencherMaximosMarcados() {
+    if (documentoLockBloqueadoRef.current) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
+      return;
+    }
+    setDocumentos((current) =>
+      current.map((doc) => {
+        if (doc.id !== selectedDocumentoId) return doc;
+        return {
+          ...doc,
+          linhas: doc.linhas.map((linha) =>
+            idsMarcados.has(linha.documentoItemId)
+              ? { ...linha, quantidadeNestaOperacao: quantidadeMaximaAtendimentoLinha(linha) }
+              : linha,
+          ),
+        };
+      }),
+    );
+  }
+
   /** Valida e abre o modal de confirmacao (padrao do sistema). */
   function pedirConfirmacaoAtendimento() {
     setError('');
@@ -1273,6 +1710,13 @@ export function useAtendimento() {
 
     if (!canAccessAction('atendimento', 'editar')) {
       setError('Seu perfil nao possui permissao para registrar atendimento.');
+      return;
+    }
+    if (documentoLockBloqueado) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
       return;
     }
 
@@ -1302,6 +1746,9 @@ export function useAtendimento() {
       quantidade: linha.quantidadeNestaOperacao,
     }));
 
+    // Aquece cursor OCC enquanto o utilizador le o modal — Confirmar evita leitura fria de 25s.
+    void aquecerBaselineAtendimentoNuvem();
+
     setConfirmacaoAtendimento({
       documentoNumero: selectedDocumento.numero,
       itemCount: itens.length,
@@ -1315,6 +1762,34 @@ export function useAtendimento() {
 
   async function confirmarAtendimentoNoModal() {
     if (!selectedDocumento || !confirmacaoAtendimento) return;
+
+    if (documentoLockBloqueado) {
+      setError(
+        documentoLockAviso ||
+          'Desenho em uso por outro posto. Atendimento bloqueado neste documento.',
+      );
+      setConfirmacaoAtendimento(null);
+      return;
+    }
+
+    const login = (user?.login ?? '').trim();
+    if (login) {
+      const claim = await claimAtendimentoDocumentoLock({
+        documentoId: selectedDocumento.id,
+        holderLogin: login,
+        holderLabel: (user?.nome ?? login).trim(),
+        ttlSeconds: 120,
+      });
+      if (isAtendimentoLockHeldByOther(claim)) {
+        const msg = mensagemAtendimentoLockBloqueado(claim);
+        setDocumentoLockAviso(msg);
+        setDocumentoLockBloqueado(true);
+        documentoLockBloqueadoRef.current = true;
+        setError(msg);
+        setConfirmacaoAtendimento(null);
+        return;
+      }
+    }
 
     const erroForm = obterErroRegistroAtendimento(
       selectedDocumento,
@@ -1341,10 +1816,11 @@ export function useAtendimento() {
       quantidade: linha.quantidadeNestaOperacao,
     }));
 
-    // Mantem o modal aberto com indicador de progresso ate a nuvem confirmar
-    // (a gravacao + recarga podem levar dezenas de segundos em snapshot grande).
+    // Mantem o modal aberto com indicador de progresso ate a nuvem confirmar.
     setGravandoAtendimento(true);
     try {
+    // Cursor ja costuma estar quente; nao bloquear Confirmar se faltar (prepare resolve em <3s).
+    void aquecerBaselineAtendimentoNuvem();
     const result = await registrarAtendimento({
       documentoId: selectedDocumento.id,
       atendente,
@@ -1357,6 +1833,9 @@ export function useAtendimento() {
       autorizadorInterno,
       motivoRetirada,
       itens,
+      documentosSeed: [
+        documentoSeedFromUi(selectedDocumento),
+      ],
     });
 
     if (!result.success) {
@@ -1392,11 +1871,23 @@ export function useAtendimento() {
     );
     if (result.data) {
       const novo = result.data;
-      setHistorico((prev) => [novo, ...prev.filter((a) => a.id !== novo.id)]);
-      queryClient.setQueryData(
-        atendimentoHistoricoQueryKey(user?.login),
-        (prev: Atendimento[] | undefined) => [novo, ...(prev ?? []).filter((a) => a.id !== novo.id)],
-      );
+      setHistorico((prev) => [novo, ...prev.filter((a) => a.id !== novo.id)].slice(0, ATENDIMENTO_HISTORICO_PAGE_SIZE));
+      setHistoricoTotalCount((prev) => (prev > 0 ? prev + 1 : prev));
+      // Optimistic so na pagina 1; senao invalida para nao mostrar lista incompleta.
+      if (historicoArquivoAtivo && historicoPage === 1) {
+        queryClient.setQueryData(
+          atendimentoHistoricoQueryKey(
+            user?.login,
+            historicoPage,
+            ATENDIMENTO_HISTORICO_PAGE_SIZE,
+            historicoBuscaDebounced,
+            historicoPeriodo,
+          ),
+          (prev: HistoricoQueryData | undefined) => prependHistoricoCache(prev, [novo], ATENDIMENTO_HISTORICO_PAGE_SIZE),
+        );
+      } else {
+        void queryClient.removeQueries({ queryKey: ['atendimento', 'historico'] });
+      }
     }
     setRecebedorTipo('interno');
     setRecebedorColaboradorId('');
@@ -1406,8 +1897,9 @@ export function useAtendimento() {
     setRecebedorTelefone('');
     setAutorizadorInterno('');
     setMotivoRetirada('');
-    await load();
     setSelectedDocumentoId('');
+    // Revalidacao em fundo — nao bloquear o recibo apos a nuvem ja ter confirmado.
+    void load({ silent: true });
     if (result.data && docSnapshot) {
       setReciboOpcional({
         atendimento: result.data,
@@ -1755,13 +2247,20 @@ export function useAtendimento() {
       },
     );
     queryClient.setQueryData(
-      atendimentoHistoricoQueryKey(user?.login),
-      (prev: Atendimento[] | undefined) => {
-        const hist = [...(prev ?? [])];
+      atendimentoHistoricoQueryKey(
+        user?.login,
+        historicoPage,
+        ATENDIMENTO_HISTORICO_PAGE_SIZE,
+        historicoBuscaDebounced,
+        historicoPeriodo,
+      ),
+      (prev: HistoricoQueryData | undefined) => {
+        if (!prev) return prev;
+        const hist = [...prev.items];
         const idx = hist.findIndex((a) => a.id === atualizado.id || a.numero === atualizado.numero);
         if (idx === -1) hist.unshift(atualizado);
         else hist[idx] = atualizado;
-        return hist;
+        return { ...prev, items: hist.slice(0, ATENDIMENTO_HISTORICO_PAGE_SIZE) };
       },
     );
     // Revalidacao leve em fundo (merge), sem travar o sucesso.
@@ -1783,6 +2282,13 @@ export function useAtendimento() {
   return {
     documentos,
     historico,
+    historicoTotalCount,
+    historicoPage,
+    setHistoricoPage,
+    historicoBusca,
+    setHistoricoBusca: setHistoricoBuscaFiltro,
+    historicoPeriodo,
+    setHistoricoPeriodo: setHistoricoPeriodoFiltro,
     historicoLoading,
     historicoFetchError,
     historicoArquivoAtivo,
@@ -1805,11 +2311,14 @@ export function useAtendimento() {
     error: error || listFetchError,
     success,
     snapshotConflict,
+    documentoLockAviso,
+    documentoLockBloqueado,
     fallbackReason,
+    listSource,
     hasCloudConfig,
     load,
     adicionarDocumentoPendenteRemoto,
-    setSelectedDocumentoId,
+    setSelectedDocumentoId: selecionarDocumentoId,
     setAtendente,
     setRecebedorTipo,
     setRecebedorColaboradorId,
@@ -1820,6 +2329,8 @@ export function useAtendimento() {
     setAutorizadorInterno,
     setMotivoRetirada,
     updateLinha,
+    preencherMaximoLinha,
+    preencherMaximosMarcados,
     submitAtendimento,
     pedirConfirmacaoAtendimento,
     podeRegistrarAtendimento,
@@ -1855,6 +2366,10 @@ export function useAtendimento() {
     toggleMarcaItem,
     marcarTodosItens,
     exportarAtendimentosMateriaisExcel,
+    exportarEstornosExcel,
+    exportingRelatorio,
+    exportingAtendimentosCsv: exportingRelatorio === 'atendimentos',
+    exportingEstornosCsv: exportingRelatorio === 'estornos',
     leitorPainel,
     processarLeituraCodigoBarras,
     confirmarLeitorComQuantidade,

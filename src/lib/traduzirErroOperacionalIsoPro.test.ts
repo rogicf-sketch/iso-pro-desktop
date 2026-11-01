@@ -25,10 +25,10 @@ describe('traduzirErroOperacionalIsoPro', () => {
     expect(traduzirErroOperacionalIsoPro('TypeError: Failed to fetch')).toBe(MSG_ERRO_LEITURA_NUVEM);
   });
 
-  it('traduz ISO_PRO_ATENDIMENTO_SEM_PROGRESSO de baixa e estorno', () => {
-    expect(traduzirErroOperacionalIsoPro('ISO_PRO_ATENDIMENTO_SEM_PROGRESSO')).toContain('baixa duplicada');
-    expect(
-      traduzirErroOperacionalIsoPro('ISO_PRO_ATENDIMENTO_SEM_PROGRESSO Estorno sem diminuicao'),
-    ).toContain('estornar');
+  it('traduz permission denied de RPC (nao mostrar Postgres ao operador)', () => {
+    expect(traduzirErroOperacionalIsoPro('permission denied for function iso_pro_write_recebimentos_sot')).toContain(
+      'Saia e entre de novo',
+    );
+    expect(traduzirErroOperacionalIsoPro('42501')).toContain('Sessao na nuvem');
   });
 });

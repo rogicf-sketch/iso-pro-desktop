@@ -1,8 +1,12 @@
+export type RelatorioTom = 'ok' | 'warning' | 'danger' | 'neutral';
+
 export type RelatorioIndicador = {
   id: string;
   titulo: string;
   valor: string;
   descricao: string;
+  href?: string;
+  tom?: RelatorioTom;
 };
 
 export type RelatorioResumo = {
@@ -11,4 +15,7 @@ export type RelatorioResumo = {
   titulo: string;
   detalhe: string;
   atualizadoEm: string;
+  valorDestaque?: string;
+  href?: string;
+  tom?: RelatorioTom;
 };

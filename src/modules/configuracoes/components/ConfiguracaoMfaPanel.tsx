@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
-import { isIsoProJwtSessionActive } from '../../../lib/isoProJwtSession';
+import { syncIsoProJwtSessionFlagFromAuth } from '../../../lib/isoProJwtSession';
 import { MFA_POLICY_NOTE } from '../../../lib/releaseChannel';
 import {
   listIsoProMfaFactors,
@@ -18,7 +18,7 @@ type Props = {
 };
 
 export function ConfiguracaoMfaPanel({ canAdminister }: Props) {
-  const jwtOn = isIsoProJwtSessionActive();
+  const [jwtOn, setJwtOn] = useState(false);
   const [factors, setFactors] = useState<IsoProMfaFactor[]>([]);
   const [enroll, setEnroll] = useState<IsoProMfaEnrollStart | null>(null);
   const [code, setCode] = useState('');
@@ -27,16 +27,26 @@ export function ConfiguracaoMfaPanel({ canAdminister }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!jwtOn) {
+    setError(null);
+    const active = await syncIsoProJwtSessionFlagFromAuth();
+    setJwtOn(active);
+    if (!active) {
       setFactors([]);
       return;
     }
     try {
       setFactors(await listIsoProMfaFactors());
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const raw = err instanceof Error ? err.message : String(err);
+      setError(
+        /auth session missing/i.test(raw)
+          ? 'Sessao Auth em falta. Saia e entre de novo com admin + senha (+ MFA se ja estiver activo).'
+          : raw,
+      );
+      setJwtOn(false);
+      setFactors([]);
     }
-  }, [jwtOn]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -55,8 +65,9 @@ export function ConfiguracaoMfaPanel({ canAdminister }: Props) {
 
       {!jwtOn ? (
         <OperationalNotice tone="warning">
-          MFA só está disponível com sessão <strong>JWT forte</strong>. Faça logout e login com o utilizador{' '}
-          <code>admin</code> (Auth ligado). Utilizadores só em modo anon não usam MFA.
+          MFA só está disponível com sessão <strong>JWT forte</strong>. Faça <strong>Sair</strong> e entre de novo com o
+          utilizador <code>admin</code> desta empresa (Auth ligado). Se mudou de organização nas Configurações, também é
+          preciso voltar a entrar.
         </OperationalNotice>
       ) : (
         <>

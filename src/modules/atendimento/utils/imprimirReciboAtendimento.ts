@@ -1,9 +1,9 @@
 import {
   cssBarraPreVisualizacaoImpressaoHtml,
+  cssFontesNotoRelatorioInline,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
   htmlBarraPreVisualizacaoImpressao,
-  htmlBlocoLogoInstitucional,
   scriptBarraPreVisualizacaoImpressao,
   segmentoInstituicaoRodapeEletronico,
 } from '../../../lib/htmlRelatorioInstitucional';
@@ -13,8 +13,15 @@ import {
   nomeArquivoRelatorioPdf,
 } from '../../../lib/relatorioProfissional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
-import { resolverUrlLogoInstitucional, resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
+import {
+  cssLogoInstitucionalImpressaoDaConfig,
+  resolverUrlLogoInstitucional,
+  resolverUrlLogoInstitucionalParaHtmlImpresso,
+} from '../../../lib/logoInstitucional';
 import type { Atendimento, DadosReciboAtendimento, DadosReciboSessaoConsolidada } from '../types/atendimento.types';
+
+/** Alinhado a RNC / RF / RIR — tipografia Noto + cabeçalho premium. */
+export const DOC_VERSION_RECIBO = '6';
 
 function totalQuantidadeItens(at: Atendimento): number {
   return at.itens.reduce((acc, it) => acc + (Number(it.quantidadeAtendida) || 0), 0);
@@ -49,6 +56,44 @@ function linhaMatriculaFuncaoAssinatura(mat: string | undefined, funcao: string 
 /** Resolve URL do logo: campo explicito no objeto > Configuracoes > localStorage legado. */
 export function resolverUrlLogoRecibo(dados: DadosReciboAtendimento): string {
   return resolverUrlLogoInstitucional(dados.logoUrl);
+}
+
+function montarLogoBadgeRecibo(logoUrl: string): string {
+  if (logoUrl) {
+    return `<div class="recibo-logo-badge recibo-logo-badge--img"><img class="recibo-logo-img" src="${escapeHtmlRelatorio(logoUrl)}" alt="Logo" decoding="async" /></div>`;
+  }
+  return `<div class="recibo-logo-badge"><span class="recibo-logo-iso">I · S · O <span class="recibo-logo-sep">|</span> <span class="recibo-logo-pro">PRO</span></span><small class="recibo-logo-sub">GESTÃO DE MATERIAIS</small></div>`;
+}
+
+export function htmlCabecalhoReciboV6(opts: {
+  logoUrl: string;
+  titulo: string;
+  eyebrow: string;
+  subtitulo?: string;
+  codigoMeta: string;
+  emitidoEm: string;
+  metaExtra?: string;
+}): string {
+  const sub = opts.subtitulo?.trim()
+    ? `<p class="recibo-hdr-sub">${escapeHtmlRelatorio(opts.subtitulo)}</p>`
+    : '';
+  const extra = opts.metaExtra?.trim()
+    ? `<div class="recibo-hdr-date">${escapeHtmlRelatorio(opts.metaExtra)}</div>`
+    : '';
+  return `<header class="recibo-hdr">
+    <div class="recibo-hdr-logo">${montarLogoBadgeRecibo(opts.logoUrl)}</div>
+    <div class="recibo-hdr-title">
+      <p class="recibo-hdr-eyebrow">${escapeHtmlRelatorio(opts.eyebrow)}</p>
+      <h1>${escapeHtmlRelatorio(opts.titulo)}</h1>
+      ${sub}
+    </div>
+    <div class="recibo-hdr-meta">
+      <div class="recibo-hdr-code">${escapeHtmlRelatorio(opts.codigoMeta)}</div>
+      ${extra}
+      <div class="recibo-hdr-date recibo-hdr-emit">Emitido ${escapeHtmlRelatorio(opts.emitidoEm)}</div>
+      <div class="recibo-hdr-ver">v${DOC_VERSION_RECIBO}</div>
+    </div>
+  </header>`;
 }
 
 /** Badge / bloco compacto do tipo de retirada (auditoria). */
@@ -133,7 +178,7 @@ function reciboAtendimentoTemVariosDocumentos(at: Atendimento): boolean {
   return nums.size > 1 || at.documentoNumero === 'MULTIPLOS';
 }
 
-export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
+export async function montarHtmlRecibo(dados: DadosReciboAtendimento): Promise<string> {
   const at = dados.atendimento;
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso(dados.logoUrl);
   const cfgR = readConfiguracoes();
@@ -149,7 +194,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
 
   const docTitulo =
     at.documentoNumero === 'MULTIPLOS' || reciboAtendimentoTemVariosDocumentos(at)
-      ? 'Varios desenhos (ver coluna Documento)'
+      ? 'Vários desenhos (ver coluna Documento)'
       : `${escapeHtmlRelatorio(at.documentoNumero)} Rev. ${escapeHtmlRelatorio(dados.documentoRevisao)}`;
 
   const blocoExterno = htmlBlocoTipoRetirada(dados);
@@ -169,10 +214,8 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     .join('');
 
   const total = totalQuantidadeItens(at);
-  // Denso so com muitos itens — poucos itens voltam ao layout normal (logo/espacamento).
   const classeDensidade = at.itens.length > 10 ? ' recibo-body--denso' : '';
-
-  const extraRecibo = cssReciboAtendimentoBase();
+  const fontesCss = await cssFontesNotoRelatorioInline();
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -181,36 +224,34 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Recibo ${escapeHtmlRelatorio(at.numero)}</title>
   <style>
+    ${fontesCss}
     ${cssInstitucionalRelatorio()}
     ${cssBarraPreVisualizacaoImpressaoHtml()}
-    ${extraRecibo}
+    ${cssReciboAtendimentoBase()}
   </style>
 </head>
 <body class="recibo-body${classeDensidade}">
   ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
-  <div class="inst-topbar recibo-topbar">
-    <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
-    <span>Recibo ${escapeHtmlRelatorio(at.numero)}</span>
-  </div>
-
-  <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
-    <div class="inst-title-col recibo-titulo-centro">
-      <h1>Recibo de retirada de material</h1>
-    </div>
-  </header>
+  ${htmlCabecalhoReciboV6({
+    logoUrl,
+    titulo: 'Recibo de retirada de material',
+    eyebrow: 'Atendimento · Almoxarifado',
+    codigoMeta: at.numero,
+    emitidoEm: geradoEm,
+    metaExtra: `Operação ${dataFmt}`,
+  })}
 
   <section class="bloco recibo-bloco-info">
     <div class="grid2">
       <p><strong>Lote / atendimento:</strong> ${escapeHtmlRelatorio(at.numero)}</p>
       <p><strong>Data e hora:</strong> ${escapeHtmlRelatorio(dataFmt)}</p>
       <p><strong>Documento:</strong> ${docTitulo}</p>
-      <p><strong>Responsavel (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel || '-')}</p>
+      <p><strong>Responsável (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel || '—')}</p>
     </div>
     <div class="recibo-doc-desc">
-      <strong>Descricao do documento</strong>
-      <p style="margin: 6px 0 0">${escapeHtmlRelatorio(dados.documentoDescricao || '-')}</p>
+      <strong>Descrição do documento</strong>
+      <p style="margin: 6px 0 0">${escapeHtmlRelatorio(dados.documentoDescricao || '—')}</p>
     </div>
   </section>
 
@@ -223,8 +264,8 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
       <thead>
         <tr>
           <th class="col-num">#</th>${mostrarColDoc ? '<th class="col-doc">Documento</th>' : ''}
-          <th class="col-codigo">Codigo</th>
-          <th class="col-desc">Descricao do material</th>
+          <th class="col-codigo">Código</th>
+          <th class="col-desc">Descrição do material</th>
           <th class="col-un">UN</th>
           <th class="col-qtd">Qtd</th>
         </tr>
@@ -235,7 +276,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
   </section>
 
   <div class="recibo-fechamento">
-    <div class="recibo-total-linha"><strong>Total de unidades (esta operacao):</strong> ${escapeHtmlRelatorio(String(total))}</div>
+    <div class="recibo-total-linha"><strong>Total de unidades (esta operação):</strong> ${escapeHtmlRelatorio(String(total))}</div>
 
   <div class="recibo-rodape-fin">
   ${htmlAssinaturasRecibo(
@@ -244,7 +285,7 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
     at.recebedor.trim() || dados.nomeAtendido.trim() || '—',
     linhaMatriculaFuncaoAssinatura(textoReciboOuEmDash(at.recebedorMatricula), textoReciboOuEmDash(at.recebedorFuncao)),
   )}
-  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: ${escapeHtmlRelatorio(at.numero)}.</p>
+  <p class="recibo-doc-foot" role="contentinfo">I.S.O PRO Desktop${segRodapeInst} · ${escapeHtmlRelatorio(at.numero)} · v${DOC_VERSION_RECIBO}. Conteúdo para arquivo e auditoria.</p>
   </div>
   </div>
   </div>
@@ -258,8 +299,8 @@ export function montarHtmlRecibo(dados: DadosReciboAtendimento): string {
  * Usa URL de objeto (blob) em vez de document.write para evitar pagina em branco (ex.: noopener / CSP).
  */
 /** URL blob para iframe de visualizacao (revogar com URL.revokeObjectURL ao fechar). */
-export function criarBlobUrlVisualizacaoRecibo(dados: DadosReciboAtendimento): string {
-  const html = montarHtmlRecibo(dados);
+export async function criarBlobUrlVisualizacaoRecibo(dados: DadosReciboAtendimento): Promise<string> {
+  const html = await montarHtmlRecibo(dados);
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   return URL.createObjectURL(blob);
 }
@@ -267,7 +308,7 @@ export function criarBlobUrlVisualizacaoRecibo(dados: DadosReciboAtendimento): s
 /** Abre pré-visualização do recibo (aguarda geração do PDF). */
 export async function imprimirReciboAtendimento(dados: DadosReciboAtendimento): Promise<boolean> {
   return imprimirRelatorioProfissional({
-    html: montarHtmlRecibo(dados),
+    html: await montarHtmlRecibo(dados),
     fileName: nomeArquivoRelatorioPdf(dados.atendimento.numero, 'recibo'),
     titulo: `Recibo ${dados.atendimento.numero}`,
     tipoNuvem: 'recibo_atendimento',
@@ -278,7 +319,7 @@ export async function guardarReciboAtendimentoPdf(
   dados: DadosReciboAtendimento,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   return guardarRelatorioProfissional({
-    html: montarHtmlRecibo(dados),
+    html: await montarHtmlRecibo(dados),
     fileName: nomeArquivoRelatorioPdf(dados.atendimento.numero, 'recibo'),
     tipoNuvem: 'recibo_atendimento',
   });
@@ -290,7 +331,18 @@ function totalQuantidadeSecao(at: Atendimento): number {
 
 export function cssReciboAtendimentoBase(): string {
   return `
-    body.recibo-body { padding: 0; color: #0f172a; }
+    ${cssLogoInstitucionalImpressaoDaConfig()}
+    body.recibo-body {
+      padding: 0;
+      color: #0f172a;
+      font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif;
+      font-weight: 400;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.recibo-body * {
+      overflow-wrap: break-word;
+      word-break: normal;
+    }
     @media screen {
       body.recibo-body {
         background: linear-gradient(165deg, #dbeafe 0%, #e8eef5 40%, #f1f5f9 100%);
@@ -311,6 +363,83 @@ export function cssReciboAtendimentoBase(): string {
       size: A4 portrait;
       margin: 7mm 9mm 8mm;
     }
+    .recibo-hdr {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .recibo-hdr-logo { flex: 0 0 auto; max-width: 150px; }
+    .recibo-logo-badge {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      padding: 10px 12px;
+      background: #0f172a;
+      border-radius: 8px;
+      color: #fff;
+      line-height: 1.15;
+    }
+    .recibo-logo-badge--img { background: transparent; padding: 0; box-shadow: none; }
+    .recibo-logo-img { display: block; max-height: var(--iso-logo-slot-h, 68px); max-width: var(--iso-logo-slot-w, 178px); width: auto; height: auto; object-fit: contain; }
+    .recibo-logo-iso { font-size: 11pt; font-weight: 700; letter-spacing: 0.04em; color: #fff; }
+    .recibo-logo-sep { color: #94a3b8; font-weight: 400; }
+    .recibo-logo-pro { color: #5eead4; }
+    .recibo-logo-sub {
+      font-size: 6.5pt;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #34d399;
+    }
+    .recibo-hdr-title { flex: 1 1 auto; text-align: center; min-width: 0; }
+    .recibo-hdr-eyebrow {
+      margin: 0 0 4px;
+      font-size: 7.5pt;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #0f766e;
+    }
+    .recibo-hdr-title h1 {
+      margin: 0;
+      padding: 0;
+      border: none;
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #0f172a;
+      line-height: 1.2;
+    }
+    .recibo-hdr-title h1::after {
+      content: '';
+      display: block;
+      margin: 10px auto 0;
+      height: 3px;
+      width: 52px;
+      background: linear-gradient(90deg, #0d9488, #2dd4bf);
+      border-radius: 2px;
+    }
+    .recibo-hdr-sub { margin: 8px 0 0; font-size: 9.5pt; color: #475569; }
+    .recibo-hdr-meta { flex: 0 0 auto; text-align: right; min-width: 132px; }
+    .recibo-hdr-code {
+      font-size: 10pt;
+      font-weight: 700;
+      color: #0f172a;
+      font-variant-numeric: tabular-nums;
+    }
+    .recibo-hdr-date { font-size: 7.5pt; color: #64748b; margin-top: 4px; line-height: 1.35; }
+    .recibo-hdr-emit { color: #94a3b8; font-size: 7pt; }
+    .recibo-hdr-ver {
+      margin-top: 6px;
+      font-size: 7pt;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #0d9488;
+    }
     @media print {
       body.recibo-body { background: #fff !important; padding: 0 !important; }
       .recibo-sheet {
@@ -321,6 +450,19 @@ export function cssReciboAtendimentoBase(): string {
         padding: 0 !important;
         margin: 0 !important;
       }
+      .recibo-hdr {
+        margin-bottom: 8px !important;
+        padding-bottom: 8px !important;
+        gap: 10px !important;
+        break-after: avoid;
+      }
+      .recibo-hdr-title h1 { font-size: 12pt !important; }
+      .recibo-hdr-title h1::after { margin-top: 5px !important; height: 2px !important; width: 40px !important; }
+      .recibo-hdr-eyebrow { font-size: 6.5pt !important; }
+      .recibo-hdr-sub { font-size: 8pt !important; margin-top: 3px !important; }
+      .recibo-logo-img { max-height: calc(var(--iso-logo-slot-h, 68px) * 0.75) !important; max-width: calc(var(--iso-logo-slot-w, 178px) * 0.75) !important; }
+      .recibo-logo-badge { padding: 7px 9px !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .recibo-logo-iso { font-size: 9pt !important; }
       .recibo-topbar {
         margin-bottom: 4px !important;
         padding: 3px 8px !important;
@@ -895,7 +1037,7 @@ export function cssReciboAtendimentoBase(): string {
   `;
 }
 
-export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada): string {
+export async function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada): Promise<string> {
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso(dados.logoUrl);
   const cfgR = readConfiguracoes();
   const segRodapeInst = segmentoInstituicaoRodapeEletronico(cfgR.documentoRodapeNome, cfgR.documentoRodapeCnpj);
@@ -925,15 +1067,15 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
       return `
       <section class="bloco recibo-bloco-itens recibo-secao-doc">
         <h2>Documento ${docTitulo}</h2>
-        <p class="recibo-secao-meta"><strong>Lote:</strong> ${escapeHtmlRelatorio(at.numero)} · <strong>Responsavel:</strong> ${escapeHtmlRelatorio(secao.documentoResponsavel || '—')}</p>
-        <p class="recibo-doc-desc"><strong>Descricao do documento</strong><br/>${escapeHtmlRelatorio(secao.documentoDescricao || '—')}</p>
+        <p class="recibo-secao-meta"><strong>Lote:</strong> ${escapeHtmlRelatorio(at.numero)} · <strong>Responsável:</strong> ${escapeHtmlRelatorio(secao.documentoResponsavel || '—')}</p>
+        <p class="recibo-doc-desc"><strong>Descrição do documento</strong><br/>${escapeHtmlRelatorio(secao.documentoDescricao || '—')}</p>
         <div class="recibo-tabela-wrap">
         <table class="recibo-tabela-itens">
           <thead>
             <tr>
               <th class="col-num">#</th>
-              <th class="col-codigo">Codigo</th>
-              <th class="col-desc">Descricao do material</th>
+              <th class="col-codigo">Código</th>
+              <th class="col-desc">Descrição do material</th>
               <th class="col-un">UN</th>
               <th class="col-qtd">Qtd</th>
             </tr>
@@ -950,8 +1092,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
   const atRef = dados.secoes[0]?.atendimento;
   const totalLinhas = dados.secoes.reduce((acc, s) => acc + s.atendimento.itens.length, 0);
   const classeDensidade = totalLinhas > 10 ? ' recibo-body--denso' : '';
-
-  const extraRecibo = cssReciboAtendimentoBase();
+  const fontesCss = await cssFontesNotoRelatorioInline();
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -959,31 +1100,29 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
   <meta charset="UTF-8" />
   <title>Recibo consolidado ${escapeHtmlRelatorio(dados.referencia)}</title>
   <style>
+    ${fontesCss}
     ${cssInstitucionalRelatorio()}
     ${cssBarraPreVisualizacaoImpressaoHtml()}
-    ${extraRecibo}
+    ${cssReciboAtendimentoBase()}
   </style>
 </head>
 <body class="recibo-body${classeDensidade}">
   ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
-  <div class="inst-topbar recibo-topbar">
-    <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
-    <span>Recibo consolidado ${escapeHtmlRelatorio(dados.referencia)}</span>
-  </div>
-
-  <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
-    <div class="inst-title-col recibo-titulo-centro">
-      <h1>Recibo de retirada de material</h1>
-      <p class="recibo-subtitulo-consolidado">Retirada em ${dados.secoes.length} documento(s) · ${escapeHtmlRelatorio(String(dados.secoes.length))} lote(s) no sistema</p>
-    </div>
-  </header>
+  ${htmlCabecalhoReciboV6({
+    logoUrl,
+    titulo: 'Recibo de retirada de material',
+    eyebrow: 'Atendimento · Almoxarifado',
+    subtitulo: `Retirada em ${dados.secoes.length} documento(s) · ${dados.secoes.length} lote(s) no sistema`,
+    codigoMeta: dados.referencia,
+    emitidoEm: geradoEm,
+    metaExtra: `Operação ${dataFmt}`,
+  })}
 
   <section class="bloco recibo-bloco-info">
     <div class="grid2">
       <p><strong>Data e hora:</strong> ${escapeHtmlRelatorio(dataFmt)}</p>
-      <p><strong>Lotes registrados:</strong> ${lotesRodape}</p>
+      <p><strong>Lotes registados:</strong> ${lotesRodape}</p>
       <p><strong>Atendente:</strong> ${escapeHtmlRelatorio(dados.atendente)}</p>
       <p><strong>Retirante:</strong> ${escapeHtmlRelatorio(dados.nomeAtendido)}</p>
     </div>
@@ -1003,7 +1142,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
     dados.recebedor.trim() || dados.nomeAtendido.trim() || '—',
     linhaMatriculaFuncaoAssinatura(dados.recebedorMatricula, dados.recebedorFuncao),
   )}
-  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO${segRodapeInst}. Conteudo para arquivo e auditoria. Lotes: ${lotesRodape}.</p>
+  <p class="recibo-doc-foot" role="contentinfo">I.S.O PRO Desktop${segRodapeInst} · consolidado ${escapeHtmlRelatorio(dados.referencia)} · v${DOC_VERSION_RECIBO}. Conteúdo para arquivo e auditoria. Lotes: ${lotesRodape}.</p>
   </div>
   </div>
   </div>
@@ -1014,7 +1153,7 @@ export function montarHtmlReciboConsolidado(dados: DadosReciboSessaoConsolidada)
 
 export async function imprimirReciboSessaoConsolidada(dados: DadosReciboSessaoConsolidada): Promise<boolean> {
   return imprimirRelatorioProfissional({
-    html: montarHtmlReciboConsolidado(dados),
+    html: await montarHtmlReciboConsolidado(dados),
     fileName: nomeArquivoRelatorioPdf(dados.referencia, 'recibo-consolidado'),
     titulo: `Recibo consolidado ${dados.referencia}`,
     tipoNuvem: 'recibo_sessao',

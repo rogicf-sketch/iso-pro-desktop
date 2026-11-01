@@ -13,21 +13,21 @@ export const TEMAS_SISTEMA_OPCOES: TemaSistemaOpcao[] = [
   {
     id: 'campo',
     label: 'Campo claro (recomendado)',
-    hint: 'Branco suave e azul I.S.O — alinhado ao app mobile, ideal para uso longo em escritório.',
+    hint: 'Off-white e azul I.S.O — limpo, alinhado ao mobile, ideal para uso longo.',
   },
   {
     id: 'hibrido',
     label: 'Híbrido grafite + laranja',
-    hint: 'Barra lateral escura com destaque laranja; área de trabalho clara.',
+    hint: 'Shell escuro com área de trabalho clara e acentos laranja.',
   },
   {
     id: 'neon',
     label: 'Neon verde',
-    hint: 'Escuro com verde iluminado — identidade clássica I.S.O PRO.',
+    hint: 'Grafite premium com esmeralda — identidade I.S.O PRO, menos fadiga visual.',
   },
-  { id: 'padrao', label: 'Padrão escuro', hint: 'Grafite azulado equilibrado.' },
-  { id: 'escuro', label: 'Escuro profundo', hint: 'Contraste alto, estilo utilitário.' },
-  { id: 'verde', label: 'Verde floresta', hint: 'Escuro com acentos esmeralda.' },
+  { id: 'padrao', label: 'Padrão escuro', hint: 'Slate azulado equilibrado para operação diária.' },
+  { id: 'escuro', label: 'Escuro profundo', hint: 'Alto contraste com azul elétrico contido.' },
+  { id: 'verde', label: 'Verde floresta', hint: 'Carvão-floresta com acentos esmeralda suaves.' },
 ];
 
 const LEGACY_TEMA_MAP: Record<string, TemaSistemaId> = {

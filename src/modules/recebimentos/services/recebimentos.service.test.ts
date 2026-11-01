@@ -32,17 +32,32 @@ function seedMateriaisAtivosNoArmazenamento(storage: Record<string, string>, cod
   );
 }
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch } = vi.hoisted(() => ({
-  mockReadPayload: vi.fn(),
-  mockReadForWrite: vi.fn(),
-  mockCommitWrite: vi.fn(),
-  mockCommitPatch: vi.fn(),
-}));
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, mockWriteRecebimentosSot } =
+  vi.hoisted(() => ({
+    mockReadPayload: vi.fn(),
+    mockReadForWrite: vi.fn(),
+    mockCommitWrite: vi.fn(),
+    mockCommitPatch: vi.fn(),
+    mockWriteRecebimentosSot: vi.fn(async () => ({
+      updatedAt: new Date().toISOString(),
+      missing: false,
+    })),
+  }));
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
   shouldUseCloudMaterials: vi.fn(() => false),
+  getSupabase: vi.fn(() => null),
 }));
+
+vi.mock('../../../lib/recebimentosTabelas', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/recebimentosTabelas')>();
+  return {
+    ...actual,
+    writeRecebimentosSotOnCloud: mockWriteRecebimentosSot,
+    readRecebimentoFromCloud: vi.fn(async () => ({ recebimento: null, source: 'none' as const })),
+  };
+});
 
 vi.mock('../../../lib/snapshotSliceRead', () => ({
   readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
@@ -55,6 +70,7 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     readIsoProSnapshotPayload: mockReadPayload,
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
     readIsoProSnapshotSlices: mockReadPayload,
+    readIsoProSnapshotCursor: vi.fn(async () => '2026-01-01T00:00:00.000Z'),
     readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
       const r = await mockReadForWrite();
       return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
@@ -65,6 +81,10 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
 });
 
 function wireSnapshotPatchMock() {
+  mockWriteRecebimentosSot.mockResolvedValue({
+    updatedAt: new Date().toISOString(),
+    missing: false,
+  });
   mockCommitWrite.mockImplementation(async (prepare) => {
     await prepare();
   });
@@ -203,32 +223,61 @@ describe('recebimentos.service / salvarRecebimento (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(snapshotRecebimentoAntigo());
+    mockReadForWrite.mockResolvedValue({
+      payload: snapshotRecebimentoAntigo(),
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
     seedMateriaisAtivosNoArmazenamento(store, ['C1']);
   });
 
-  it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Versao desatualizada.'));
+function recebimentoLocalEditavel(): Recebimento {
+  return {
+    id: 'rec-edit',
+    fornecedor: 'Forn A',
+    dataRecebimento: '2026-04-02',
+    notaFiscal: 'NF-1',
+    romaneio: 'R-1',
+    conferente: 'Conf',
+    modoRecebimento: 'aguardando_conferencia',
+    status: 'aguardando_conferencia',
+    observacoes: 'Antigo',
+    itens: [
+      {
+        id: 'rec-edit-item-1',
+        codigoMaterial: 'C1',
+        descricaoMaterial: 'Mat',
+        unidade: 'UN',
+        disciplina: 'D',
+        localizacao: 'S1',
+        quantidadeRecebida: 10,
+        quantidadeConferida: 0,
+        pesoUnitario: 0,
+        pesoTotal: 0,
+      },
+    ],
+  };
+}
 
-    store[STORAGE_KEY] = JSON.stringify([]);
+  it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
+    mockWriteRecebimentosSot.mockRejectedValue(new IsoProSnapshotConflictError('Versao desatualizada.'));
+
+    store[STORAGE_KEY] = JSON.stringify([recebimentoLocalEditavel()]);
 
     const result = await salvarRecebimento(minimalForm({ observacoes: 'Nova obs' }), 'rec-edit');
 
     expect(result.success).toBe(false);
     expect(isSnapshotConflictResult(result)).toBe(true);
     expect(result.error).toBe('Versao desatualizada.');
-    expect(store[STORAGE_KEY]).toBe(JSON.stringify([]));
+    const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { observacoes: string }[];
+    expect(local[0]?.observacoes).toBe('Antigo');
   });
 
   it('em sucesso remoto persiste copia local', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: { recebimentos: [] },
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
 
-    store[STORAGE_KEY] = JSON.stringify([]);
+    store[STORAGE_KEY] = JSON.stringify([recebimentoLocalEditavel()]);
 
     const result = await salvarRecebimento(minimalForm({ observacoes: 'Sincronizado' }), 'rec-edit');
 
@@ -307,7 +356,7 @@ describe('recebimentos.service / salvarRecebimento criacao (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao criar recebimento.'));
+    mockWriteRecebimentosSot.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao criar recebimento.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -367,7 +416,7 @@ describe('recebimentos.service / finalizarConferenciaRecebimento (Supabase)', ()
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito na conferencia.'));
+    mockWriteRecebimentosSot.mockRejectedValue(new IsoProSnapshotConflictError('Conflito na conferencia.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -472,7 +521,7 @@ describe('recebimentos.service / cancelarRecebimento (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao cancelar.'));
+    mockWriteRecebimentosSot.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao cancelar.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -707,3 +756,4 @@ describe('recebimentos.service / excluirRecebimentosDefinitivamente (Supabase)',
     expect(result.error).toContain('conferid');
   });
 });
+

@@ -31,12 +31,21 @@ export function captureMessage(
   level: 'info' | 'warning' | 'error' = 'warning',
 ): void {
   if (sentryEnabled()) {
+    const eventName = typeof context?.event === 'string' ? context.event : undefined;
+    const domain = typeof context?.domain === 'string' ? context.domain : undefined;
+    const extra = {
+      ...context,
+      operationalMessage: true,
+      ...(eventName ? { iso_event: eventName } : {}),
+      ...(domain ? { iso_domain: domain } : {}),
+    };
+    const tags: Record<string, string> = {};
+    if (eventName) tags.iso_event = eventName;
+    if (domain) tags.iso_domain = domain;
     if (level === 'error') {
-      // Erro real: stack trace + agrupamento por exceção no Sentry.
-      Sentry.captureException(new Error(message), { extra: { ...context, operationalMessage: true } });
+      Sentry.captureException(new Error(message), { level, tags, extra });
     } else {
-      // info/warning: mensagem com a severidade correta (não polui a fila de erros).
-      Sentry.captureMessage(message, { level, extra: { ...context, operationalMessage: true } });
+      Sentry.captureMessage(message, { level, tags, extra });
     }
   }
 
@@ -60,6 +69,19 @@ const SLO_EVENTS = new Set<string>([
   'estorno_network',
   'estorno_late_confirm',
   'estorno_idempotent_hit',
+  'sot_fallback',
+  'lock_long',
+  'reconcile_ok',
+  'reconcile_fail',
+  'sot_divergence',
+]);
+
+/** Sucesso / ruído: SLO local sim; Sentry Issues não (evita spam unresolved). */
+const SENTRY_SKIP_EVENTS = new Set<string>([
+  'reconcile_ok',
+  'estorno_ok',
+  'estorno_idempotent_hit',
+  'mfa_challenge',
 ]);
 
 /** Evento operacional nomeado (conflito snapshot, dual-write, fila offline). */
@@ -70,6 +92,12 @@ export function captureOperationalEvent(
 ): void {
   if (SLO_EVENTS.has(event)) {
     recordOperationalSlo(event as OperationalSloEvent);
+  }
+  if (SENTRY_SKIP_EVENTS.has(event) && level !== 'error') {
+    if (import.meta.env.DEV) {
+      console.warn(`[iso-pro-desktop] iso.${event}`, context ?? {});
+    }
+    return;
   }
   captureMessage(`iso.${event}`, { ...context, event }, level);
 }

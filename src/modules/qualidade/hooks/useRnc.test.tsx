@@ -37,7 +37,7 @@ vi.mock('../../configuracoes/services/configuracoes.service', () => ({
 vi.mock('../../recebimentos/services/recebimentos.service', () => ({
   listarRecebimentos: vi.fn(async () => ({
     success: true,
-    data: { items: [], total: 0, page: 1, pageSize: 6 },
+    data: { items: [], total: 0, page: 1, pageSize: 15 },
   })),
 }));
 
@@ -70,7 +70,7 @@ describe('useRnc — lista', () => {
         items: [],
         total: 0,
         page: 1,
-        pageSize: 6,
+        pageSize: 15,
       },
       meta: { source: 'local' as const },
     });

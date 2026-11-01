@@ -1,7 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconEye, IconLockOpen, IconPencil, IconPrinter, IconTrash } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { RirRegistro } from '../types/qualidade.types';
 
@@ -64,60 +65,64 @@ export function RirTable({
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
-              <ActionButton
+              <TableIconButton
                 disabled={previewBusyId === item.id}
-                disabledLabel="A gerar…"
-                enabledLabel="Visualizar"
-                enabledTitle="Pre-visualizar relatorio RIR (impressao / PDF)"
+                label={previewBusyId === item.id ? 'A gerar…' : 'Pre-visualizar relatorio RIR (impressao / PDF)'}
                 onClick={() => onVisualizar(item)}
-                variant="ghost"
-              />
-              <ActionButton enabledLabel="Imprimir" enabledTitle="Imprimir RIR" onClick={() => onPrint(item)} variant="ghost" />
+              >
+                <IconEye />
+              </TableIconButton>
+              <TableIconButton label="Imprimir RIR" onClick={() => onPrint(item)}>
+                <IconPrinter />
+              </TableIconButton>
               {canAdministrarRir && onDestravar && item.status === 'tratado' ? (
-                <ActionButton
-                  enabledLabel="Destravar"
-                  enabledTitle="Destravar RIR finalizado (senha) para voltar a Em analise e permitir edicao"
+                <TableIconButton
+                  label="Destravar RIR finalizado (senha) para voltar a Em analise e permitir edicao"
                   onClick={() => onDestravar(item)}
-                  variant="ghost"
-                />
+                >
+                  <IconLockOpen />
+                </TableIconButton>
               ) : null}
               {canEdit && onDelete ? (
-                <ActionButton
+                <TableIconButton
                   disabled={item.status === 'tratado' || item.status === 'cancelado'}
-                  disabledLabel={item.status === 'cancelado' ? 'Cancelado' : 'Travado'}
-                  disabledTitle={
+                  label={
                     item.status === 'cancelado'
                       ? 'RIR cancelado nao pode ser excluido por este fluxo.'
-                      : 'RIR tratado nao pode ser excluido por este fluxo.'
+                      : item.status === 'tratado'
+                        ? 'RIR tratado nao pode ser excluido por este fluxo.'
+                        : 'Excluir RIR'
                   }
-                  enabledLabel="Excluir"
-                  enabledTitle="Excluir RIR"
                   onClick={() => onDelete(item)}
-                  variant="danger"
-                />
+                  tone="danger"
+                >
+                  <IconTrash />
+                </TableIconButton>
               ) : null}
               {canEdit ? (
-                <ActionButton
+                <TableIconButton
                   disabled={item.status === 'tratado' || item.status === 'cancelado'}
-                  disabledLabel={item.status === 'cancelado' ? 'Cancelado' : 'Travado'}
-                  disabledTitle={
+                  label={
                     item.status === 'cancelado'
                       ? 'RIR cancelado nao pode ser editado por este fluxo.'
-                      : 'RIR tratado nao pode ser editado por este fluxo.'
+                      : item.status === 'tratado'
+                        ? 'RIR tratado nao pode ser editado por este fluxo.'
+                        : 'Editar RIR'
                   }
-                  enabledLabel="Editar"
-                  enabledTitle="Editar RIR"
                   onClick={() => onEdit(item)}
-                  variant="ghost"
-                />
+                >
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
             </div>
           ),
         },
       ]}
+      emptyDescription="Registe um RIR ou ajuste o filtro de busca/status."
+      emptyText="Nenhum RIR encontrado"
       items={items}
     />
   );

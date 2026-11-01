@@ -9,6 +9,17 @@ import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStorage
 import { dispatchIsoProConfigUpdatedEvent } from '../../../lib/configEvents';
 import { getCurrentUser } from '../../auth/services/auth.service';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
+import {
+  LOGO_INSTITUCIONAL_FORMATO_PADRAO,
+  LOGO_INSTITUCIONAL_TAMANHO_PADRAO,
+  normalizarLogoInstitucionalAspecto,
+  normalizarLogoInstitucionalFormato,
+  normalizarLogoInstitucionalTamanho,
+} from '../../../lib/logoInstitucionalTamanho';
+import {
+  LOGO_ZOOM_PCT_PADRAO,
+  normalizarLogoInstitucionalZoomPct,
+} from '../../../lib/logoInstitucionalAjuste';
 import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { getSupabaseConfigDiagnostics, hasSupabaseConfig, resetSupabaseClient } from '../../../lib/supabase';
@@ -28,6 +39,15 @@ import {
   logoInstitucionalLocalConfigurado,
   reciboConfigLocalPendenteEnvioNuvem,
 } from '../utils/configReciboMobileSnapshot';
+import {
+  aplicarConfigOperacionalDoSnapshot,
+  lerConfigOperacionalDoSnapshot,
+  localConfigOperacionalVazioParaHydrate,
+  nuvemConfigOperacionalMaisRecente,
+  readLocalConfigOperacionalTs,
+  reconstruirProcedimentosCadastroDeTextos,
+  writeLocalConfigOperacionalTs,
+} from '../utils/configOperacionalSnapshot';
 import { sincronizarBackupOracleSettingsFromConfig } from '../../../lib/backupOracleAuto.client';
 import {
   hydrateConfigSecretsVault,
@@ -35,6 +55,10 @@ import {
   persistConfigSecretsVault,
 } from '../../../lib/configSecrets.client';
 import { normalizeTemaSistemaId } from '../../../lib/temaSistema';
+import {
+  readMateriaisDominiosListas,
+  writeMateriaisDominiosListas,
+} from '../../materiais/services/materiaisDominios.storage';
 
 const STORAGE_KEY_BASE = 'iso-pro-desktop-configuracoes-sistema';
 
@@ -84,6 +108,10 @@ const defaultConfig: ConfiguracaoSistema = {
   desktopLicencaEmitidaPara: '',
   desktopLicencaExpiraEm: '',
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+  logoInstitucionalTamanhoRelatorio: LOGO_INSTITUCIONAL_TAMANHO_PADRAO,
+  logoInstitucionalFormatoQuadro: LOGO_INSTITUCIONAL_FORMATO_PADRAO,
+  logoInstitucionalAspecto: 0,
+  logoInstitucionalZoomPct: LOGO_ZOOM_PCT_PADRAO,
   documentoRodapeNome: 'I.S.O PRO Gestão de Materiais',
   documentoRodapeCnpj: '66.234.531/0001-57',
   relatorioFinalIaHabilitado: false,
@@ -215,6 +243,18 @@ export function readConfiguracoes(): ConfiguracaoSistema {
       mostrarAjudaModulos: parsedConfig.mostrarAjudaModulos !== false,
       rirModoNumeracao: normalizeRirModoNumeracao(parsedConfig.rirModoNumeracao),
       logoInstitucionalUrl,
+      logoInstitucionalTamanhoRelatorio: normalizarLogoInstitucionalTamanho(
+        parsedConfig.logoInstitucionalTamanhoRelatorio,
+      ),
+      logoInstitucionalFormatoQuadro: normalizarLogoInstitucionalFormato(
+        parsedConfig.logoInstitucionalFormatoQuadro,
+      ),
+      logoInstitucionalAspecto: normalizarLogoInstitucionalAspecto(
+        parsedConfig.logoInstitucionalAspecto,
+      ),
+      logoInstitucionalZoomPct: normalizarLogoInstitucionalZoomPct(
+        parsedConfig.logoInstitucionalZoomPct,
+      ),
       rirProcedimentosCadastro,
       relatorioFinalIaHabilitado: parsedConfig.relatorioFinalIaHabilitado === true,
       relatorioFinalIaApiKey: String(parsedConfig.relatorioFinalIaApiKey ?? '').trim(),
@@ -330,9 +370,20 @@ async function tentarBootstrapSyncReciboConfigNuvem(config: ConfiguracaoSistema)
   sessionStorage.setItem(bootstrapSyncReciboConfigSessionKey(), '1');
 
   try {
-    const pendente = await consultarReciboConfigPendenteNuvem(config);
-    if (!pendente) return;
-    await sincronizarConfigAlertaEstoqueParaNuvem(config);
+    const payload = await readSnapshotRemoteSliceOrFull<{ configuracoesSistema?: Record<string, unknown> }>([
+      'configuracoesSistema',
+    ]);
+    const nuvem = payload?.configuracoesSistema;
+    const snapOp = lerConfigOperacionalDoSnapshot(nuvem);
+    const reciboPendente = reciboConfigLocalPendenteEnvioNuvem(config, nuvem as ConfigReciboMobileSnapshot | undefined);
+    const procedimentosLocais = (config.rirProcedimentosCadastro?.length ?? 0) > 0;
+    const procedimentosNuvem = (snapOp.rirProcedimentosCadastro?.length ?? 0) > 0;
+    // Se o local tem procedimentos e a nuvem está vazia, reenviar (mesmo com timestamp — evita catálogo perdido).
+    const operacionalPendente = procedimentosLocais && !procedimentosNuvem;
+    if (!reciboPendente && !operacionalPendente) return;
+    const ts = new Date().toISOString();
+    writeLocalConfigOperacionalTs(configStorageKey(), ts);
+    await sincronizarConfigAlertaEstoqueParaNuvem(config, { atualizadoEm: ts });
     invalidateIsoProSnapshotCache();
   } catch {
     /* bootstrap best-effort; utilizador pode gravar Config manualmente */
@@ -372,11 +423,160 @@ export async function carregarConfiguracoes(): Promise<ConfiguracaoSistema> {
   } catch {
     /* migracao best-effort */
   }
-  const config = readConfiguracoes();
+  let config = readConfiguracoes();
+  if (hasSupabaseConfig()) {
+    try {
+      await hidratarConfigOperacionalDaNuvem();
+      config = readConfiguracoes();
+    } catch {
+      /* hydrate best-effort */
+    }
+  }
+  try {
+    await tentarRecuperarProcedimentosRirSeVazio();
+    config = readConfiguracoes();
+  } catch {
+    /* recuperacao best-effort */
+  }
   aplicarTemaEfetivoNaSessao();
   void sincronizarBackupOracleSettingsFromConfig(config);
   void tentarBootstrapSyncReciboConfigNuvem(config);
   return config;
+}
+
+function coletarProcedimentoNumerosDosRirLocal(): string[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(getScopedIsoProStorageKey('iso-pro-desktop-rir'));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((r) =>
+        r && typeof r === 'object' ? String((r as { procedimentoNumero?: unknown }).procedimentoNumero ?? '') : '',
+      )
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Se o catálogo de procedimentos sumiu (hydrate com [] / outro browser),
+ * reconstrói a partir dos Nº Procedimento já gravados nos RIR (local e/ou nuvem).
+ */
+export async function tentarRecuperarProcedimentosRirSeVazio(): Promise<{
+  recuperados: number;
+}> {
+  const cfg = readConfiguracoes();
+  if ((cfg.rirProcedimentosCadastro?.length ?? 0) > 0) return { recuperados: 0 };
+
+  const textos = [...coletarProcedimentoNumerosDosRirLocal()];
+  if (hasSupabaseConfig()) {
+    try {
+      const payload = await readSnapshotRemoteSliceOrFull<{
+        rirRegistros?: Array<{ procedimentoNumero?: string }>;
+      }>(['rirRegistros']);
+      for (const r of payload?.rirRegistros ?? []) {
+        const t = String(r?.procedimentoNumero ?? '').trim();
+        if (t) textos.push(t);
+      }
+    } catch {
+      /* snapshot best-effort */
+    }
+  }
+
+  const rebuilt = reconstruirProcedimentosCadastroDeTextos(textos);
+  if (!rebuilt.length) return { recuperados: 0 };
+
+  const key = configStorageKey();
+  const next: ConfiguracaoSistema = { ...cfg, rirProcedimentosCadastro: rebuilt };
+  const ts = new Date().toISOString();
+  localStorage.setItem(key, JSON.stringify(await persistConfigSecretsVault(next)));
+  writeLocalConfigOperacionalTs(key, ts);
+  dispatchIsoProConfigUpdatedEvent();
+  void sincronizarConfigAlertaEstoqueParaNuvem(next, { atualizadoEm: ts });
+  return { recuperados: rebuilt.length };
+}
+
+/**
+ * Puxa obra / procedimentos RIR / tema / etc. do snapshot quando a nuvem está mais recente
+ * (ou o local está vazio). EXE e web passam a partilhar a mesma fonte.
+ */
+async function hidratarConfigOperacionalDaNuvem(): Promise<void> {
+  const payload = await readSnapshotRemoteSliceOrFull<{
+    configuracoesSistema?: Record<string, unknown>;
+    disciplinas?: string[];
+    unidades?: string[];
+  }>(['configuracoesSistema', 'disciplinas', 'unidades']);
+  const snap = lerConfigOperacionalDoSnapshot(payload?.configuracoesSistema);
+  const key = configStorageKey();
+  const localTs = readLocalConfigOperacionalTs(key);
+  const local = readConfiguracoes();
+  const deveAplicar =
+    nuvemConfigOperacionalMaisRecente(localTs, snap.configOperacionalAtualizadoEm) ||
+    (localConfigOperacionalVazioParaHydrate(local) &&
+      Boolean(
+        snap.configOperacionalAtualizadoEm ||
+          snap.cliente ||
+          snap.projeto ||
+          (snap.rirProcedimentosCadastro?.length ?? 0) > 0,
+      ));
+
+  if (deveAplicar && (snap.configOperacionalAtualizadoEm || snap.cliente !== undefined || snap.rirProcedimentosCadastro)) {
+    const merged = aplicarConfigOperacionalDoSnapshot(local, snap);
+    // Alertas/SMTP também vêm no mesmo objecto configuracoesSistema
+    const alerta = payload?.configuracoesSistema;
+    if (alerta && typeof alerta === 'object') {
+      const a = alerta as Record<string, unknown>;
+      if (a.alertaEstoqueEmailHabilitado !== undefined) {
+        merged.alertaEstoqueEmailHabilitado = a.alertaEstoqueEmailHabilitado === true;
+      }
+      if (a.alertaEstoqueEmailDestinatarios !== undefined) {
+        merged.alertaEstoqueEmailDestinatarios = String(a.alertaEstoqueEmailDestinatarios ?? '');
+      }
+      if (a.alertaOperacionalEmailHabilitado !== undefined) {
+        merged.alertaOperacionalEmailHabilitado = a.alertaOperacionalEmailHabilitado === true;
+      }
+      if (a.alertaOperacionalEmailDestinatarios !== undefined) {
+        merged.alertaOperacionalEmailDestinatarios = String(a.alertaOperacionalEmailDestinatarios ?? '');
+      }
+      if (a.smtpHost !== undefined) merged.smtpHost = String(a.smtpHost ?? '');
+      if (a.smtpPort !== undefined && Number(a.smtpPort) > 0) merged.smtpPort = Number(a.smtpPort);
+      if (a.smtpSecure !== undefined) merged.smtpSecure = a.smtpSecure === true;
+      if (a.smtpUsuario !== undefined) merged.smtpUsuario = String(a.smtpUsuario ?? '');
+      if (a.smtpSenha !== undefined) merged.smtpSenha = String(a.smtpSenha ?? '');
+      if (a.smtpRemetente !== undefined) merged.smtpRemetente = String(a.smtpRemetente ?? '');
+    }
+    localStorage.setItem(key, JSON.stringify(await persistConfigSecretsVault(merged)));
+    if (snap.configOperacionalAtualizadoEm) {
+      writeLocalConfigOperacionalTs(key, snap.configOperacionalAtualizadoEm);
+    }
+    // Materiais em nuvem alimenta o runtime (badge do painel) via cloud-connection local.
+    if (snap.materiaisNuvem !== undefined) {
+      writeIsoProCloudConnection({ materiaisNuvem: snap.materiaisNuvem === true });
+    }
+    dispatchIsoProConfigUpdatedEvent();
+  }
+
+  // Disciplinas/unidades: nuvem → local se listas remotas existirem
+  const discNuvem = Array.isArray(payload?.disciplinas) ? payload!.disciplinas!.map(String) : [];
+  const undNuvem = Array.isArray(payload?.unidades) ? payload!.unidades!.map(String) : [];
+  const mdSnap = snap.materiaisDominios;
+  if (mdSnap && (mdSnap.disciplinas.length > 0 || mdSnap.unidades.length > 0)) {
+    writeMateriaisDominiosListas({
+      disciplinas: mdSnap.disciplinas.length ? mdSnap.disciplinas : discNuvem,
+      unidades: mdSnap.unidades.length ? mdSnap.unidades : undNuvem,
+      unidadeDescricoes: mdSnap.unidadeDescricoes ?? {},
+    });
+  } else if (discNuvem.length > 0 || undNuvem.length > 0) {
+    const cur = readMateriaisDominiosListas();
+    writeMateriaisDominiosListas({
+      disciplinas: discNuvem.length ? discNuvem : cur.disciplinas,
+      unidades: undNuvem.length ? undNuvem : cur.unidades,
+      unidadeDescricoes: cur.unidadeDescricoes,
+    });
+  }
 }
 
 /** Grava centro de custo nas configurações isoladas de um ambiente de obra (ao criar obra nova). */
@@ -450,6 +650,14 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
     desktopLicencaEmitidaPara: payload.desktopLicencaEmitidaPara.trim(),
     desktopLicencaExpiraEm: payload.desktopLicencaExpiraEm.trim(),
     logoInstitucionalUrl: payload.logoInstitucionalUrl.trim() || LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+    logoInstitucionalTamanhoRelatorio: normalizarLogoInstitucionalTamanho(
+      payload.logoInstitucionalTamanhoRelatorio,
+    ),
+    logoInstitucionalFormatoQuadro: normalizarLogoInstitucionalFormato(
+      payload.logoInstitucionalFormatoQuadro,
+    ),
+    logoInstitucionalAspecto: normalizarLogoInstitucionalAspecto(payload.logoInstitucionalAspecto),
+    logoInstitucionalZoomPct: normalizarLogoInstitucionalZoomPct(payload.logoInstitucionalZoomPct),
     documentoRodapeNome: payload.documentoRodapeNome.trim(),
     documentoRodapeCnpj: payload.documentoRodapeCnpj.trim(),
     relatorioFinalIaHabilitado: payload.relatorioFinalIaHabilitado === true,
@@ -578,6 +786,9 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
 
   localStorage.setItem(configStorageKey(), JSON.stringify(await persistConfigSecretsVault(normalized)));
 
+  const operacionalTs = new Date().toISOString();
+  writeLocalConfigOperacionalTs(configStorageKey(), operacionalTs);
+
   const diagPersist = getSupabaseConfigDiagnostics();
   writeIsoProCloudConnection({
     supabaseUrl:
@@ -608,13 +819,14 @@ export async function salvarConfiguracoes(payload: ConfiguracaoSistema): Promise
   let warning: string | undefined;
   let info: string | undefined;
   if (hasSupabaseConfig()) {
-    const sync = await sincronizarConfigAlertaEstoqueParaNuvem(normalized);
+    const sync = await sincronizarConfigAlertaEstoqueParaNuvem(normalized, { atualizadoEm: operacionalTs });
     if (!sync.success) {
       warning =
         sync.error ??
-        'Configuracoes salvas neste PC, mas nao foi possivel enviar logo/CNPJ e demais dados para a nuvem. O app Campo pode nao refletir as alteracoes ate a sincronizacao funcionar.';
+        'Configuracoes salvas neste dispositivo, mas nao foi possivel enviar para a nuvem. EXE e web podem ficar diferentes ate a sincronizacao funcionar.';
     } else if (sync.data?.sincronizado) {
-      info = 'Logo, CNPJ e dados do projeto foram enviados para a nuvem (app Campo). No telemovel, use «Carregar dados da nuvem».';
+      info =
+        'Configuracoes sincronizadas na nuvem (obra, procedimentos RIR, tema, alertas). No outro dispositivo (EXE ou web), recarregue a pagina ou volte a abrir Configuracoes.';
     }
   }
 

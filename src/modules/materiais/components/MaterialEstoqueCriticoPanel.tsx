@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
@@ -11,16 +12,25 @@ import {
   type MaterialEstoqueCritico,
 } from '../services/materiaisEstoqueCritico.service';
 
-export function MaterialEstoqueCriticoPanel() {
+const PAGE_SIZE = 15;
+
+type Props = {
+  onChromeMeta?: (meta: string) => void;
+};
+
+export function MaterialEstoqueCriticoPanel({ onChromeMeta }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<MaterialEstoqueCritico[]>([]);
+  const [page, setPage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setItems(await listarMateriaisCriticosEstoque());
+      const next = await listarMateriaisCriticosEstoque();
+      setItems(next);
+      setPage(1);
     } catch {
       setError('Nao foi possivel carregar os materiais criticos de estoque.');
       setItems([]);
@@ -33,7 +43,30 @@ export function MaterialEstoqueCriticoPanel() {
     void load();
   }, [load]);
 
-  const criticos = items.filter((i) => i.severidade === 'critical').length;
+  const criticos = useMemo(() => items.filter((i) => i.severidade === 'critical').length, [items]);
+  const atencao = items.length - criticos;
+
+  useEffect(() => {
+    if (!onChromeMeta) return;
+    if (loading) {
+      onChromeMeta('A carregar…');
+      return;
+    }
+    if (items.length === 0) {
+      onChromeMeta('Nenhum material em alerta');
+      return;
+    }
+    onChromeMeta(
+      `${items.length.toLocaleString('pt-BR')} em alerta · ${criticos.toLocaleString('pt-BR')} crítico(s)${
+        atencao > 0 ? ` · ${atencao.toLocaleString('pt-BR')} atenção` : ''
+      }`,
+    );
+  }, [onChromeMeta, loading, items.length, criticos, atencao]);
+
+  const pageItems = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return items.slice(start, start + PAGE_SIZE);
+  }, [items, page]);
 
   const exportarExcel = useCallback(() => {
     const { csv, fileName } = montarExportacaoMateriaisCriticosCsv(items);
@@ -46,7 +79,29 @@ export function MaterialEstoqueCriticoPanel() {
   }, [items]);
 
   return (
-    <div className="materiais-criticos">
+    <>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
+        <div className="panel-toolbar">
+          <div className="panel-toolbar__group" role="group" aria-label="Estoque critico">
+            <span className="panel-toolbar__label">Lista</span>
+            <div className="panel-toolbar__buttons">
+              <Button disabled={loading} onClick={() => void load()} type="button" variant="ghost">
+                {loading ? 'Atualizando...' : 'Atualizar lista'}
+              </Button>
+              <Button
+                disabled={loading || items.length === 0}
+                onClick={exportarExcel}
+                title={`Exportar os ${items.length} materiais do alerta geral`}
+                type="button"
+                variant="ghost"
+              >
+                Exportar Excel
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <ModuleHelp>
         <p className="panel-copy">
           Materiais ativos cujo <strong>saldo operacional</strong> esta abaixo do limite definido no cadastro (
@@ -55,21 +110,6 @@ export function MaterialEstoqueCriticoPanel() {
           rodar na nuvem (cron) sem PC aberto.
         </p>
       </ModuleHelp>
-
-      <div className="materiais-consulta__search-actions" style={{ marginBottom: 16 }}>
-        <Button disabled={loading} onClick={() => void load()} type="button" variant="ghost">
-          {loading ? 'Atualizando...' : 'Atualizar lista'}
-        </Button>
-        <Button
-          disabled={loading || items.length === 0}
-          onClick={exportarExcel}
-          title={`Exportar os ${items.length} materiais do alerta geral`}
-          type="button"
-          variant="ghost"
-        >
-          Exportar Excel
-        </Button>
-      </div>
 
       {error ? <div className="error-box">{error}</div> : null}
       {loading ? <OperationalNotice>Carregando materiais criticos...</OperationalNotice> : null}
@@ -82,49 +122,47 @@ export function MaterialEstoqueCriticoPanel() {
 
       {!loading && items.length > 0 ? (
         <>
-          <OperationalNotice tone={criticos > 0 ? 'critical' : 'warning'}>
-            {items.length} material(is) em alerta
-            {criticos > 0 ? ` (${criticos} critico(s))` : ''}.
-          </OperationalNotice>
-          <div className="table-wrap" style={{ marginTop: 12 }}>
-            <table className="data-table">
+          <div className="table-shell">
+            <table className="data-table materiais-criticos-table">
               <thead>
                 <tr>
-                  <th>Codigo</th>
-                  <th>Descricao</th>
-                  <th>Saldo</th>
-                  <th>Planejado</th>
-                  <th>Limite (%)</th>
-                  <th>% saldo/planej.</th>
-                  <th>Gravidade</th>
-                  <th>Consulta</th>
+                  <th className="materiais-criticos-table__codigo">Codigo</th>
+                  <th className="materiais-criticos-table__desc">Descricao</th>
+                  <th className="materiais-criticos-table__num">Saldo</th>
+                  <th className="materiais-criticos-table__num">Planejado</th>
+                  <th className="materiais-criticos-table__num">Limite (%)</th>
+                  <th className="materiais-criticos-table__num">% saldo/planej.</th>
+                  <th className="materiais-criticos-table__grav">Gravidade</th>
+                  <th className="materiais-criticos-table__acao">Consulta</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {pageItems.map((item) => (
                   <tr key={item.materialId}>
-                    <td>
+                    <td className="materiais-criticos-table__codigo">
                       <strong>{item.codigo}</strong>
                     </td>
-                    <td>{item.descricao}</td>
-                    <td>
+                    <td className="materiais-criticos-table__desc">{item.descricao}</td>
+                    <td className="materiais-criticos-table__num">
                       {formatDecimalExcelPtBr(item.saldoAtual)} {item.unidade}
                     </td>
-                    <td>
+                    <td className="materiais-criticos-table__num">
                       {formatDecimalExcelPtBr(item.quantidadePlanejada)} {item.unidade}
                     </td>
-                    <td>
+                    <td className="materiais-criticos-table__num">
                       {formatDecimalExcelPtBr(item.limiteAlerta)} {item.unidade}{' '}
                       <span className="materiais-consulta-table-sub">({item.percentualAlerta}%)</span>
                     </td>
-                    <td>{formatDecimalExcelPtBr(item.percentualSaldoVsPlanejado)}%</td>
-                    <td>
+                    <td className="materiais-criticos-table__num">
+                      {formatDecimalExcelPtBr(item.percentualSaldoVsPlanejado)}%
+                    </td>
+                    <td className="materiais-criticos-table__grav">
                       <StatusBadge
                         text={item.severidade === 'critical' ? 'Critico' : 'Atencao'}
                         tone={item.severidade === 'critical' ? 'danger' : 'warning'}
                       />
                     </td>
-                    <td>
+                    <td className="materiais-criticos-table__acao">
                       <Link
                         className="ghost-button"
                         to={`/materiais?tab=consulta&q=${encodeURIComponent(item.codigo)}`}
@@ -137,8 +175,15 @@ export function MaterialEstoqueCriticoPanel() {
               </tbody>
             </table>
           </div>
+          <Pagination
+            itemLabel="materiais em alerta"
+            onPageChange={setPage}
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={items.length}
+          />
         </>
       ) : null}
-    </div>
+    </>
   );
 }

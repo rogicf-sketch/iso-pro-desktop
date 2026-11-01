@@ -30,9 +30,9 @@ function atendimentoBase(partial: Partial<Atendimento> & Pick<Atendimento, 'nume
   };
 }
 
-describe('imprimirReciboAtendimento / recibo consolidado', () => {
-  it('recibo simples usa badge compacto de retirada interna e rodape unificado', () => {
-    const html = montarHtmlRecibo({
+describe('imprimirReciboAtendimento / recibo consolidado v6', () => {
+  it('recibo simples usa cabeçalho premium, badge interna e rodapé v6', async () => {
+    const html = await montarHtmlRecibo({
       atendimento: atendimentoBase({
         numero: 'ATD-1',
         documentoNumero: 'DOC-1',
@@ -58,23 +58,22 @@ describe('imprimirReciboAtendimento / recibo consolidado', () => {
 
     expect(html).toContain('recibo-tipo-badge');
     expect(html).toContain('recibo-rodape-fin');
-    expect(html).toContain('recibo-header-main--titulo-centro');
+    expect(html).toContain('recibo-hdr');
+    expect(html).toContain('recibo-logo-badge');
+    expect(html).toContain('Atendimento · Almoxarifado');
     expect(html).toContain('espaco-assinatura');
     expect(html).toContain('recibo-tabela-itens');
     expect(html).toContain('Retirada interna');
+    expect(html).toContain('· v6');
     expect(html).not.toContain('>Retirada interna</h2>');
-    // Impressao: fechamento pode partir (evita 2.a folha so com assinaturas).
     expect(html).toMatch(/\.recibo-fechamento\s*\{[^}]*page-break-inside:\s*auto/s);
-    // Logo tamanho normal (nao compacto); assinatura com espaco util.
     expect(html).toMatch(/\.espaco-assinatura\s*\{[^}]*min-height:\s*28px/s);
-    expect(html).toMatch(/recibo-logo-wrap">[\s\S]*?class="inst-logo-col"/);
-    expect(html).not.toMatch(/recibo-logo-wrap">[\s\S]*?inst-logo-col--pequeno/);
     expect(html).toMatch(/<body class="recibo-body"/);
     expect(html).not.toMatch(/<body class="recibo-body recibo-body--denso"/);
   });
 
-  it('recibo simples com varios desenhos inclui coluna Documento por item', () => {
-    const html = montarHtmlRecibo({
+  it('recibo simples com varios desenhos inclui coluna Documento por item', async () => {
+    const html = await montarHtmlRecibo({
       atendimento: atendimentoBase({
         numero: 'ATD-20260610-00042',
         documentoNumero: 'MULTIPLOS',
@@ -109,13 +108,13 @@ describe('imprimirReciboAtendimento / recibo consolidado', () => {
       nomeAtendido: 'Jonatas',
     });
 
-    expect(html).toContain('Varios desenhos (ver coluna Documento)');
+    expect(html).toContain('Vários desenhos (ver coluna Documento)');
     expect(html).toContain('<th class="col-doc">Documento</th>');
     expect(html).toContain('BGC-18&quot;-BT-044-SS1-NI');
     expect(html).toContain('E.RAZN010-IE6-00002-ABOVE');
   });
 
-  it('inclui todas as secoes de documento e estilos de assinatura', () => {
+  it('inclui todas as secoes de documento e estilos de assinatura', async () => {
     const dados: DadosReciboSessaoConsolidada = {
       referencia: 'SESSAO-1',
       dataAtendimento: '2026-05-29T22:44:05.000Z',
@@ -168,15 +167,17 @@ describe('imprimirReciboAtendimento / recibo consolidado', () => {
       ],
     };
 
-    const html = montarHtmlReciboConsolidado(dados);
+    const html = await montarHtmlReciboConsolidado(dados);
 
     expect(html).toContain('E.RAZN010-IE6-00002-ABOVE');
     expect(html).toContain('E.RAZN010-IE6-00008-UNDER');
     expect(html).toContain('recibo-secao-doc');
+    expect(html).toContain('recibo-hdr');
     expect(html).toContain('class="assinaturas"');
     expect(html).toContain('recibo-tabela-itens');
     expect(html).toMatch(/linha-ass[\s\S]*ass-nome-principal/);
     expect(html).toContain('Total geral de unidades');
+    expect(html).toContain('· v6');
     expect(html).not.toContain('panel-copy');
   });
 });

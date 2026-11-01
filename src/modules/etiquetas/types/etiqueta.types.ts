@@ -6,7 +6,7 @@ export type EtiquetaModelo =
   | 'segregacao'
   | 'liberacao';
 
-export type EtiquetaFormato = 'a4_2col' | 'a4_1col' | 'termica_58' | 'termica_80';
+export type EtiquetaFormato = 'a4_3col' | 'a4_2col' | 'a4_1col' | 'termica_58' | 'termica_80';
 
 /** Codigos graficos opcionais nas etiquetas de recebimento (impressao/pre-visualizacao). */
 export type EtiquetaCodigosOpcao = 'nenhum' | 'codigo_barras' | 'qrcode' | 'ambos';

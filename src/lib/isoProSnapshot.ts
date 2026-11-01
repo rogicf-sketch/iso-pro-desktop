@@ -1,10 +1,34 @@
 import { parseIsoSnapshotPayloadFromUnknown, type IsoSnapshotPayload } from 'iso-pro-shared';
 import { flushEscalaOutboxBestEffort } from './escalaOutbox';
 import { getActiveTenantId } from './isoProTenant';
-import { getSupabase } from './supabase';
+import { getRuntimeSupabaseConfig, getSupabase } from './supabase';
 import { invalidateSnapshotDerivedCaches } from './snapshotDerivedCache';
 import { notifySnapshotConflict, requestSnapshotRefresh } from './snapshotSessionSync';
 import { applyRemoteFeatureFlags } from './featureFlags';
+import { applyHistoricoRetencaoAoPayload } from './snapshotHistoricoRetencao';
+
+/**
+ * Teto da espera do RPC HTTP. Poll/Realtime podem confirmar antes.
+ * Apos este teto o cliente NAO dispara segundo RPC — so reconcilia pela chave.
+ */
+export const ATENDIMENTO_COMANDO_RPC_TIMEOUT_MS = 6_000;
+/** Extra apos timeout: so peek (pedido original continua em fundo). */
+export const ATENDIMENTO_COMANDO_RECONCILE_MS = 12_000;
+const ATENDIMENTO_COMANDO_POLL_GAP_MS = 300;
+const ATENDIMENTO_COMANDO_REALTIME_WAIT_MS = 1_200;
+/** Timeout do POST ao gateway BR (VM OCI). */
+const ATENDIMENTO_GATEWAY_TIMEOUT_MS = 10_000;
+
+function resolveAtendimentoGatewayUrl(): string | null {
+  const override = String(import.meta.env.VITE_ATENDIMENTO_GATEWAY_URL ?? '').trim();
+  if (override) return override.replace(/\/$/, '');
+  if (typeof window === 'undefined') return null;
+  const host = window.location.hostname.toLowerCase();
+  if (host === 'isoprogestaodemateriais.com.br' || host === 'www.isoprogestaodemateriais.com.br') {
+    return `${window.location.origin}/api/atendimento/comando`;
+  }
+  return null;
+}
 
 /** Chaves usadas pelo modulo Atendimento + calculo de saldo. */
 export const SNAPSHOT_OPERATIONAL_SLICE_KEYS = [
@@ -273,6 +297,23 @@ export async function readIsoProSnapshotStats(): Promise<IsoProSnapshotStats | n
   };
 }
 
+/** So updated_at (OCC) — caminho quente do Confirmar; evita stats/blob. */
+export async function readIsoProSnapshotCursor(): Promise<string | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  const { data, error } = await supabase.rpc('iso_pro_read_snapshot_cursor', {
+    p_tenant_id: getActiveTenantId(),
+  });
+  if (error) {
+    if (isRpcMissingError(error)) {
+      const stats = await readIsoProSnapshotStats().catch(() => null);
+      return stats?.updatedAt ?? null;
+    }
+    throw new Error(error.message);
+  }
+  return data != null ? String(data) : null;
+}
+
 function snapshotCopy<T extends Record<string, unknown>>(payload: Record<string, unknown>): T {
   return structuredClone(payload) as T;
 }
@@ -521,9 +562,164 @@ async function upsertIsoProSnapshotPatchRpc(
 
 export type SubmitAtendimentoComandoResult =
   | { ok: true; updatedAt: string; usedCommandRpc: boolean }
-  | { ok: false; missing: true };
+  | { ok: false; missing: true; error?: string }
+  | { ok: false; missing?: false; error: string };
 
-/** Comando idempotente (arquitetura definitiva) — payload minimo KB. */
+/**
+ * Peek do comando concluido — JWT e anon em paralelo (onda 2: anon ainda permitido).
+ * Evita latência em série quando o JWT falha/atrasa.
+ */
+export async function peekAtendimentoComandoConfirmado(
+  idempotencyKey: string,
+): Promise<string | null> {
+  const key = idempotencyKey.trim();
+  if (!key) return null;
+  const tenantId = getActiveTenantId();
+  const { url, key: anonKey } = getRuntimeSupabaseConfig();
+  if (!url || !anonKey) return null;
+
+  const body = JSON.stringify({
+    p_tenant_id: tenantId,
+    p_idempotency_key: key,
+  });
+
+  async function peekWithBearer(
+    bearer: string,
+    label: string,
+  ): Promise<{ ok: true; value: string | null } | { ok: false }> {
+    try {
+      const res = await fetch(`${url.replace(/\/$/, '')}/rest/v1/rpc/iso_pro_peek_atendimento_comando`, {
+        method: 'POST',
+        headers: {
+          apikey: anonKey,
+          Authorization: `Bearer ${bearer}`,
+          'Content-Type': 'application/json',
+        },
+        body,
+      });
+      if (!res.ok) {
+        if (typeof console !== 'undefined' && console.info) {
+          console.info(`[atendimento] peek_${label} status=${res.status}`);
+        }
+        return { ok: false };
+      }
+      const data: unknown = await res.json();
+      if (data != null && data !== '') return { ok: true, value: String(data) };
+      return { ok: true, value: null };
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.info) {
+        console.info(`[atendimento] peek_${label} erro`, err instanceof Error ? err.message : err);
+      }
+      return { ok: false };
+    }
+  }
+
+  let jwt: string | null = null;
+  try {
+    const session = await getSupabase()?.auth.getSession();
+    jwt = session?.data.session?.access_token ?? null;
+  } catch {
+    jwt = null;
+  }
+  if (!jwt) {
+    const viaAnon = await peekWithBearer(anonKey, 'anon');
+    return viaAnon.ok ? viaAnon.value : null;
+  }
+  const [viaJwt, viaAnon] = await Promise.all([
+    peekWithBearer(jwt, 'jwt'),
+    peekWithBearer(anonKey, 'anon'),
+  ]);
+  if (viaJwt.ok && viaJwt.value) return viaJwt.value;
+  if (viaAnon.ok && viaAnon.value) return viaAnon.value;
+  if (viaJwt.ok) return viaJwt.value;
+  if (viaAnon.ok) return viaAnon.value;
+  return null;
+}
+
+async function reservarComandoAtendimento(
+  idempotencyKey: string,
+  baselineUpdatedAt: string,
+): Promise<string | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.rpc('iso_pro_reserve_atendimento_comando', {
+      p_tenant_id: getActiveTenantId(),
+      p_idempotency_key: idempotencyKey.trim(),
+      p_baseline: baselineUpdatedAt,
+    });
+    if (error) {
+      if (!isRpcMissingError(error) && typeof console !== 'undefined' && console.info) {
+        console.info('[atendimento] reserve', error.message);
+      }
+      return null;
+    }
+    return data != null && data !== '' ? String(data) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function subscribeComandoRealtime(
+  idempotencyKey: string,
+  onDone: (updatedAt: string) => void,
+): Promise<() => void> {
+  const supabase = getSupabase();
+  if (!supabase) return () => undefined;
+  const key = idempotencyKey.trim();
+  const tenantId = getActiveTenantId();
+  const channelName = `atend-cmd-${key.slice(0, 48)}-${Date.now().toString(36)}`;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finishSubscribe = (teardown: () => void) => {
+      if (settled) return;
+      settled = true;
+      resolve(teardown);
+    };
+
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'iso_pro_atendimento_comandos',
+          filter: `idempotency_key=eq.${key}`,
+        },
+        (payload) => {
+          const row = payload.new as { snapshot_updated_at?: string | null; tenant_id?: string } | null;
+          if (!row?.snapshot_updated_at) return;
+          if (row.tenant_id && row.tenant_id !== tenantId) return;
+          onDone(String(row.snapshot_updated_at));
+        },
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          if (status !== 'SUBSCRIBED' && typeof console !== 'undefined' && console.info) {
+            console.info(`[atendimento] realtime ${status}`);
+          }
+          finishSubscribe(() => {
+            void supabase.removeChannel(channel);
+          });
+        }
+      });
+
+    setTimeout(() => {
+      finishSubscribe(() => {
+        void supabase.removeChannel(channel);
+      });
+    }, ATENDIMENTO_COMANDO_REALTIME_WAIT_MS);
+  });
+}
+
+/**
+ * Comando idempotente — payload minimo KB.
+ *
+ * Producao (host BR): POST /api/atendimento/comando (gateway VM + service role).
+ * Fallback (dev / API down): RPC directo + peek reconcile (nunca 2.o POST cego).
+ */
 export async function submitAtendimentoComandoToCloud(
   patch: Record<string, unknown>,
   baselineUpdatedAt: string,
@@ -539,22 +735,275 @@ export async function submitAtendimentoComandoToCloud(
     p_idempotency_key: idempotencyKey,
     p_baseline: baselineUpdatedAt,
   };
-  const { data, error } = await supabase.rpc('iso_pro_submit_atendimento_comando', commandArgs);
-  if (!error && data != null) {
-    invalidateIsoProSnapshotCache();
-    return { ok: true, updatedAt: String(data), usedCommandRpc: true };
-  }
-  if (error && !isRpcMissingError(error)) {
-    if (isSnapshotConflictRpcError(error)) {
-      throw new IsoProSnapshotConflictError();
+
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const logVia = (channel: 'gateway' | 'rpc', detail: string) => {
+    const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+    if (typeof console !== 'undefined' && console.info) {
+      console.info(`[atendimento] via=${channel} ${ms}ms ${detail} key=${idempotencyKey}`);
     }
-    throw new Error(error.message);
+  };
+
+  const gatewayUrl = resolveAtendimentoGatewayUrl();
+  // Com gateway: nao peek directo ao Supabase US (pode travar no 4G). O gateway faz peek/ACK.
+  if (!gatewayUrl) {
+    const already = await peekAtendimentoComandoConfirmado(idempotencyKey);
+    if (already) {
+      invalidateIsoProSnapshotCache();
+      logVia('rpc', 'via=peek');
+      return { ok: true, updatedAt: already, usedCommandRpc: true };
+    }
   }
 
-  const mobile = await upsertAtendimentoMobileRpc(safePatch as Record<string, unknown>, baselineUpdatedAt);
-  if (mobile.ok) {
-    return { ok: true, updatedAt: new Date().toISOString(), usedCommandRpc: false };
+  if (gatewayUrl) {
+    try {
+      const gw = await submitAtendimentoComandoViaGateway(gatewayUrl, commandArgs, idempotencyKey);
+      if (gw.ok) {
+        invalidateIsoProSnapshotCache();
+        logVia('gateway', `via=${gw.detail}`);
+        return { ok: true, updatedAt: gw.updatedAt, usedCommandRpc: true };
+      }
+      if (gw.conflict) throw new IsoProSnapshotConflictError();
+      // 401/403: nao cair em RPC com a mesma sessao morta (evita ruido e falsa esperanca).
+      if (/sessao|jwt|expirad|permissao|obrigatoria/i.test(gw.error)) {
+        return { ok: false, error: gw.error };
+      }
+      if (typeof console !== 'undefined' && console.info) {
+        console.info(`[atendimento] gateway falhou (${gw.error}) — fallback rpc`);
+      }
+    } catch (err) {
+      if (err instanceof IsoProSnapshotConflictError) throw err;
+      const peeked = await peekAtendimentoComandoConfirmado(idempotencyKey);
+      if (peeked) {
+        invalidateIsoProSnapshotCache();
+        logVia('gateway', 'via=reconcile');
+        return { ok: true, updatedAt: peeked, usedCommandRpc: true };
+      }
+      if (typeof console !== 'undefined' && console.info) {
+        console.info(
+          `[atendimento] gateway erro (${err instanceof Error ? err.message : 'falha'}) — fallback rpc`,
+        );
+      }
+    }
   }
+
+  return submitAtendimentoComandoViaDirectRpc(safePatch, baselineUpdatedAt, idempotencyKey, commandArgs, t0);
+}
+
+type GatewaySubmitResult =
+  | { ok: true; updatedAt: string; detail: string }
+  | { ok: false; error: string; conflict?: boolean };
+
+async function submitAtendimentoComandoViaGateway(
+  url: string,
+  commandArgs: Record<string, unknown>,
+  idempotencyKey: string,
+): Promise<GatewaySubmitResult> {
+  const supabase = getSupabase();
+  let bearer = '';
+  try {
+    const refreshed = await supabase?.auth.refreshSession();
+    const token =
+      refreshed?.data.session?.access_token ??
+      (await supabase?.auth.getSession())?.data.session?.access_token;
+    if (token) bearer = token;
+  } catch {
+    /* sem sessao */
+  }
+  if (!bearer) {
+    return {
+      ok: false,
+      error: 'Sessao JWT obrigatoria para Confirmar (gateway). Entre novamente.',
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ATENDIMENTO_GATEWAY_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${bearer}`,
+        'X-Iso-Pro-Client': 'iso-pro-web',
+      },
+      body: JSON.stringify(commandArgs),
+      signal: controller.signal,
+    });
+    const payload = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      updatedAt?: string;
+      via?: string;
+      error?: string;
+      conflict?: boolean;
+    };
+    if (res.ok && payload.ok && payload.updatedAt) {
+      return { ok: true, updatedAt: String(payload.updatedAt), detail: payload.via ?? 'rpc' };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        error: payload.error ?? 'Sessao expirada ou sem permissao no gateway. Entre novamente.',
+      };
+    }
+    if (res.status === 409 || payload.conflict) {
+      return { ok: false, error: payload.error ?? 'conflict', conflict: true };
+    }
+    // Timeout/erro no gateway: reconciliar pela chave (sem 2.o POST).
+    const peeked = await peekAtendimentoComandoConfirmado(idempotencyKey);
+    if (peeked) {
+      return { ok: true, updatedAt: peeked, detail: 'reconcile' };
+    }
+    return { ok: false, error: payload.error ?? `HTTP ${res.status}` };
+  } catch (err) {
+    const peeked = await peekAtendimentoComandoConfirmado(idempotencyKey);
+    if (peeked) {
+      return { ok: true, updatedAt: peeked, detail: 'reconcile' };
+    }
+    const msg =
+      err instanceof Error && err.name === 'AbortError'
+        ? 'timeout gateway'
+        : err instanceof Error
+          ? err.message
+          : 'falha gateway';
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function submitAtendimentoComandoViaDirectRpc(
+  safePatch: Record<string, unknown>,
+  baselineUpdatedAt: string,
+  idempotencyKey: string,
+  commandArgs: Record<string, unknown>,
+  t0: number,
+): Promise<SubmitAtendimentoComandoResult> {
+  const supabase = getSupabase();
+  if (!supabase) return { ok: false, missing: true };
+
+  let settled = false;
+  let win: 'rpc' | 'poll' | 'realtime' | 'reserve' | 'timeout' = 'timeout';
+  let teardownRealtime: (() => void) | undefined;
+
+  const finishOk = (
+    updatedAt: string,
+    via: 'rpc' | 'poll' | 'realtime' | 'reserve',
+  ): SubmitAtendimentoComandoResult => {
+    if (settled) {
+      return { ok: true, updatedAt, usedCommandRpc: true };
+    }
+    settled = true;
+    win = via;
+    try {
+      teardownRealtime?.();
+    } catch {
+      /* ignore */
+    }
+    invalidateIsoProSnapshotCache();
+    return { ok: true, updatedAt, usedCommandRpc: true };
+  };
+
+  const waitMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  const reservedAt = await reservarComandoAtendimento(idempotencyKey, baselineUpdatedAt);
+  if (reservedAt) {
+    const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+    if (typeof console !== 'undefined' && console.info) {
+      console.info(`[atendimento] via=rpc ${ms}ms via=reserve key=${idempotencyKey}`);
+    }
+    return finishOk(reservedAt, 'reserve');
+  }
+
+  // RPC imediatamente; Realtime em paralelo (sem bloquear o POST).
+  let realtimeResolve: ((v: SubmitAtendimentoComandoResult | null) => void) | undefined;
+  const realtimePromise = new Promise<SubmitAtendimentoComandoResult | null>((resolve) => {
+    realtimeResolve = resolve;
+  });
+  void subscribeComandoRealtime(idempotencyKey, (updatedAt) => {
+    realtimeResolve?.(finishOk(updatedAt, 'realtime'));
+  }).then((teardown) => {
+    teardownRealtime = teardown;
+  });
+
+  const rpcPromise = (async (): Promise<SubmitAtendimentoComandoResult> => {
+    try {
+      const { data, error } = await supabase.rpc('iso_pro_submit_atendimento_comando', commandArgs);
+      if (settled) {
+        return { ok: true, updatedAt: String(data ?? baselineUpdatedAt), usedCommandRpc: true };
+      }
+      if (!error && data != null) {
+        return finishOk(String(data), 'rpc');
+      }
+      if (error && !isRpcMissingError(error)) {
+        if (isSnapshotConflictRpcError(error)) {
+          throw new IsoProSnapshotConflictError();
+        }
+        throw new Error(error.message);
+      }
+      const mobile = await upsertAtendimentoMobileRpc(safePatch as Record<string, unknown>, baselineUpdatedAt);
+      if (mobile.ok) {
+        return finishOk(new Date().toISOString(), 'rpc');
+      }
+      return { ok: false, missing: true };
+    } catch (err) {
+      if (settled) {
+        return { ok: true, updatedAt: baselineUpdatedAt, usedCommandRpc: true };
+      }
+      throw err;
+    }
+  })();
+
+  const pollUntil = async (deadlineMs: number): Promise<SubmitAtendimentoComandoResult | null> => {
+    while (!settled && (typeof performance !== 'undefined' ? performance.now() : Date.now()) < deadlineMs) {
+      const at = await peekAtendimentoComandoConfirmado(idempotencyKey);
+      if (at) return finishOk(at, 'poll');
+      await waitMs(ATENDIMENTO_COMANDO_POLL_GAP_MS);
+    }
+    return null;
+  };
+
+  const hang = () => new Promise<SubmitAtendimentoComandoResult>(() => undefined);
+
+  try {
+    const raced = await Promise.race([
+      rpcPromise.then((v) => (v.ok ? v : hang())),
+      pollUntil(t0 + ATENDIMENTO_COMANDO_RPC_TIMEOUT_MS).then((v) => v ?? hang()),
+      realtimePromise.then((v) => v ?? hang()),
+      waitMs(ATENDIMENTO_COMANDO_RPC_TIMEOUT_MS).then(() => {
+        throw new Error('Timeout ao consultar nuvem');
+      }),
+    ]);
+    if (raced.ok) return raced;
+  } catch (err) {
+    if (settled) {
+      return { ok: true, updatedAt: baselineUpdatedAt, usedCommandRpc: true };
+    }
+    // Nao repetir RPC: so peek pela chave ate reconciliar.
+    if (typeof console !== 'undefined' && console.info) {
+      console.info('[atendimento] http_lento — reconcile exclusivo por peek anon');
+    }
+    const reconciled = await pollUntil(
+      t0 + ATENDIMENTO_COMANDO_RPC_TIMEOUT_MS + ATENDIMENTO_COMANDO_RECONCILE_MS,
+    );
+    if (reconciled?.ok) return reconciled;
+    const last = await peekAtendimentoComandoConfirmado(idempotencyKey);
+    if (last) return finishOk(last, 'poll');
+    throw err instanceof Error ? err : new Error('Timeout ao consultar nuvem');
+  } finally {
+    try {
+      teardownRealtime?.();
+    } catch {
+      /* ignore */
+    }
+    const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+    if (typeof console !== 'undefined' && console.info) {
+      console.info(`[atendimento] via=rpc ${ms}ms via=${win} key=${idempotencyKey}`);
+    }
+  }
+
+  const last = await peekAtendimentoComandoConfirmado(idempotencyKey);
+  if (last) return finishOk(last, 'poll');
   return { ok: false, missing: true };
 }
 
@@ -570,6 +1019,12 @@ export async function commitIsoProSnapshotPatch(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const { patch, baselineUpdatedAt, mergeKeys, patchWithoutMerge } = await prepare();
+    if (
+      Array.isArray((patch as { atendimentoHistorico?: unknown }).atendimentoHistorico) ||
+      Array.isArray((patch as { atendimentos?: unknown }).atendimentos)
+    ) {
+      applyHistoricoRetencaoAoPayload(patch as { atendimentoHistorico?: unknown; atendimentos?: unknown });
+    }
     try {
       const patched = await upsertIsoProSnapshotPatchRpc(
         patch,

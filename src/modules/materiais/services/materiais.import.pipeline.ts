@@ -70,7 +70,9 @@ export function materialRegistroCsvParaFormData(row: Record<string, string>): Ma
   const disciplina = cell(row, 'disciplina', 'disc').trim();
   const unidade = cell(row, 'unidade', 'um', 'un').trim() || 'UN';
   const peso = parseDecimalImport(cell(row, 'peso', 'peso_kg'));
-  const estoqueMinimo = parseIntegerImport(cell(row, 'estoque_minimo', 'estoque_min', 'minimo'));
+  const estoqueMinimo = parseIntegerImport(
+    cell(row, 'estoque_minimo_percentual', 'estoque_minimo', 'estoque_min', 'minimo'),
+  );
   const observacao = cell(row, 'observacao', 'observacoes', 'obs').trim();
   const ativo = parseAtivoImport(cell(row, 'ativo', 'status'));
   const codigoBarras = cell(row, 'codigo_barras', 'codigobarras', 'codigo_de_barras', 'ean', 'gtin').trim();

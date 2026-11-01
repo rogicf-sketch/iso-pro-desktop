@@ -13,12 +13,18 @@ import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacio
 import { getSupabase, getSupabaseOperationalStatus, hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../hooks/useAuth';
 import {
+  isIsoProMfaEnrollRequiredError,
   isIsoProMfaRequiredError,
   isLocalMockAuthSeedEnabled,
   readRememberLoginPreference,
 } from '../services/auth.service';
 import type { AuthUser } from '../types/auth.types';
 import { getFirstAccessibleRoute } from '../../../routes/navigation';
+import {
+  getIsoProAuthSessionEmail,
+  startIsoProMfaTotpEnrollForLogin,
+  type IsoProMfaEnrollStart,
+} from '../../../lib/isoProMfa';
 
 function IconEye() {
   return (
@@ -65,6 +71,11 @@ export function LoginPage() {
     pendingUser: AuthUser;
     permanecerLogado: boolean;
   } | null>(null);
+  const [mfaEnroll, setMfaEnroll] = useState<{
+    pendingUser: AuthUser;
+    permanecerLogado: boolean;
+    start: IsoProMfaEnrollStart | null;
+  } | null>(null);
   const [mfaCode, setMfaCode] = useState('');
 
   useEffect(() => {
@@ -75,9 +86,7 @@ export function LoginPage() {
         const supabase = getSupabase();
         if (!supabase) {
           if (!cancelled && getSupabaseOperationalStatus() === 'partial') {
-            setTenantListaErro(
-              'Configuracao Supabase incompleta: URL e chave anon devem estar preenchidas em conjunto (Configuracoes ou build).',
-            );
+            setTenantListaErro('Configuração da nuvem incompleta neste equipamento.');
           }
           return;
         }
@@ -97,9 +106,7 @@ export function LoginPage() {
           const msg = err instanceof Error ? err.message : '';
           const rede = /failed to fetch|fetch failed|network|timeout|econnrefused/i.test(msg);
           setTenantListaErro(
-            rede
-              ? traduzirErroOperacionalIsoPro(msg)
-              : 'Não foi possível carregar a lista de empresas na nuvem. Verifique credenciais e se a migração multi-tenant foi aplicada.',
+            rede ? traduzirErroOperacionalIsoPro(msg) : 'Não foi possível carregar as empresas.',
           );
         }
       }
@@ -130,6 +137,18 @@ export function LoginPage() {
         setMfaCode('');
         return;
       }
+      if (mfaEnroll?.start) {
+        await completeMfaLogin(
+          mfaEnroll.start.factorId,
+          mfaCode,
+          mfaEnroll.pendingUser,
+          mfaEnroll.permanecerLogado,
+          { enroll: true },
+        );
+        setMfaEnroll(null);
+        setMfaCode('');
+        return;
+      }
       await login({ ...form, permanecerLogado });
     } catch (err) {
       if (isIsoProMfaRequiredError(err)) {
@@ -138,7 +157,31 @@ export function LoginPage() {
           pendingUser: err.pendingUser,
           permanecerLogado: err.permanecerLogado,
         });
+        setMfaEnroll(null);
         setError('');
+        return;
+      }
+      if (isIsoProMfaEnrollRequiredError(err)) {
+        setMfaPending(null);
+        setMfaEnroll({
+          pendingUser: err.pendingUser,
+          permanecerLogado: err.permanecerLogado,
+          start: null,
+        });
+        setError('');
+        try {
+          await getIsoProAuthSessionEmail();
+          const start = await startIsoProMfaTotpEnrollForLogin(`I.S.O PRO · ${err.pendingUser.login}`);
+          setMfaEnroll({
+            pendingUser: err.pendingUser,
+            permanecerLogado: err.permanecerLogado,
+            start,
+          });
+        } catch (enrollErr) {
+          setMfaEnroll(null);
+          setError(enrollErr instanceof Error ? enrollErr.message : 'Nao foi possivel iniciar o MFA.');
+          cancelMfaLogin();
+        }
         return;
       }
       setError(err instanceof Error ? err.message : 'Não foi possível entrar.');
@@ -155,6 +198,7 @@ export function LoginPage() {
   function cancelarMfa() {
     cancelMfaLogin();
     setMfaPending(null);
+    setMfaEnroll(null);
     setMfaCode('');
     setError('');
   }
@@ -166,21 +210,59 @@ export function LoginPage() {
           Entrar
         </h2>
         <p className="login-page__subtitle">
-          {mfaPending
-            ? 'Introduza o código de 6 dígitos da app authenticator.'
-            : 'Utilize as credenciais fornecidas pela sua organização.'}
+          {mfaEnroll
+            ? 'Escaneie o QR e confirme o código de 6 dígitos.'
+            : mfaPending
+              ? 'Código de verificação de 6 dígitos.'
+              : 'Aceda com a sua conta.'}
         </p>
       </header>
 
       <form className="login-form" onSubmit={handleSubmit}>
-        {mfaPending ? (
+        {mfaEnroll ? (
           <>
-            <OperationalNotice>
-              Conta com MFA activo (<strong>{mfaPending.pendingUser.login}</strong>). Abra o authenticator e introduza o
-              código.
-            </OperationalNotice>
+            {!mfaEnroll.start ? (
+              <p className="login-page__subtitle">A preparar verificação…</p>
+            ) : (
+              <>
+                <div className="login-mfa-enroll-qr">
+                  <img alt="QR de autenticação" src={mfaEnroll.start.qrCode} />
+                </div>
+                <label className="field login-field">
+                  <span>Código</span>
+                  <input
+                    autoComplete="one-time-code"
+                    data-e2e="login-mfa-enroll-code"
+                    inputMode="numeric"
+                    maxLength={8}
+                    onChange={(event) => setMfaCode(event.target.value)}
+                    placeholder="000000"
+                    value={mfaCode}
+                  />
+                </label>
+              </>
+            )}
+            {error ? (
+              <div className="error-box" data-e2e="login-error">
+                {error}
+              </div>
+            ) : null}
+            <button
+              className="primary-button login-submit"
+              data-e2e="login-submit"
+              disabled={isSubmitting || !mfaEnroll.start}
+              type="submit"
+            >
+              {isSubmitting ? 'A verificar…' : 'Confirmar e entrar'}
+            </button>
+            <button className="button button-ghost" disabled={isSubmitting} type="button" onClick={cancelarMfa}>
+              Voltar
+            </button>
+          </>
+        ) : mfaPending ? (
+          <>
             <label className="field login-field">
-              <span>Código MFA</span>
+              <span>Código</span>
               <input
                 autoComplete="one-time-code"
                 data-e2e="login-mfa-code"
@@ -196,10 +278,10 @@ export function LoginPage() {
                 {error}
               </div>
             ) : null}
-            <button className="btn btn-primary" data-e2e="login-submit" disabled={isSubmitting} type="submit">
-              {isSubmitting ? 'A verificar…' : 'Confirmar MFA'}
+            <button className="primary-button login-submit" data-e2e="login-submit" disabled={isSubmitting} type="submit">
+              {isSubmitting ? 'A verificar…' : 'Continuar'}
             </button>
-            <button className="btn btn-ghost" disabled={isSubmitting} type="button" onClick={cancelarMfa}>
+            <button className="button button-ghost" disabled={isSubmitting} type="button" onClick={cancelarMfa}>
               Voltar
             </button>
           </>
@@ -209,6 +291,7 @@ export function LoginPage() {
           <label className="field login-field">
             <span>Empresa / organização</span>
             <select
+              className="input-control login-tenant-select"
               data-e2e="login-tenant"
               value={tenantSelectId}
               onChange={(event) => {
@@ -217,17 +300,21 @@ export function LoginPage() {
                 setActiveTenantId(next);
               }}
             >
-              {tenantsNuvem.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.slug})
-                </option>
-              ))}
+              {tenantsNuvem.map((t) => {
+                const label = t.slug ? `${t.name} (${t.slug})` : t.name;
+                return (
+                  <option key={t.id} title={label} value={t.id}>
+                    {label}
+                  </option>
+                );
+              })}
             </select>
           </label>
         ) : null}
-        {tenantListaErro ? (
-          <OperationalNotice tone="warning">{tenantListaErro}</OperationalNotice>
+        {!hasSupabaseConfig() ? (
+          <OperationalNotice tone="warning">Ligação à nuvem indisponível neste equipamento.</OperationalNotice>
         ) : null}
+        {tenantListaErro ? <OperationalNotice tone="warning">{tenantListaErro}</OperationalNotice> : null}
 
         <label className="field login-field">
           <span>Login</span>
@@ -263,7 +350,10 @@ export function LoginPage() {
           </div>
         </label>
 
-        <label className="login-remember">
+        <label
+          className="login-remember"
+          title="Em equipamentos partilhados, deixe desmarcado. A sessão expira após 8 h sem uso."
+        >
           <input
             checked={permanecerLogado}
             onChange={(event) => setPermanecerLogado(event.target.checked)}
@@ -271,10 +361,6 @@ export function LoginPage() {
           />
           <span>Permanecer logado</span>
         </label>
-        <p className="login-remember__hint">
-          Se não marcar, terá de entrar outra vez ao fechar o programa ou o navegador. Deixe desmarcado em computadores
-          partilhados. Após 8 horas sem usar o sistema, a sessão expira de qualquer forma.
-        </p>
 
         {error ? (
           <div className="error-box" data-e2e="login-error">
@@ -284,7 +370,7 @@ export function LoginPage() {
 
         {isLocalMockAuthSeedEnabled() ? (
           <div className="login-demo">
-            <p className="login-demo__label">Ambiente de demonstração</p>
+            <p className="login-demo__label">Demonstração</p>
             <div className="login-demo__chips">
               <button type="button" className="login-chip" onClick={() => preencherDemo('admin', 'admin')}>
                 Admin
@@ -299,15 +385,8 @@ export function LoginPage() {
                 Consulta
               </button>
             </div>
-            <p className="login-demo__hint">
-              Selecione um perfil para preencher o utilizador e a palavra-passe; depois clique em Entrar.
-            </p>
           </div>
         ) : null}
-
-        <OperationalNotice tone="warning">
-          Segurança: não partilhe credenciais. Marque «Permanecer logado» só em equipamentos de confiança.
-        </OperationalNotice>
 
         <button className="primary-button login-submit" data-e2e="login-submit" disabled={isSubmitting} type="submit">
           {isSubmitting ? 'A validar…' : 'Entrar'}

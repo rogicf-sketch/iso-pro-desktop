@@ -1,8 +1,10 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
+import { invalidateDocumentosListaCabIndex } from '../../../lib/documentosPlanejamentoTabelas';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { isErroIntegridadePlanejamentoRefsAtendimento } from '../../../lib/snapshotDocumentosPlanejamentoIntegrity';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
@@ -14,21 +16,32 @@ import {
   buscarDocumentoPorId,
   cancelarDocumento,
   carregarDocumentoPlanejamentoParaVisualizacao,
+  carregarLocalizacoesPlanejamentoVisualizacao,
+  carregarMetricasPlanejamentoVisualizacao,
+  carregarSoMetricasPlanejamentoVisualizacao,
+  peekMetricasPlanejamentoMemoria,
+  fundirMetricasPlanejamento,
+  metricasSementeDoDocumento,
+  documentoComStatusDasLinhas,
   excluirDocumentosDefinitivamente,
   importarDocumentosDoArquivoCsv,
+  atualizarDescricoesDocumentosDoArquivoCsv,
+  extrairDescricoesDocumentosDoCsv,
   obterIdsDocumentosFiltrados,
   obterResumosDocumentosParaExclusao,
   listarDocumentos,
   montarExportacaoDocumentosCsvResumo,
   montarModeloCsvImportacaoDocumentos,
-  precarregarBundlePlanejamentoDocumentos,
-  previewImportacaoDocumentosCsv,
+  carregarRevisoesAntigasActivasDoCsvImportacao,
+  previewImportacaoDocumentosComRevisoesAntigas,
+  previewRevisoesActivasOutrasAoSalvar,
   salvarDocumento,
   sincronizarPlanejamentoLocalComNuvem,
   diagnosticarPlanejamentoLocalVersusNuvem,
   visualizarPlanejamentoCampoPorId,
 } from '../services/documentos.service';
 import type { MetricasPorCodigoMaterial } from '../services/documentoPlanejamento';
+import type { RevisaoActivaOutra } from '../utils/documentoRevisoesAntigas';
 import type {
   Documento,
   DocumentoFiltro,
@@ -54,8 +67,79 @@ const emptyForm: DocumentoFormData = {
   itens: [],
 };
 
+const DIAG_VAZIO = {
+  noNavegador: 0,
+  noSnapshot: -1,
+  comItensNoLocal: 0,
+  totalItensNoLocal: 0,
+  comItensNaNuvem: -1,
+  totalItensNaNuvem: -1,
+  nuvemSemLinhasMaterial: false,
+};
+
+/** Diagnóstico local×nuvem: não bloquear a lista; refrescar no máximo a cada 5 min. */
+const DIAG_STALE_MS = 5 * 60_000;
+/** Páginas já vistas (ex. 299→293) saem da memória — troca instantânea. */
+const LISTA_STALE_MS = 90_000;
+const LISTA_GC_MS = 15 * 60_000;
+
 function documentosListaQueryKey(filters: DocumentoFiltro, userLogin: string | undefined) {
   return ['documentos', 'lista', userLogin ?? '', filters] as const;
+}
+
+type DocumentosListaQueryData = {
+  items: DocumentoListItem[];
+  total: number;
+  fallbackReason: string;
+  documentosSource: 'local' | 'supabase' | null;
+  staleWhileRevalidate: boolean;
+  /** Página real dos items (para repor o UI se o salto falhar). */
+  page?: number;
+};
+
+async function fetchDocumentosListaPage(
+  filtersForLista: DocumentoFiltro,
+  signal?: AbortSignal,
+): Promise<DocumentosListaQueryData> {
+  try {
+    const result = await listarDocumentos(filtersForLista, { signal });
+    if (!result.success || !result.data) {
+      const msg = result.error ?? 'Nao foi possivel carregar documentos.';
+      if (msg === 'AbortError' || signal?.aborted) {
+        const err = new Error('AbortError');
+        err.name = 'AbortError';
+        throw err;
+      }
+      throw new Error(msg);
+    }
+    const documentosSource =
+      result.meta?.source === 'local' ? 'local' : result.meta?.source === 'supabase' ? 'supabase' : null;
+    return {
+      items: result.data.items,
+      total: result.data.total,
+      fallbackReason: result.meta?.fallbackReason ?? '',
+      documentosSource,
+      staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
+      page: result.data.page,
+    };
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw e;
+    if (signal?.aborted) {
+      const err = new Error('AbortError');
+      err.name = 'AbortError';
+      throw err;
+    }
+    throw e;
+  }
+}
+
+function documentosDiagQueryKey(userLogin: string | undefined) {
+  return ['documentos', 'diag', userLogin ?? ''] as const;
+}
+
+function avisoSeImportacaoNaoFechou(mensagem: string): string {
+  if (mensagem.includes('Atualize a pagina')) return mensagem;
+  return `${mensagem} Atualize a pagina e confira o total antes de importar de novo.`;
 }
 
 export function useDocumentos() {
@@ -76,6 +160,9 @@ export function useDocumentos() {
     new Map(),
   );
   const [viewPlanejamentoLocalizacoes, setViewPlanejamentoLocalizacoes] = useState<Map<string, string>>(new Map());
+  const [viewPlanejamentoMetricasAviso, setViewPlanejamentoMetricasAviso] = useState<string | null>(null);
+  /** True enquanto estoque/status das linhas ainda esta a carregar (mostra «…», nao Pendente falso). */
+  const [viewPlanejamentoMetricasPending, setViewPlanejamentoMetricasPending] = useState(false);
   const viewDocumentoSeqRef = useRef(0);
   const [visualizarPlanejamentoBusyId, setVisualizarPlanejamentoBusyId] = useState<string | null>(null);
   const [importSnapshotConflict, setImportSnapshotConflict] = useState(false);
@@ -83,11 +170,29 @@ export function useDocumentos() {
     fileName: string;
     text: string;
     linhaCount: number;
+    modo: 'full' | 'descricoes';
+    revisoesAntigasActivas?: RevisaoActivaOutra[];
+    cancelarRevisoesAntigas?: boolean;
   } | null>(null);
   const [importingDocumentos, setImportingDocumentos] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
+  const [lendoArquivoImportacao, setLendoArquivoImportacao] = useState(false);
+  const importPreviewSeqRef = useRef(0);
+  const [exportingDocumentosCsv, setExportingDocumentosCsv] = useState<'tudo' | 'filtro' | null>(null);
   const [importResultado, setImportResultado] = useState<DocumentosImportacaoResumo | null>(null);
+  const [salvarRevisoesStaging, setSalvarRevisoesStaging] = useState<{
+    data: DocumentoFormData;
+    currentId?: string;
+    revisoesAntigasActivas: RevisaoActivaOutra[];
+  } | null>(null);
+  const [salvarRevisoesBusy, setSalvarRevisoesBusy] = useState(false);
   const [importHistoricoBloqueio, setImportHistoricoBloqueio] = useState<{
-    staging: { fileName: string; text: string; linhaCount: number };
+    staging: {
+      fileName: string;
+      text: string;
+      linhaCount: number;
+      cancelarRevisoesAntigas?: boolean;
+    };
     resumo?: DocumentosImportacaoResumo;
     error: string;
   } | null>(null);
@@ -95,6 +200,7 @@ export function useDocumentos() {
   const [importSubstituirSenha, setImportSubstituirSenha] = useState('');
   const [importSubstituirBusy, setImportSubstituirBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const importModoRef = useRef<'full' | 'descricoes'>('full');
   const [cancelDocAlvo, setCancelDocAlvo] = useState<DocumentoListItem | null>(null);
   const [cancelMotivo, setCancelMotivo] = useState('');
   const [cancelSaving, setCancelSaving] = useState(false);
@@ -125,64 +231,125 @@ export function useDocumentos() {
     }
   }
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
-  const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
+  // Com índice local a página é síncrona; debounce mínimo só para ›/‹ em rajada.
+  const debouncedPage = useDebouncedValue(filters.page, 40);
+  const filtersForLista = useMemo(
+    () => ({ ...filters, busca: debouncedBusca, page: debouncedPage }),
+    [filters, debouncedBusca, debouncedPage],
+  );
 
-  useEffect(() => {
-    void precarregarBundlePlanejamentoDocumentos();
-  }, []);
+  // Bundle completo (snapshot + recebimentos) só sob demanda em «Visualizar» —
+  // pré-carregar no mount com 4k+ desenhos deixava a lista em "Carregando..." sem fim.
 
   const listQuery = useQuery({
     queryKey: documentosListaQueryKey(filtersForLista, user?.login),
-    queryFn: async () => {
-      const result = await listarDocumentos(filtersForLista);
-
-      if (!result.success || !result.data) {
-        throw new Error(result.error ?? 'Nao foi possivel carregar documentos.');
-      }
-
-      const diag = await diagnosticarPlanejamentoLocalVersusNuvem();
-      const documentosSource =
-        result.meta?.source === 'local' ? 'local' : result.meta?.source === 'supabase' ? 'supabase' : null;
-      const planejamentoMaisNoLocal =
-        hasCloudConfig &&
-        documentosSource === 'supabase' &&
-        !result.meta?.fallbackReason &&
-        diag.noSnapshot >= 0 &&
-        diag.noNavegador > diag.noSnapshot;
-      const planejamentoNuvemSemLinhas = hasCloudConfig && diag.nuvemSemLinhasMaterial;
-
-      return {
-        items: result.data.items,
-        total: result.data.total,
-        fallbackReason: result.meta?.fallbackReason ?? '',
-        documentosSource,
-        planejamentoDiag: diag,
-        planejamentoMaisNoLocal,
-        planejamentoNuvemSemLinhas,
-      };
-    },
+    queryFn: ({ signal }) => fetchDocumentosListaPage(filtersForLista, signal),
+    placeholderData: keepPreviousData,
+    staleTime: LISTA_STALE_MS,
+    gcTime: LISTA_GC_MS,
+    // Sem retry: 1 falha + retry duplicava 6s+4s e parecia «40s a actualizar».
+    retry: false,
   });
 
-  const items = listQuery.data?.items ?? [];
-  const total = listQuery.data?.total ?? 0;
-  const loading = listQuery.isLoading;
-  const fallbackReason = listQuery.data?.fallbackReason ?? '';
-  const documentosSource = listQuery.data?.documentosSource ?? null;
-  const planejamentoDiag = listQuery.data?.planejamentoDiag ?? null;
-  const planejamentoMaisNoLocal = listQuery.data?.planejamentoMaisNoLocal ?? false;
-  const planejamentoNuvemSemLinhas = listQuery.data?.planejamentoNuvemSemLinhas ?? false;
+  // Contagem exacta de dezenas de milhares de linhas em paralelo com a lista
+  // disputava a sessão e deixava "Carregando documentos..." sem fim.
+  const diagQuery = useQuery({
+    queryKey: documentosDiagQueryKey(user?.login),
+    enabled: hasCloudConfig && listQuery.isSuccess,
+    staleTime: DIAG_STALE_MS,
+    queryFn: () => diagnosticarPlanejamentoLocalVersusNuvem(),
+  });
+
+  /** Última lista boa — em timeout/erro a grelha NUNCA zera (evita «0 documentos · local»). */
+  const lastGoodListRef = useRef<DocumentosListaQueryData | null>(null);
+  if (listQuery.isSuccess && listQuery.data && listQuery.data.items.length > 0) {
+    lastGoodListRef.current = {
+      ...listQuery.data,
+      page: listQuery.data.page ?? filtersForLista.page,
+    };
+  }
+  const listView = listQuery.data?.items?.length
+    ? listQuery.data
+    : listQuery.isError || listQuery.isPlaceholderData
+      ? lastGoodListRef.current
+      : listQuery.data;
+  const items = listView?.items ?? [];
+  const total = listView?.total ?? 0;
+  const loading = listQuery.isLoading && items.length === 0;
+  const listShowingPlaceholder = listQuery.isPlaceholderData === true;
+  const listFetching = listQuery.isFetching && listShowingPlaceholder && items.length > 0;
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    // Só avisar na troca de página lenta — nunca em prefetch/refetch de fundo.
+    if (!listFetching) {
+      setRefreshing(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setRefreshing(true), 1_200);
+    return () => window.clearTimeout(timer);
+  }, [listFetching]);
+
+  // NÃO repor filters.page para lastGood — isso prendia o UI na página 1
+  // (cada clique em 2/3… falhava ou competia e o efeito puxava de volta).
+
+  const prefetchDocumentosPage = useCallback(
+    (page: number) => {
+      if (!Number.isFinite(page) || page < 1) return;
+      const nextFilters = { ...filtersForLista, page };
+      void queryClient.prefetchQuery({
+        queryKey: documentosListaQueryKey(nextFilters, user?.login),
+        queryFn: ({ signal }) => fetchDocumentosListaPage(nextFilters, signal),
+        staleTime: LISTA_STALE_MS,
+        gcTime: LISTA_GC_MS,
+      });
+    },
+    [filtersForLista, queryClient, user?.login],
+  );
+
+  // Prefetch automático da seguinte desligado: competia com a página actual
+  // (40s+ em «A actualizar…»). O rato em › / números ainda aquece via onPagePrefetch.
+
+  const fallbackReason = listView?.fallbackReason ?? '';
+  const documentosSource = listView?.documentosSource ?? lastGoodListRef.current?.documentosSource ?? null;
+  const staleWhileRevalidate = Boolean(listView?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['documentos', 'lista'],
+    deps: [filtersForLista],
+  });
+
+  const planejamentoDiag = diagQuery.data ?? null;
+  const diag = planejamentoDiag ?? DIAG_VAZIO;
+  const planejamentoMaisNoLocal =
+    hasCloudConfig &&
+    documentosSource === 'supabase' &&
+    !fallbackReason &&
+    diag.noSnapshot >= 0 &&
+    diag.noNavegador > diag.noSnapshot;
+  const planejamentoNuvemSemLinhas = hasCloudConfig && Boolean(diag.nuvemSemLinhasMaterial);
+  // Abort de navegação rápida não é erro. Com grelha boa: aviso suave e temporário.
+  const abortedNav =
+    listQuery.error instanceof Error && listQuery.error.name === 'AbortError';
   const listError =
-    listQuery.isError && listQuery.error instanceof Error
-      ? listQuery.error.message
-      : listQuery.isError
-        ? 'Nao foi possivel carregar documentos.'
-        : '';
+    abortedNav
+      ? ''
+      : listQuery.isError && items.length === 0
+        ? listQuery.error instanceof Error
+          ? listQuery.error.message
+          : 'Nao foi possivel carregar documentos.'
+        : listQuery.isError && items.length > 0
+          ? 'Nao foi possivel actualizar esta página. A lista anterior permanece visivel — tente de novo.'
+          : '';
 
   const invalidateDocumentosLista = useCallback(async () => {
     setError('');
     setSuccess('');
     setImportSnapshotConflict(false);
+    invalidateDocumentosListaCabIndex();
     await queryClient.invalidateQueries({ queryKey: ['documentos'] });
   }, [queryClient]);
 
@@ -268,7 +435,17 @@ export function useDocumentos() {
       return { success: false, error: erroMateriais };
     }
 
-    const result = await salvarDocumento(data, selected?.id);
+    const outras = await previewRevisoesActivasOutrasAoSalvar(data.numero, data.revisao, selected?.id);
+    if (outras.length > 0) {
+      setSalvarRevisoesStaging({ data, currentId: selected?.id, revisoesAntigasActivas: outras });
+      return {
+        success: false,
+        error:
+          'Existem outras revisoes activas deste numero. Confirme no dialogo se deseja cancelar as antigas ou gravar so esta.',
+      };
+    }
+
+    const result = await salvarDocumento(data, selected?.id, { actorLogin: user?.login });
     if (result.success) {
       setIsModalOpen(false);
       setSelected(null);
@@ -276,6 +453,42 @@ export function useDocumentos() {
       setSuccess(result.meta?.source === 'local' ? 'Documento salvo localmente.' : 'Documento salvo com sucesso.');
     }
     return result;
+  }
+
+  async function confirmarSalvarComOpcaoRevisoes(cancelarAntigas: boolean) {
+    if (!salvarRevisoesStaging) return;
+    if (!canAccessAction('documentos', 'editar')) {
+      setError('Seu perfil nao possui permissao para editar documentos.');
+      return;
+    }
+    setSalvarRevisoesBusy(true);
+    setError('');
+    const staging = salvarRevisoesStaging;
+    const result = await salvarDocumento(staging.data, staging.currentId, {
+      cancelarRevisoesAntigasActivas: cancelarAntigas,
+      actorLogin: user?.login,
+    });
+    setSalvarRevisoesBusy(false);
+    if (!result.success) {
+      setError(result.error ?? 'Falha ao salvar documento.');
+      return;
+    }
+    setSalvarRevisoesStaging(null);
+    setIsModalOpen(false);
+    setSelected(null);
+    await invalidateDocumentosLista();
+    setSuccess(
+      cancelarAntigas
+        ? 'Documento salvo e revisoes antigas do mesmo numero canceladas.'
+        : result.meta?.source === 'local'
+          ? 'Documento salvo localmente.'
+          : 'Documento salvo com sucesso.',
+    );
+  }
+
+  function cancelarSalvarRevisoesStaging() {
+    if (salvarRevisoesBusy) return;
+    setSalvarRevisoesStaging(null);
   }
 
   function fecharCancelamentoAdministrativo() {
@@ -458,20 +671,54 @@ export function useDocumentos() {
     URL.revokeObjectURL(url);
   }
 
+  /** Acima de ~8 MB de CSV: ZIP (DEFLATE) para download mais leve e estável. */
+  async function baixarExportDocumentosCsv(csv: string, fileName: string): Promise<'csv' | 'zip'> {
+    const ZIP_THRESHOLD_CHARS = 8_000_000;
+    if (csv.length < ZIP_THRESHOLD_CHARS) {
+      baixarBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), fileName);
+      return 'csv';
+    }
+    const { default: JSZip } = await import('jszip');
+    const zip = new JSZip();
+    const csvName = fileName.toLowerCase().endsWith('.csv') ? fileName : `${fileName}.csv`;
+    zip.file(csvName, csv);
+    // Cedência ao UI antes da compressão (exportes grandes).
+    await new Promise<void>((r) => setTimeout(r, 0));
+    const blob = await zip.generateAsync({
+      type: 'blob',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    });
+    const zipName = csvName.replace(/\.csv$/i, '') + '.zip';
+    baixarBlob(blob, zipName);
+    return 'zip';
+  }
+
   async function exportDocumentosCsvResumo() {
     if (!canAccessAction('documentos', 'editar')) {
       setError('Seu perfil nao possui permissao para exportar documentos.');
       return;
     }
+    if (exportingDocumentosCsv) return;
     setError('');
+    setSuccess('');
     setImportSnapshotConflict(false);
-    const result = await montarExportacaoDocumentosCsvResumo();
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar o CSV.');
-      return;
+    setExportingDocumentosCsv('tudo');
+    try {
+      const result = await montarExportacaoDocumentosCsvResumo();
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar o CSV.');
+        return;
+      }
+      const fmt = await baixarExportDocumentosCsv(result.data.csv, result.data.fileName);
+      setSuccess(
+        fmt === 'zip'
+          ? 'Exportacao concluida (ZIP — ficheiro grande). O download foi iniciado.'
+          : 'Exportacao concluida. O ficheiro CSV foi descarregado.',
+      );
+    } finally {
+      setExportingDocumentosCsv(null);
     }
-    baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
-    setSuccess('Exportacao Excel - itens (todos) concluida.');
   }
 
   async function exportDocumentosCsvResumoFiltrado() {
@@ -479,17 +726,28 @@ export function useDocumentos() {
       setError('Seu perfil nao possui permissao para exportar documentos.');
       return;
     }
+    if (exportingDocumentosCsv) return;
     setError('');
+    setSuccess('');
     setImportSnapshotConflict(false);
-    const result = await montarExportacaoDocumentosCsvResumo({
-      filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status },
-    });
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar o CSV.');
-      return;
+    setExportingDocumentosCsv('filtro');
+    try {
+      const result = await montarExportacaoDocumentosCsvResumo({
+        filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status },
+      });
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar o CSV.');
+        return;
+      }
+      const fmt = await baixarExportDocumentosCsv(result.data.csv, result.data.fileName);
+      setSuccess(
+        fmt === 'zip'
+          ? 'Exportacao (filtro atual) concluida (ZIP — ficheiro grande). O download foi iniciado.'
+          : 'Exportacao (filtro atual) concluida. O ficheiro CSV foi descarregado.',
+      );
+    } finally {
+      setExportingDocumentosCsv(null);
     }
-    baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
-    setSuccess('Exportacao Excel - itens (filtro atual) concluida.');
   }
 
   function openImportDocumentosPicker() {
@@ -498,6 +756,17 @@ export function useDocumentos() {
       return;
     }
     setError('');
+    importModoRef.current = 'full';
+    importInputRef.current?.click();
+  }
+
+  function openAtualizarDescricoesPicker() {
+    if (!canAccessAction('documentos', 'editar')) {
+      setError('Seu perfil nao possui permissao para atualizar descricoes.');
+      return;
+    }
+    setError('');
+    importModoRef.current = 'descricoes';
     importInputRef.current?.click();
   }
 
@@ -522,9 +791,12 @@ export function useDocumentos() {
     setSuccess('');
     setImportSnapshotConflict(false);
     setImportResultado(null);
+    const seq = ++importPreviewSeqRef.current;
+    setLendoArquivoImportacao(true);
 
     const lower = file.name.toLowerCase();
     if (!lower.endsWith('.csv') && file.type !== 'text/csv' && !lower.endsWith('.txt')) {
+      setLendoArquivoImportacao(false);
       setError('Selecione um arquivo CSV (exportado do Excel ou deste modulo).');
       return;
     }
@@ -533,17 +805,53 @@ export function useDocumentos() {
     try {
       text = await file.text();
     } catch {
+      setLendoArquivoImportacao(false);
       setError('Nao foi possivel ler o arquivo selecionado.');
       return;
     }
+    if (seq !== importPreviewSeqRef.current) return;
 
-    const preview = await previewImportacaoDocumentosCsv(text);
+    const modo = importModoRef.current;
+
+    if (modo === 'descricoes') {
+      const extracted = await extrairDescricoesDocumentosDoCsv(text);
+      if (seq !== importPreviewSeqRef.current) return;
+      setLendoArquivoImportacao(false);
+      if (!extracted.ok) {
+        setError(extracted.error);
+        return;
+      }
+      setImportStaging({
+        fileName: file.name,
+        text,
+        linhaCount: extracted.itens.length,
+        modo: 'descricoes',
+      });
+      return;
+    }
+
+    const preview = previewImportacaoDocumentosComRevisoesAntigas(text);
+    setLendoArquivoImportacao(false);
     if (!preview.ok) {
       setError(preview.error);
       return;
     }
 
-    setImportStaging({ fileName: file.name, text, linhaCount: preview.linhaCount });
+    setImportStaging({
+      fileName: file.name,
+      text,
+      linhaCount: preview.linhaCount,
+      modo: 'full',
+      revisoesAntigasActivas: [],
+      cancelarRevisoesAntigas: false,
+    });
+
+    void carregarRevisoesAntigasActivasDoCsvImportacao(text).then((revisoes) => {
+      if (seq !== importPreviewSeqRef.current) return;
+      setImportStaging((prev) =>
+        prev && prev.text === text && prev.modo === 'full' ? { ...prev, revisoesAntigasActivas: revisoes } : prev,
+      );
+    });
   }
 
   function cancelImportDocumentosStaging() {
@@ -565,12 +873,44 @@ export function useDocumentos() {
     setSuccess('');
     setImportSnapshotConflict(false);
     setImportingDocumentos(true);
+    setImportProgress(importStaging.modo === 'descricoes' ? 'A atualizar descricoes…' : 'A preparar o planejamento…');
     const stagingAtual = importStaging;
     const text = stagingAtual.text;
 
-    const result = await importarDocumentosDoArquivoCsv(text);
-    setImportingDocumentos(false);
-    setImportStaging(null);
+    try {
+    if (stagingAtual.modo === 'descricoes') {
+      const result = await atualizarDescricoesDocumentosDoArquivoCsv(text);
+      if (!result.success) {
+        if (result.data?.detalhes.length) {
+          setImportResultado({
+            ...result.data,
+            mensagem: result.error ?? 'Nenhuma descricao actualizada. Revise o ficheiro e os avisos abaixo.',
+            ficheiroOrigem: stagingAtual.fileName,
+          });
+        } else {
+          setError(avisoSeImportacaoNaoFechou(result.error ?? 'Actualizacao de descricoes nao concluida.'));
+        }
+        return;
+      }
+      const r = result.data;
+      if (!r) {
+        setError('Resumo da actualizacao indisponivel.');
+        return;
+      }
+      void invalidateDocumentosLista();
+      setImportResultado({
+        ...r,
+        mensagem: `Concluido. ${r.atualizados} descricao(oes) actualizada(s).`,
+        ficheiroOrigem: stagingAtual.fileName,
+      });
+      return;
+    }
+
+    const result = await importarDocumentosDoArquivoCsv(text, {
+      cancelarRevisoesAntigasActivas: stagingAtual.cancelarRevisoesAntigas === true,
+      actorLogin: user?.login,
+      onProgress: (mensagem) => setImportProgress(mensagem),
+    });
 
     if (!result.success) {
       setImportSnapshotConflict(isSnapshotConflictResult(result));
@@ -591,9 +931,13 @@ export function useDocumentos() {
         return;
       }
       if (result.data?.detalhes.length) {
-        setError(`${result.error ?? 'Importacao nao concluida.'} Detalhes: ${result.data.detalhes.join(' | ')}`);
+        setImportResultado({
+          ...result.data,
+          mensagem: result.error ?? 'Nenhuma alteracao aplicada. Revise o ficheiro e os avisos abaixo.',
+          ficheiroOrigem: stagingAtual.fileName,
+        });
       } else {
-        setError(result.error ?? 'Importacao nao concluida.');
+        setError(avisoSeImportacaoNaoFechou(result.error ?? 'Importacao nao concluida.'));
       }
       return;
     }
@@ -603,8 +947,27 @@ export function useDocumentos() {
       setError('Resumo da importacao indisponivel.');
       return;
     }
-    await invalidateDocumentosLista();
-    setImportResultado(r);
+    const cancelMsg =
+      r.canceladosPorRevisao && r.canceladosPorRevisao > 0
+        ? ` ${r.canceladosPorRevisao} revisao(oes) antiga(s) cancelada(s).`
+        : '';
+    setImportResultado({
+      ...r,
+      ficheiroOrigem: stagingAtual.fileName,
+      mensagem: `Concluido. ${r.criados} novo(s), ${r.atualizados} atualizado(s).${cancelMsg}`,
+    });
+    void invalidateDocumentosLista();
+    } catch {
+      setError('A importacao nao confirmou o fim. Atualize a pagina e confira o total antes de importar de novo.');
+    } finally {
+      setImportingDocumentos(false);
+      setImportProgress('');
+      setImportStaging(null);
+    }
+  }
+
+  function setImportStagingCancelarRevisoes(value: boolean) {
+    setImportStaging((prev) => (prev ? { ...prev, cancelarRevisoesAntigas: value } : prev));
   }
 
   function fecharImportHistoricoBloqueio() {
@@ -639,15 +1002,18 @@ export function useDocumentos() {
     setError('');
     setSuccess('');
     setImportSubstituirBusy(true);
+    setImportProgress('A gravar na nuvem…');
+    try {
     const result = await importarDocumentosDoArquivoCsv(importHistoricoBloqueio.staging.text, {
       substituirELimparHistoricoIncompativel: true,
+      cancelarRevisoesAntigasActivas: importHistoricoBloqueio.staging.cancelarRevisoesAntigas === true,
       actorLogin: user?.login,
+      onProgress: (mensagem) => setImportProgress(mensagem),
     });
-    setImportSubstituirBusy(false);
 
     if (!result.success) {
       setImportSnapshotConflict(isSnapshotConflictResult(result));
-      setError(result.error ?? 'Importacao nao concluida apos limpeza de historico.');
+      setError(avisoSeImportacaoNaoFechou(result.error ?? 'Importacao nao concluida apos limpeza de historico.'));
       return;
     }
 
@@ -660,9 +1026,18 @@ export function useDocumentos() {
     setImportHistoricoBloqueio(null);
     setImportSubstituirPasso(1);
     setImportSubstituirSenha('');
-    await invalidateDocumentosLista();
-    setImportResultado(r);
+    setImportResultado({
+      ...r,
+      mensagem: `Concluido. ${r.criados} novo(s), ${r.atualizados} atualizado(s).`,
+    });
+    void invalidateDocumentosLista();
     setSuccess('Planejamento importado. Historico de atendimento incompatible foi removido da nuvem.');
+    } catch {
+      setError('A importacao nao confirmou o fim. Atualize a pagina e confira o total antes de importar de novo.');
+    } finally {
+      setImportSubstituirBusy(false);
+      setImportProgress('');
+    }
   }
 
   async function reloadAfterImportSnapshotConflict() {
@@ -674,10 +1049,12 @@ export function useDocumentos() {
     items,
     total,
     loading,
+    refreshing,
     error: error || listError,
     success,
     fallbackReason,
     documentosSource,
+    staleWhileRevalidate,
     syncingLocalParaNuvem,
     enviarPlanejamentoLocalParaNuvem,
     planejamentoDiag,
@@ -690,6 +1067,7 @@ export function useDocumentos() {
     selected,
     load: invalidateDocumentosLista,
     setFilters,
+    prefetchDocumentosPage,
     openCreateModal: () => {
       if (!canAccessAction('documentos', 'editar')) {
         setError('Seu perfil nao possui permissao para criar documentos.');
@@ -724,12 +1102,18 @@ export function useDocumentos() {
     viewDocumentOpeningId,
     viewPlanejamentoMetricas,
     viewPlanejamentoLocalizacoes,
+    viewPlanejamentoMetricasAviso,
+    viewPlanejamentoMetricasPending,
     closeViewDocument: () => {
+      // Invalida o pedido em curso e limpa busy — senao o olho fica disabled («bloqueio»).
       viewDocumentoSeqRef.current += 1;
       setViewDocument(null);
       setViewDocumentLoading(false);
+      setViewDocumentOpeningId(null);
       setViewPlanejamentoMetricas(new Map());
       setViewPlanejamentoLocalizacoes(new Map());
+      setViewPlanejamentoMetricasAviso(null);
+      setViewPlanejamentoMetricasPending(false);
     },
     visualizarPlanejamentoBusyId,
     visualizarPlanejamentoDireto: async (item: DocumentoListItem) => {
@@ -745,22 +1129,140 @@ export function useDocumentos() {
         setVisualizarPlanejamentoBusyId(null);
       }
     },
+    /**
+     * PDF/impressão: usar o que já está no modal.
+     * Não voltar a esperar 8–12s de métricas só porque houve aviso —
+     * isso tornava «Pré-visualizar» inutilizável.
+     */
+    ensureViewPlanejamentoMetricas: async (documento: Documento) => {
+      const codes = documento.itens.map((it) => it.codigoMaterial).filter(Boolean);
+      if (!viewPlanejamentoMetricasPending) {
+        if (viewPlanejamentoMetricas.size > 0 || viewPlanejamentoMetricasAviso) {
+          return {
+            metricas: viewPlanejamentoMetricas,
+            localizacoesRecebimentoPorCodigo: viewPlanejamentoLocalizacoes,
+            metricasAviso: viewPlanejamentoMetricasAviso,
+          };
+        }
+      }
+      setViewPlanejamentoMetricasPending(true);
+      try {
+        const met = await Promise.race([
+          carregarMetricasPlanejamentoVisualizacao(codes),
+          new Promise<never>((_, rej) => {
+            setTimeout(() => rej(new Error('metricas-ensure-timeout')), 8_000);
+          }),
+        ]);
+        setViewPlanejamentoMetricas(met.metricas);
+        setViewPlanejamentoLocalizacoes(met.localizacoesRecebimentoPorCodigo);
+        setViewPlanejamentoMetricasAviso(met.metricasAviso ?? null);
+        if (met.metricas.size > 0) {
+          setViewDocument((prev) => (prev ? documentoComStatusDasLinhas(prev, met.metricas) : prev));
+        }
+        return {
+          metricas: met.metricas,
+          localizacoesRecebimentoPorCodigo: met.localizacoesRecebimentoPorCodigo,
+          metricasAviso: met.metricasAviso ?? null,
+        };
+      } catch {
+        // Não bloquear PDF com aviso vermelho se já temos mapa — só reutilizar.
+        return {
+          metricas: viewPlanejamentoMetricas,
+          localizacoesRecebimentoPorCodigo: viewPlanejamentoLocalizacoes,
+          metricasAviso: viewPlanejamentoMetricasAviso,
+        };
+      } finally {
+        setViewPlanejamentoMetricasPending(false);
+      }
+    },
     openViewDocumento: async (item: DocumentoListItem) => {
       if (viewDocumentOpeningId === item.id && viewDocumentLoading) return;
       const seq = ++viewDocumentoSeqRef.current;
       setError('');
       setViewDocumentOpeningId(item.id);
+      setViewDocument(null);
+      setViewPlanejamentoMetricas(new Map());
+      setViewPlanejamentoLocalizacoes(new Map());
+      setViewPlanejamentoMetricasAviso(null);
+      setViewPlanejamentoMetricasPending(false);
       setViewDocumentLoading(true);
       try {
-        const result = await carregarDocumentoPlanejamentoParaVisualizacao(item.id);
+        // 1) Documento ja; 2) metricas em segundo plano — EXE nao fica 20s em «A carregar…».
+        const result = await carregarDocumentoPlanejamentoParaVisualizacao(item.id, undefined, {
+          deferMetricas: true,
+        });
         if (seq !== viewDocumentoSeqRef.current) return;
         if (!result.success || !result.data) {
           setError(result.error ?? 'Nao foi possivel carregar o documento.');
           return;
         }
         setViewDocument(result.data.documento);
-        setViewPlanejamentoMetricas(result.data.metricas);
-        setViewPlanejamentoLocalizacoes(result.data.localizacoesRecebimentoPorCodigo);
+        setViewDocumentLoading(false);
+        setViewDocumentOpeningId(null);
+
+        if (result.data.metricasPending) {
+          const codes = result.data.documento.itens.map((it) => it.codigoMaterial).filter(Boolean);
+          // Semente das linhas + memoria → status correcto já (Atendido sem esperar nuvem).
+          const semente = metricasSementeDoDocumento(result.data.documento);
+          const fromMem = peekMetricasPlanejamentoMemoria(codes);
+          const seeded = fundirMetricasPlanejamento(semente, fromMem);
+          let temMetricas = seeded.size > 0;
+          if (temMetricas) {
+            setViewPlanejamentoMetricas(seeded);
+            setViewDocument((prev) => (prev ? documentoComStatusDasLinhas(prev, seeded) : prev));
+          }
+          // Nao bloquear UI com «A actualizar…» se ja ha status util.
+          setViewPlanejamentoMetricasPending(false);
+          void carregarLocalizacoesPlanejamentoVisualizacao(codes).then((locs) => {
+            if (seq !== viewDocumentoSeqRef.current) return;
+            setViewPlanejamentoLocalizacoes(locs);
+          });
+          const applyMet = (metricas: Map<string, MetricasPorCodigoMaterial>, aviso?: string | null) => {
+            if (seq !== viewDocumentoSeqRef.current) return;
+            if (metricas.size > 0) {
+              const merged = fundirMetricasPlanejamento(seeded, metricas);
+              temMetricas = true;
+              setViewPlanejamentoMetricas(merged);
+              setViewDocument((prev) => (prev ? documentoComStatusDasLinhas(prev, merged) : prev));
+              setViewPlanejamentoMetricasAviso(null);
+              setViewPlanejamentoMetricasPending(false);
+              return;
+            }
+            // Sem mapa da nuvem: manter semente; aviso so se nem semente ajuda.
+            if (aviso && !temMetricas) setViewPlanejamentoMetricasAviso(aviso);
+            else setViewPlanejamentoMetricasAviso(null);
+          };
+          void carregarSoMetricasPlanejamentoVisualizacao(codes, {
+            onPartial: (partial) => applyMet(partial),
+          })
+            .then((met) => {
+              applyMet(met.metricas, met.metricasAviso ?? null);
+            })
+            .catch(() => {
+              if (seq !== viewDocumentoSeqRef.current) return;
+              // Mantem semente; sem banner vermelho se ja ha status das linhas.
+              if (!temMetricas) {
+                setViewPlanejamentoMetricasAviso(
+                  'Estoque da nuvem indisponivel de momento. Status pelas quantidades do documento.',
+                );
+              } else {
+                setViewPlanejamentoMetricasAviso(null);
+              }
+            })
+            .finally(() => {
+              if (seq === viewDocumentoSeqRef.current) {
+                setViewPlanejamentoMetricasPending(false);
+              }
+            });
+        } else {
+          setViewPlanejamentoMetricas(result.data.metricas);
+          setViewPlanejamentoLocalizacoes(result.data.localizacoesRecebimentoPorCodigo);
+          setViewPlanejamentoMetricasAviso(result.data.metricasAviso ?? null);
+        }
+      } catch {
+        if (seq === viewDocumentoSeqRef.current) {
+          setError('Nao foi possivel abrir o documento. Tente de novo.');
+        }
       } finally {
         if (seq === viewDocumentoSeqRef.current) {
           setViewDocumentLoading(false);
@@ -774,10 +1276,19 @@ export function useDocumentos() {
     importSnapshotConflict,
     importStaging,
     importingDocumentos,
+    importProgress,
+    lendoArquivoImportacao,
     importResultado,
+    setImportStagingCancelarRevisoes,
+    salvarRevisoesStaging,
+    salvarRevisoesBusy,
+    confirmarSalvarComOpcaoRevisoes,
+    cancelarSalvarRevisoesStaging,
     exportDocumentosCsvResumo,
     exportDocumentosCsvResumoFiltrado,
+    exportingDocumentosCsv,
     openImportDocumentosPicker,
+    openAtualizarDescricoesPicker,
     downloadModeloCsvImportacaoDocumentos,
     stageImportDocumentosFromFile,
     cancelImportDocumentosStaging,

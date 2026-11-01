@@ -4,16 +4,15 @@ import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
   listInventariosPageFromCloud,
   readInventarioFromCloud,
-  syncInventariosFromSnapshot,
-  upsertInventariosEmLotes,
+  writeInventariosSotOnCloud,
 } from '../../../lib/inventariosTabelas';
-import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
 import {
-  commitIsoProSnapshotPatch,
+  invalidateIsoProSnapshotCache,
+  isIsoProSnapshotConflictError,
   readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
-import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import {
   REMOTE_READ_PREFER_MS,
@@ -25,16 +24,66 @@ import type { PaginatedResult, ServiceResult } from '../../../types/common.types
 import type { Inventario, InventarioFiltro, InventarioFormData, InventarioListItem } from '../types/inventario.types';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { parseInventariosPersistidos } from '../schemas/inventarioPersistido.zod';
+import { getCurrentUser } from '../../auth/services/auth.service';
+import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 
 function inventariosStorageKey(): string {
   return getScopedIsoProStorageKey('iso-pro-desktop-inventarios');
 }
 
-function bloqueioLocalInventarios(tamanhoListaGravacao: number, nuvemJaTinhaDados: boolean): string | null {
-  if (!nuvemJaTinhaDados) return null;
-  return mensagemSeSubstituirLocalPerderiaCadastros([
-    { storageKey: inventariosStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'inventario(s)' },
-  ]);
+function resumoAuditoriaInventario(
+  inv: Pick<
+    Inventario,
+    'id' | 'codigo' | 'descricao' | 'responsavel' | 'dataInventario' | 'status' | 'contagemMobileHabilitada' | 'itens'
+  >,
+) {
+  return {
+    id: inv.id,
+    codigo: inv.codigo,
+    descricao: inv.descricao,
+    responsavel: inv.responsavel,
+    dataInventario: inv.dataInventario,
+    status: inv.status,
+    contagemMobileHabilitada: inv.contagemMobileHabilitada,
+    totalItens: inv.itens?.length ?? 0,
+    divergencias: (inv.itens ?? []).filter((it) => it.quantidadeContada !== it.saldoSistema).length,
+  };
+}
+
+function auditarInventarioSalvo(before: Inventario | undefined, after: Inventario) {
+  const actorLogin = getCurrentUser()?.login?.trim() || 'desconhecido';
+  if (before) {
+    appendAuthAuditEvent({
+      type: 'inventario_editado',
+      actorLogin,
+      detail: `Inventario editado ${after.codigo} (${after.descricao})`,
+      entityType: 'inventario',
+      entityId: after.id,
+      before: resumoAuditoriaInventario(before),
+      after: resumoAuditoriaInventario(after),
+    });
+    return;
+  }
+  appendAuthAuditEvent({
+    type: 'inventario_criado',
+    actorLogin,
+    detail: `Inventario criado ${after.codigo} (${after.descricao}) · ${after.itens?.length ?? 0} item(ns)`,
+    entityType: 'inventario',
+    entityId: after.id,
+    after: resumoAuditoriaInventario(after),
+  });
+}
+
+function auditarInventarioFechado(before: Inventario, after: Inventario) {
+  appendAuthAuditEvent({
+    type: 'inventario_fechado',
+    actorLogin: getCurrentUser()?.login?.trim() || 'desconhecido',
+    detail: `Inventario fechado ${after.codigo} (${after.descricao})`,
+    entityType: 'inventario',
+    entityId: after.id,
+    before: resumoAuditoriaInventario(before),
+    after: resumoAuditoriaInventario(after),
+  });
 }
 
 const seedData: Inventario[] = [
@@ -91,9 +140,20 @@ const seedData: Inventario[] = [
   },
 ];
 
+const DEMO_INVENTARIO_IDS = new Set(seedData.map((i) => i.id));
+
+function isSomenteSeedDemo(items: Inventario[]): boolean {
+  return items.length > 0 && items.every((i) => DEMO_INVENTARIO_IDS.has(i.id));
+}
+
+function localInventariosPareceSeedOuVazio(items: Inventario[]): boolean {
+  return items.length === 0 || isSomenteSeedDemo(items);
+}
+
 function readAll(): Inventario[] {
   const raw = localStorage.getItem(inventariosStorageKey());
   if (!raw) {
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(inventariosStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
@@ -103,6 +163,10 @@ function readAll(): Inventario[] {
     const validated = parseInventariosPersistidos(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Inventario', inventariosStorageKey());
+      return [];
+    }
+    if (hasSupabaseConfig() && isSomenteSeedDemo(validated)) {
+      localStorage.removeItem(inventariosStorageKey());
       return [];
     }
     return validated;
@@ -118,7 +182,7 @@ function writeAll(items: Inventario[]) {
 
 /**
  * Leitura para listagem, detalhe e exportacao.
- * Web: prioriza nuvem com SWR (nao bloqueia 15s). Desktop: local ja; sync suave em fundo.
+ * Com Supabase: prioriza nuvem; se local vazio/seed, espera timeout completo (evita demos na UI/save).
  */
 async function loadInventarios(): Promise<Inventario[]> {
   if (!hasSupabaseConfig()) return readAll();
@@ -135,18 +199,21 @@ async function loadInventarios(): Promise<Inventario[]> {
     return readAll();
   }
 
+  const localNow = readAll();
+  const preferMs = localInventariosPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallback = await withLocalFallback({
     shouldTryRemote: true,
     loadRemote: async () => {
       const remote = await readSnapshotInventarios();
-      if (remote.length > 0) {
+      // Nuvem vazia: nao promover seed demo. Espelhar [] limpa demos locais.
+      if (remote.length > 0 || localInventariosPareceSeedOuVazio(localNow)) {
         writeAll(remote);
-        return remote;
       }
-      return readAll();
+      return remote;
     },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar inventarios no Supabase.',
+    preferMs,
   });
   return fallback.data;
 }
@@ -170,22 +237,6 @@ export function listarInventariosLocalSync(
     items: items.slice(start, end).map(toListItem),
     total: items.length,
   };
-}
-
-/** Base para criar/editar/fechar: nuvem quando existir; senao lista local (evita gravar [] por cima do que o operador ve no PC). */
-async function readInventariosParaMutacao(): Promise<{ items: Inventario[]; nuvemJaTinhaDados: boolean }> {
-  if (!hasSupabaseConfig()) {
-    return { items: readAll(), nuvemJaTinhaDados: false };
-  }
-  try {
-    const remote = await readSnapshotInventarios();
-    if (remote.length > 0) {
-      return { items: remote, nuvemJaTinhaDados: true };
-    }
-  } catch {
-    /* fallback local abaixo */
-  }
-  return { items: readAll(), nuvemJaTinhaDados: false };
 }
 
 function normalizeLookupValue(value: string) {
@@ -237,42 +288,114 @@ async function readSnapshotInventarios(): Promise<Inventario[]> {
   }));
 }
 
-async function writeSnapshotInventarios(items: Inventario[]): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['inventarios']);
-    const inventarios = items.map((item) => ({
-      id: item.id,
-      codigo: item.codigo,
-      descricao: item.descricao,
-      responsavel: item.responsavel,
-      dataInventario: item.dataInventario,
-      status: item.status,
-      contagemMobileHabilitada: item.contagemMobileHabilitada,
-      observacoes: item.observacoes,
-      itens: item.itens.map((invItem) => ({
-        id: invItem.id,
-        codigoMaterial: invItem.codigoMaterial,
-        descricaoMaterial: invItem.descricaoMaterial,
-        unidade: invItem.unidade,
-        saldoSistema: invItem.saldoSistema,
-        quantidadeContada: invItem.quantidadeContada,
-        localizacaoContada: invItem.localizacaoContada ?? '',
-      })),
-    }));
-    const dataAtualizacao = new Date().toISOString();
-    return {
-      baselineUpdatedAt,
-      // Lista completa + merge-by-id: alinhado ao mobile; evita wipe se um writer
-      // futuro enviar delta parcial sem substituir a chave inteira.
-      mergeKeys: ['inventarios'] as const,
-      patch: { inventarios, dataAtualizacao },
-      patchWithoutMerge: { inventarios, dataAtualizacao },
-    };
+function inventariosToSnapshotWire(items: Inventario[]) {
+  return items.map((item) => ({
+    id: item.id,
+    codigo: item.codigo,
+    descricao: item.descricao,
+    responsavel: item.responsavel,
+    dataInventario: item.dataInventario,
+    status: item.status,
+    contagemMobileHabilitada: item.contagemMobileHabilitada,
+    observacoes: item.observacoes,
+    itens: item.itens.map((invItem) => ({
+      id: invItem.id,
+      codigoMaterial: invItem.codigoMaterial,
+      descricaoMaterial: invItem.descricaoMaterial,
+      unidade: invItem.unidade,
+      saldoSistema: invItem.saldoSistema,
+      quantidadeContada: invItem.quantidadeContada,
+      localizacaoContada: invItem.localizacaoContada ?? '',
+    })),
+  }));
+}
+
+/**
+ * SoT table-first: `iso_pro_write_inventarios_sot` (upsert / remove / replace_all).
+ * Preferir upsert de 1 inventario — nunca replace_all no fluxo normal (100k-safe).
+ */
+export type SnapshotInventariosWrite =
+  | { upsert: Inventario[] }
+  | { replaceAll: Inventario[] }
+  | { removeIds: string[] };
+
+async function writeSnapshotInventarios(write: SnapshotInventariosWrite): Promise<void> {
+  const maxAttempts = 5;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['inventarios']);
+      const sot = await writeInventariosSotOnCloud({
+        baselineUpdatedAt,
+        upsert: 'upsert' in write ? inventariosToSnapshotWire(write.upsert) : null,
+        removeIds: 'removeIds' in write ? write.removeIds : null,
+        replaceAll: 'replaceAll' in write ? inventariosToSnapshotWire(write.replaceAll) : null,
+      });
+      assertNoSilentSotFallback('inventarios', sot.missing);
+      invalidateIsoProSnapshotCache();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar inventarios na nuvem.');
+}
+
+function mapCloudRowToInventario(row: Record<string, unknown>, fallbackId: string): Inventario {
+  const statusRaw = String(row.status ?? 'aberto');
+  const status = (
+    statusRaw === 'fechado' || statusRaw === 'cancelado' ? statusRaw : 'aberto'
+  ) as Inventario['status'];
+  const itensRaw = Array.isArray(row.itens) ? row.itens : [];
+  const id = String(row.id ?? fallbackId);
+  return {
+    id,
+    codigo: String(row.codigo ?? ''),
+    descricao: String(row.descricao ?? ''),
+    responsavel: String(row.responsavel ?? ''),
+    dataInventario: String(row.dataInventario ?? new Date().toISOString().slice(0, 10)),
+    status,
+    contagemMobileHabilitada: Boolean(row.contagemMobileHabilitada),
+    observacoes: String(row.observacoes ?? ''),
+    itens: itensRaw.map((raw, itemIndex) => {
+      const item = raw as Record<string, unknown>;
+      return {
+        id: String(item.id ?? `${id}-item-${itemIndex + 1}`),
+        codigoMaterial: String(item.codigoMaterial ?? ''),
+        descricaoMaterial: String(item.descricaoMaterial ?? ''),
+        unidade: String(item.unidade ?? 'UN'),
+        saldoSistema: Number(item.saldoSistema ?? 0),
+        quantidadeContada: Number(item.quantidadeContada ?? 0),
+        localizacaoContada: String(item.localizacaoContada ?? '').trim(),
+      };
+    }),
+  };
+}
+
+/** Duplicata de codigo sem baixar fatia inventarios[] completa. */
+async function existeInventarioCodigoNasTabelas(
+  codigo: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const page = await listInventariosPageFromCloud({
+    busca: codigo.trim(),
+    offset: 0,
+    limit: 20,
+    status: 'todos',
   });
-  await runDualWriteBestEffort('inventarios', async () => {
-    const sync = await syncInventariosFromSnapshot();
-    if (sync.ok) return sync;
-    return upsertInventariosEmLotes(items);
+  if (page.error || page.source !== 'tables') return false;
+  const want = normalizeLookupValue(codigo);
+  return page.inventarios.some((row) => {
+    const id = String(row.id ?? '');
+    if (excludeId && id === excludeId) return false;
+    return normalizeLookupValue(String(row.codigo ?? '')) === want;
   });
 }
 
@@ -367,9 +490,14 @@ function validateInventarioForClosing(item: Inventario): string | null {
 export async function listarInventarios(
   filtro: InventarioFiltro,
 ): Promise<ServiceResult<PaginatedResult<InventarioListItem>>> {
-  const localPage = listarInventariosLocalSync(filtro);
+  const localNow = readAll();
+  const localPareceSeed = localInventariosPareceSeedOuVazio(localNow);
+  // Com Supabase, nao servir demos na 1.a pintura enquanto a nuvem responde.
+  const localPage = localPareceSeed && hasSupabaseConfig()
+    ? { items: [] as InventarioListItem[], total: 0 }
+    : listarInventariosLocalSync(filtro);
 
-  // Desktop / offline: local imediato
+  // Offline: local imediato
   if (!shouldTryRemoteRead()) {
     if (hasSupabaseConfig()) {
       void withRemoteReadTimeout(
@@ -395,8 +523,9 @@ export async function listarInventarios(
     };
   }
 
-  // Web: SWR — nuvem se responder rapido; senao local em ~450ms
+  // SWR — se local vazio/seed, esperar a nuvem (timeout completo)
   if (hasSupabaseConfig()) {
+    const preferMs = localPareceSeed ? REMOTE_READ_TIMEOUT_MS : REMOTE_READ_PREFER_MS;
     const cloudPromise = withRemoteReadTimeout(
       () =>
         listInventariosPageFromCloud({
@@ -411,7 +540,7 @@ export async function listarInventarios(
     const raced = await Promise.race([
       cloudPromise.then((page) => ({ kind: 'cloud' as const, page })),
       new Promise<{ kind: 'prefer' }>((resolve) => {
-        setTimeout(() => resolve({ kind: 'prefer' }), REMOTE_READ_PREFER_MS);
+        setTimeout(() => resolve({ kind: 'prefer' }), preferMs);
       }),
     ]);
 
@@ -507,29 +636,48 @@ export async function salvarInventario(
 ): Promise<ServiceResult<Inventario>> {
   if (hasSupabaseConfig()) {
     try {
-      const { items, nuvemJaTinhaDados } = await readInventariosParaMutacao();
       const normalized = normalizeInventarioPayload(payload);
       const validationError = validateInventario(normalized);
       if (validationError) return { success: false, error: validationError };
-      const duplicated = items.find(
-        (item) => item.id !== currentId && normalizeLookupValue(item.codigo) === normalizeLookupValue(normalized.codigo),
-      );
-      if (duplicated) return { success: false, error: 'Ja existe um inventario com esse codigo.' };
+
+      // 100k-safe: duplicata via pagina + upsert de 1 — sem fatia/replace-all.
+      if (await existeInventarioCodigoNasTabelas(normalized.codigo, currentId)) {
+        return { success: false, error: 'Ja existe um inventario com esse codigo.' };
+      }
+
+      const localItems = readAll();
 
       if (currentId) {
-        const index = items.findIndex((item) => item.id === currentId);
-        if (index === -1) return { success: false, error: 'Inventario nao encontrado.' };
-        if (items[index].status !== 'aberto') return { success: false, error: 'Apenas inventarios em aberto podem ser editados.' };
-        items[index] = { ...items[index], ...normalized };
-        const bloqueioEdit = bloqueioLocalInventarios(items.length, nuvemJaTinhaDados);
-        if (bloqueioEdit) return { success: false, error: bloqueioEdit };
-        return executeWrite({
+        const cloud = await readInventarioFromCloud(currentId);
+        let existing: Inventario | undefined =
+          cloud.inventario != null
+            ? mapCloudRowToInventario(cloud.inventario, currentId)
+            : undefined;
+        if (!existing) {
+          const local = localItems.find((item) => item.id === currentId);
+          // Nao promover seed demo quando a nuvem nao tem o inventario.
+          if (local && !isSomenteSeedDemo(localItems)) existing = local;
+        }
+        if (!existing) return { success: false, error: 'Inventario nao encontrado.' };
+        if (existing.status !== 'aberto') {
+          return { success: false, error: 'Apenas inventarios em aberto podem ser editados.' };
+        }
+        const before = { ...existing };
+        const updated: Inventario = { ...existing, ...normalized };
+        const nextLocal = localItems.some((x) => x.id === currentId)
+          ? localItems.map((x) => (x.id === currentId ? updated : x))
+          : [...localItems, updated];
+        const writeResult = await executeWrite({
           shouldWriteRemote: true,
-          writeRemote: () => writeSnapshotInventarios(items),
-          writeLocal: () => writeAll(items),
-          successData: items[index],
+          writeRemote: () => writeSnapshotInventarios({ upsert: [updated] }),
+          writeLocal: () => writeAll(nextLocal),
+          successData: updated,
           fallbackMessage: 'Falha ao salvar inventario no Supabase.',
         });
+        if (writeResult.success && writeResult.data) {
+          auditarInventarioSalvo(before, writeResult.data);
+        }
+        return writeResult;
       }
 
       const created: Inventario = {
@@ -537,16 +685,18 @@ export async function salvarInventario(
         status: 'aberto',
         ...normalized,
       };
-      items.push(created);
-      const bloqueioNovo = bloqueioLocalInventarios(items.length, nuvemJaTinhaDados);
-      if (bloqueioNovo) return { success: false, error: bloqueioNovo };
-      return executeWrite({
+      const nextLocal = [...localItems, created];
+      const writeResult = await executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotInventarios(items),
-        writeLocal: () => writeAll(items),
+        writeRemote: () => writeSnapshotInventarios({ upsert: [created] }),
+        writeLocal: () => writeAll(nextLocal),
         successData: created,
         fallbackMessage: 'Falha ao salvar inventario no Supabase.',
       });
+      if (writeResult.success && writeResult.data) {
+        auditarInventarioSalvo(undefined, writeResult.data);
+      }
+      return writeResult;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao salvar inventario no Supabase.' };
     }
@@ -565,8 +715,10 @@ export async function salvarInventario(
     const index = items.findIndex((item) => item.id === currentId);
     if (index === -1) return { success: false, error: 'Inventario nao encontrado.' };
     if (items[index].status !== 'aberto') return { success: false, error: 'Apenas inventarios em aberto podem ser editados.' };
+    const before = { ...items[index] };
     items[index] = { ...items[index], ...normalized };
     writeAll(items);
+    auditarInventarioSalvo(before, items[index]);
     return { success: true, data: items[index] };
   }
 
@@ -578,29 +730,40 @@ export async function salvarInventario(
 
   items.push(created);
   writeAll(items);
+  auditarInventarioSalvo(undefined, created);
   return { success: true, data: created };
 }
 
 export async function fecharInventario(id: string): Promise<ServiceResult<Inventario>> {
   if (hasSupabaseConfig()) {
     try {
-      const { items, nuvemJaTinhaDados } = await readInventariosParaMutacao();
-      const index = items.findIndex((item) => item.id === id);
-      if (index === -1) return { success: false, error: 'Inventario nao encontrado.' };
-      if (items[index].status === 'fechado') return { success: false, error: 'Inventario ja fechado.' };
-      if (items[index].status === 'cancelado') return { success: false, error: 'Inventario cancelado nao pode ser fechado.' };
-      const closingError = validateInventarioForClosing(items[index]);
+      const cloud = await readInventarioFromCloud(id);
+      const localItems = readAll();
+      const existing =
+        cloud.inventario != null
+          ? mapCloudRowToInventario(cloud.inventario, id)
+          : localItems.find((item) => item.id === id);
+      if (!existing) return { success: false, error: 'Inventario nao encontrado.' };
+      if (existing.status === 'fechado') return { success: false, error: 'Inventario ja fechado.' };
+      if (existing.status === 'cancelado') return { success: false, error: 'Inventario cancelado nao pode ser fechado.' };
+      const closingError = validateInventarioForClosing(existing);
       if (closingError) return { success: false, error: closingError };
-      items[index] = { ...items[index], status: 'fechado' };
-      const bloqueioFechar = bloqueioLocalInventarios(items.length, nuvemJaTinhaDados);
-      if (bloqueioFechar) return { success: false, error: bloqueioFechar };
-      return executeWrite({
+      const before = { ...existing };
+      const updated: Inventario = { ...existing, status: 'fechado' };
+      const nextLocal = localItems.some((x) => x.id === id)
+        ? localItems.map((x) => (x.id === id ? updated : x))
+        : [...localItems, updated];
+      const writeResult = await executeWrite({
         shouldWriteRemote: true,
-        writeRemote: () => writeSnapshotInventarios(items),
-        writeLocal: () => writeAll(items),
-        successData: items[index],
+        writeRemote: () => writeSnapshotInventarios({ upsert: [updated] }),
+        writeLocal: () => writeAll(nextLocal),
+        successData: updated,
         fallbackMessage: 'Falha ao fechar inventario no Supabase.',
       });
+      if (writeResult.success && writeResult.data) {
+        auditarInventarioFechado(before, writeResult.data);
+      }
+      return writeResult;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao fechar inventario no Supabase.' };
     }
@@ -613,8 +776,10 @@ export async function fecharInventario(id: string): Promise<ServiceResult<Invent
   if (items[index].status === 'cancelado') return { success: false, error: 'Inventario cancelado nao pode ser fechado.' };
   const closingError = validateInventarioForClosing(items[index]);
   if (closingError) return { success: false, error: closingError };
+  const before = { ...items[index] };
   items[index] = { ...items[index], status: 'fechado' };
   writeAll(items);
+  auditarInventarioFechado(before, items[index]);
   return { success: true, data: items[index] };
 }
 

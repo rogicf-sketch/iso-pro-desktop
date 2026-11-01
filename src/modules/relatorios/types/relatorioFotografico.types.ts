@@ -20,7 +20,7 @@ export type RelatorioFotograficoFoto = {
   mostrarLegendaImpressao: boolean;
 };
 
-/** Bloco de assinatura / visto digital no PDF. */
+/** Bloco de assinatura no PDF (mesmo padrão do RIR: linha + função + nome + data). */
 export type RelatorioFotograficoAssinatura = {
   nome: string;
   /** Data ISO ou texto livre (ex. 21/07/2026 08:20). */
@@ -55,7 +55,7 @@ export type RelatorioFotograficoPayload = {
   localObra: string;
   /** Incluir logo institucional na primeira página do PDF/impressão. */
   incluirLogoImpressao: boolean;
-  /** Incluir bloco de assinaturas / visto digital no final do PDF. */
+  /** Incluir bloco de assinaturas no final do PDF (padrão RIR). */
   incluirAssinaturasImpressao: boolean;
   assinaturaRecebimento: RelatorioFotograficoAssinatura;
   assinaturaQualidade: RelatorioFotograficoAssinatura;

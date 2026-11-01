@@ -6,8 +6,11 @@ import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { Select } from '../../../components/ui/Select';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { ResourceEditLockBanner } from '../../../components/ui/ResourceEditLockBanner';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
+import { useResourceEditLock } from '../../../hooks/useResourceEditLock';
 import { colaboradoresElegiveisAssinaturaRir, listarColaboradores } from '../../colaboradores/services/colaboradores.service';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { buscarRecebimentoPorId } from '../../recebimentos/services/recebimentos.service';
 import type { Recebimento } from '../../recebimentos/types/recebimento.types';
@@ -76,7 +79,16 @@ export function RirForm({
   onPreview,
   onAbrirRirExistente,
 }: Props) {
+  const { user, canAccessAction } = useAuth();
   const [form, setForm] = useState<RirFormData>(initialValue);
+  const editLock = useResourceEditLock({
+    kind: 'rir',
+    resourceId: editId,
+    enabled: Boolean(editId?.trim()),
+    holderLogin: user?.login,
+    holderLabel: user?.nome ?? user?.login,
+    canForceRelease: canAccessAction('usuarios', 'administrar'),
+  });
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const disciplinaSugerida = useMemo(
@@ -237,14 +249,29 @@ export function RirForm({
     setRecSearch('');
   }
 
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (savingRef.current) return;
     setError('');
     setSnapshotConflict(false);
-    const result = await onSubmit(form);
-    if (!result.success) {
-      setError(result.error ?? 'Nao foi possivel salvar o RIR.');
-      setSnapshotConflict(result.meta?.snapshotConflict === true);
+    if (!(await editLock.ensureClaim())) {
+      setError(editLock.aviso || 'RIR em uso por outro posto.');
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const result = await onSubmit(form);
+      if (!result.success) {
+        setError(result.error ?? 'Nao foi possivel salvar o RIR.');
+        setSnapshotConflict(result.meta?.snapshotConflict === true);
+      }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   }
 
@@ -385,8 +412,9 @@ export function RirForm({
             {avisoRirDuplicado && avisoRirDuplicado.length > 0 ? (
               <div className="rir-duplicado-banner" role="status">
                 <p>
-                  <strong>Atenção:</strong> já existe relatório RIR para este recebimento:{' '}
-                  {avisoRirDuplicado.map((r) => r.codigo).join(', ')}. Evite duplicar salvo exceção documentada.
+                  <strong>Já existe RIR para esta NF:</strong>{' '}
+                  {avisoRirDuplicado.map((r) => r.codigo).join(', ')}. O sistema bloqueia um segundo relatório
+                  ativo — abra o existente ou cancele-o antes.
                 </p>
                 {onAbrirRirExistente ? (
                   <div className="rir-duplicado-banner-actions">
@@ -850,6 +878,16 @@ export function RirForm({
       </section>
 
       <SnapshotConflictHint onReload={onReloadAfterConflict} show={snapshotConflict} />
+      {editLock.bloqueado || editLock.aviso ? (
+        <ResourceEditLockBanner
+          aviso={editLock.aviso}
+          canForceRelease={canAccessAction('usuarios', 'administrar')}
+          forcing={editLock.forcing}
+          onForceRelease={() => {
+            void editLock.forceRelease();
+          }}
+        />
+      ) : null}
       {error ? <div className="error-box">{error}</div> : null}
       <div className="form-actions">
         <Button onClick={guardedCancel} type="button" variant="ghost">
@@ -858,7 +896,9 @@ export function RirForm({
         <Button onClick={() => preview()} type="button" variant="ghost">
           Visualizar
         </Button>
-        <Button type="submit">Salvar RIR</Button>
+        <Button disabled={editLock.bloqueado || saving} type="submit">
+          {saving ? 'A guardar…' : 'Salvar RIR'}
+        </Button>
       </div>
     </form>
   );

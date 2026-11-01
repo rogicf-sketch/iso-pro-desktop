@@ -1,12 +1,33 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
 import { normalizarUrlAssetPublicParaAmbiente } from '../../../lib/logoInstitucional';
+import {
+  LOGO_ZOOM_PCT_FABRICA,
+  LOGO_ZOOM_PCT_MAX,
+  LOGO_ZOOM_PCT_MIN,
+  LOGO_ZOOM_PCT_PADRAO,
+  medirAspectoLogoUrl,
+  normalizarLogoInstitucionalZoomPct,
+  recortarMargensLogoDataUrl,
+} from '../../../lib/logoInstitucionalAjuste';
+import { ehLogoInstitucionalPadraoFabrica } from '../utils/configReciboMobileSnapshot';
+import {
+  dimensoesLogoInstitucionalHtml,
+  LOGO_INSTITUCIONAL_FORMATOS,
+  LOGO_INSTITUCIONAL_TAMANHOS,
+  resolverFormatoQuadroEfetivo,
+  rotuloLogoInstitucionalFormato,
+  rotuloLogoInstitucionalTamanho,
+  type LogoInstitucionalFormatoQuadro,
+  type LogoInstitucionalTamanhoRelatorio,
+} from '../../../lib/logoInstitucionalTamanho';
 import { Button } from '../../../components/ui/Button';
-import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
 import { logout as authLogout, verifyCurrentUserPassword } from '../../auth/services/auth.service';
@@ -15,6 +36,7 @@ import { ConfiguracaoRelatorioFinalIaPanel } from '../components/ConfiguracaoRel
 import { ConfiguracaoAlertaEstoqueEmailPanel } from '../components/ConfiguracaoAlertaEstoqueEmailPanel';
 import { ConfiguracaoAlertaOperacionalEmailPanel } from '../components/ConfiguracaoAlertaOperacionalEmailPanel';
 import { ConfiguracaoBackupOraclePanel } from '../components/ConfiguracaoBackupOraclePanel';
+import { ConfiguracaoCriarTenantPanel } from '../components/ConfiguracaoCriarTenantPanel';
 import { ConfiguracaoMfaPanel } from '../components/ConfiguracaoMfaPanel';
 import { ConfiguracaoSentryPanel } from '../components/ConfiguracaoSentryPanel';
 import { ConfiguracoesSecaoIntro } from '../components/ConfiguracoesSecaoIntro';
@@ -37,16 +59,7 @@ import { executarLimpezaLocalFabricaIsoPro } from '../services/fabricaLimpezaLoc
 import { executarLimpezaCadastrosLocal } from '../services/limpezaCadastrosLocal.service';
 import { executarPurgeCadastrosNuvem } from '../services/purgeCadastrosNuvem.service';
 import { executarPurgeNuvemIsoPro } from '../services/purgeNuvemIsoPro.service';
-import {
-  adicionarAmbienteObra,
-  aplicarAmbienteAtivoERecarregar,
-  getScopedIsoProStorageKey,
-  readEstadoAmbientes,
-  removerAmbienteObra,
-  resumoCentroCustoAmbiente,
-  type IsoProCentroCustoAmbiente,
-} from '../../../lib/isoProAmbiente';
-import { aplicarCentroCustoInicialNoAmbiente } from '../services/configuracoes.service';
+import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import {
   aplicarTenantAtivoERecarregar,
   carregarListaTenantsNuvem,
@@ -55,6 +68,14 @@ import {
 } from '../../../lib/isoProTenant';
 import { getSupabase, getSupabaseConfigDiagnostics, hasSupabaseConfig } from '../../../lib/supabase';
 import { labelTemaSistema, TEMAS_SISTEMA_OPCOES } from '../../../lib/temaSistema';
+import {
+  getSidebarMarcaEfetiva,
+  limparUsuarioSidebarMarcaPreferida,
+  readUsuarioSidebarMarcaPreferida,
+  salvarUsuarioSidebarMarcaPreferida,
+  SIDEBAR_MARCA_OPCOES,
+  type SidebarMarcaId,
+} from '../../../lib/sidebarMarca';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 import {
   aplicarTemaEfetivoNaSessao,
@@ -75,7 +96,6 @@ import {
 
 export function ConfiguracoesPage() {
   const { canAccessAction, user } = useAuth();
-  const { confirm } = useConfirmDialog();
   const {
     form,
     loading,
@@ -99,9 +119,20 @@ export function ConfiguracoesPage() {
     revogarLicencaDesktop,
     reativarLicencaDesktop,
     submit,
+    isDirty,
   } = useConfiguracoes();
   const canAdminister = canAccessAction('configuracoes', 'administrar');
   const secoesConfigVisiveis = useMemo(() => listarSecoesConfiguracaoVisiveis(canAdminister), [canAdminister]);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
 
   function chaveSecaoConfigStorage(): string {
     return getScopedIsoProStorageKey('iso-pro-config-secao-ativa-v1');
@@ -123,6 +154,8 @@ export function ConfiguracoesPage() {
   const [secaoAtiva, setSecaoAtiva] = useState<ConfiguracaoSecaoId>(lerSecaoConfigInicial);
   const secaoConfigMeta = useMemo(() => obterSecaoConfiguracao(secaoAtiva), [secaoAtiva]);
 
+  usePageChrome({ meta: secaoConfigMeta.rotulo }, [secaoConfigMeta.rotulo]);
+
   const mudarSecaoConfig = (id: ConfiguracaoSecaoId) => {
     setSecaoAtiva(id);
     if (typeof localStorage !== 'undefined') {
@@ -141,11 +174,22 @@ export function ConfiguracoesPage() {
   }, [canAdminister, secaoAtiva, secoesConfigVisiveis]);
   /** Força releitura de `readUsuarioTemaPreferido` após gravar ou limpar preferência. */
   const [temaPreferenciaTick, setTemaPreferenciaTick] = useState(0);
+  const [marcaPreferenciaTick, setMarcaPreferenciaTick] = useState(0);
   const temaPreferidoUsuario = useMemo(() => {
     void user?.login;
     void temaPreferenciaTick;
     return readUsuarioTemaPreferido();
   }, [user?.login, temaPreferenciaTick]);
+  const marcaSidebarEfetiva = useMemo(() => {
+    void user?.login;
+    void marcaPreferenciaTick;
+    return getSidebarMarcaEfetiva();
+  }, [user?.login, marcaPreferenciaTick]);
+  const marcaPreferidaUsuario = useMemo(() => {
+    void user?.login;
+    void marcaPreferenciaTick;
+    return readUsuarioSidebarMarcaPreferida();
+  }, [user?.login, marcaPreferenciaTick]);
   const temaEfetivoSessao = useMemo(() => {
     void form?.tema;
     void user?.login;
@@ -196,15 +240,6 @@ export function ConfiguracoesPage() {
   /** Purge na nuvem com utilizadores: mensagem na modal antes de terminar sessao. */
   const [nuvemFeitoMsg, setNuvemFeitoMsg] = useState('');
 
-  const [ambientesUi, setAmbientesUi] = useState(readEstadoAmbientes);
-  const [novoAmbienteNome, setNovoAmbienteNome] = useState('');
-  const [novoAmbienteCentro, setNovoAmbienteCentro] = useState<IsoProCentroCustoAmbiente>({
-    cliente: '',
-    projeto: '',
-    contrato: '',
-    local: '',
-  });
-  const [ambienteFormErro, setAmbienteFormErro] = useState('');
   const [tenantsNuvemCfg, setTenantsNuvemCfg] = useState<IsoProTenantListItem[]>([]);
   const [tenantCfgSelect, setTenantCfgSelect] = useState(() => getActiveTenantId());
   const [snapshotSaudeNuvem, setSnapshotSaudeNuvem] = useState<SnapshotSaudeNuvem | null>(null);
@@ -490,49 +525,47 @@ export function ConfiguracoesPage() {
   return (
     <div className="stack-grid">
       <div className="panel config-page">
-        <div className="panel-header">
-          <div>
-            <p className="panel-kicker">Administração</p>
-            <h2>Configurações do sistema</h2>
+        <div className="config-page__chrome">
+          {error ? <div className="error-box">{error}</div> : null}
+          {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
+          {info ? <OperationalNotice tone="success">{info}</OperationalNotice> : null}
+          {warning ? <OperationalNotice tone="warning">{warning}</OperationalNotice> : null}
+          <div ref={adminSucessoRef} role="status" aria-live="polite" tabIndex={-1}>
+            {cadastroLocalOk || cadastroNuvemOk || nuvemSucesso ? (
+              <OperationalNotice tone="success">
+                {cadastroLocalOk ? <p style={{ margin: '0 0 8px' }}>{cadastroLocalOk}</p> : null}
+                {cadastroNuvemOk ? <p style={{ margin: '0 0 8px' }}>{cadastroNuvemOk}</p> : null}
+                {nuvemSucesso ? <p style={{ margin: 0 }}>{nuvemSucesso}</p> : null}
+              </OperationalNotice>
+            ) : null}
           </div>
-        </div>
+          <p className="config-page__sensitive" role="note">
+            <strong>Área sensível</strong> — autenticação, nuvem, numeração e blindagem do executável.
+          </p>
 
-        <p className="config-page__lede panel-copy">
-          Parâmetros organizados por seção. Use a lista à esquerda para alternar; o botão <strong>Salvar configurações</strong> fica no topo.
-        </p>
-
-        {error ? <div className="error-box">{error}</div> : null}
-        {success ? <OperationalNotice>{success}</OperationalNotice> : null}
-        {info ? <OperationalNotice tone="success">{info}</OperationalNotice> : null}
-        {warning ? <OperationalNotice tone="warning">{warning}</OperationalNotice> : null}
-        <div ref={adminSucessoRef} role="status" aria-live="polite" tabIndex={-1}>
-          {cadastroLocalOk || cadastroNuvemOk || nuvemSucesso ? (
-            <OperationalNotice tone="success">
-              {cadastroLocalOk ? <p style={{ margin: '0 0 8px' }}>{cadastroLocalOk}</p> : null}
-              {cadastroNuvemOk ? <p style={{ margin: '0 0 8px' }}>{cadastroNuvemOk}</p> : null}
-              {nuvemSucesso ? <p style={{ margin: 0 }}>{nuvemSucesso}</p> : null}
+          {canAdminister ? (
+            <div className={`config-salvar-bar${isDirty ? ' config-salvar-bar--dirty' : ''}`}>
+              <p className="panel-copy">
+                {isDirty ? (
+                  <>
+                    <strong>Alterações por guardar</strong> · secção {secaoConfigMeta.rotulo}
+                  </>
+                ) : (
+                  <>Tudo guardado</>
+                )}
+              </p>
+              <Button disabled={!isDirty} onClick={submit}>
+                {isDirty ? 'Salvar configuracoes *' : 'Salvar configuracoes'}
+              </Button>
+            </div>
+          ) : (
+            <OperationalNotice>
+              Seu perfil pode visualizar Configurações básicas (Interface e Qualidade), mas nao altera parametros
+              administrativos. Pode ajustar o <strong>tema visível para mim</strong> na seção Interface — essa escolha é só
+              sua neste navegador. Para mudar a senha de acesso, use <strong>Alterar senha</strong> no topo.
             </OperationalNotice>
-          ) : null}
+          )}
         </div>
-        <div className="config-page__alert">
-          <OperationalNotice tone="warning">
-            Área sensível: alterações aqui impactam autenticação, integração na nuvem, numeração operacional e blindagem do executável.
-          </OperationalNotice>
-        </div>
-
-        {canAdminister ? (
-          <div className="config-salvar-bar config-salvar-bar--top">
-            <p className="panel-copy">
-              Grava obra, rodapé, tema, logo, qualidade, nuvem, desktop, alertas e IA. Mudar ambiente ou organização recarrega a pagina.
-            </p>
-            <Button onClick={submit}>Salvar configurações</Button>
-          </div>
-        ) : (
-          <OperationalNotice>
-            Seu perfil pode visualizar configuracoes, mas nao pode alterar parametros administrativos. Pode, no entanto, ajustar o{' '}
-            <strong>tema visível para mim</strong> na seção Interface — essa escolha é só sua neste navegador.
-          </OperationalNotice>
-        )}
 
         <div className="config-page__layout">
           <ConfiguracoesSecaoNav secaoAtiva={secaoAtiva} secoes={secoesConfigVisiveis} onSecao={mudarSecaoConfig} />
@@ -546,164 +579,17 @@ export function ConfiguracoesPage() {
           id="config-secao-obra"
           role="tabpanel"
         >
-        {canAdminister ? (
-          <div className="panel">
-            <div className="panel-header">
-              <div>
-                <p className="panel-kicker">Ambiente local</p>
-                <h2>Obra ou projeto neste PC</h2>
-              </div>
-            </div>
-            <p className="panel-copy">
-              Separa cadastros e dados guardados no navegador por obra. O ambiente <strong>Principal</strong> mantém as mesmas chaves de sempre
-              (compatível com dados já existentes). Ao mudar de ambiente, a aplicação recarrega. A nuvem Supabase é partilhada por todos os
-              ambientes desta instalação.
-            </p>
-            <div className="form-columns">
-              <Select
-                disabled={!canAdminister}
-                label="Ambiente activo"
-                onChange={(event) => {
-                  const nextId = event.target.value;
-                  if (nextId === ambientesUi.ativoId) return;
-                  aplicarAmbienteAtivoERecarregar(nextId);
-                }}
-                value={ambientesUi.ativoId}
-              >
-                {ambientesUi.ambientes.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.nome} ({a.id})
-                  </option>
-                ))}
-              </Select>
-              <Input
-                disabled={!canAdminister}
-                label="Nome da nova obra"
-                onChange={(event) => setNovoAmbienteNome(event.target.value)}
-                placeholder="Ex.: Obra 4358 — Norte"
-                value={novoAmbienteNome}
-              />
-              <p className="panel-copy" style={{ gridColumn: '1 / -1', margin: 0 }}>
-                <strong>Centro de custo</strong> (recomendado) — usado em RIR, relatórios e backup; pode alterar depois em «Dados gerais».
-              </p>
-              <Input
-                disabled={!canAdminister}
-                label="Cliente"
-                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, cliente: event.target.value }))}
-                placeholder="Ex.: Cliente ABC"
-                value={novoAmbienteCentro.cliente}
-              />
-              <Input
-                disabled={!canAdminister}
-                label="Projeto / obra"
-                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, projeto: event.target.value }))}
-                placeholder='Ex.: obra 55 ou "Cliente 01 - obra 55"'
-                value={novoAmbienteCentro.projeto}
-              />
-              <Input
-                disabled={!canAdminister}
-                label="Contrato"
-                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, contrato: event.target.value }))}
-                value={novoAmbienteCentro.contrato}
-              />
-              <Input
-                disabled={!canAdminister}
-                label="Local"
-                onChange={(event) => setNovoAmbienteCentro((c) => ({ ...c, local: event.target.value }))}
-                value={novoAmbienteCentro.local}
-              />
-              <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={!canAdminister}
-                  onClick={() => {
-                    if (!form) return;
-                    setNovoAmbienteCentro({
-                      cliente: form.cliente,
-                      projeto: form.projeto,
-                      contrato: form.contrato,
-                      local: form.local,
-                    });
-                  }}
-                >
-                  Copiar do centro de custo actual
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => {
-                    setAmbienteFormErro('');
-                    const criado = adicionarAmbienteObra(novoAmbienteNome, novoAmbienteCentro);
-                    if (!criado) {
-                      setAmbienteFormErro('Indique um nome para criar o ambiente.');
-                      return;
-                    }
-                    aplicarCentroCustoInicialNoAmbiente(criado.id, criado.centroCusto ?? novoAmbienteCentro);
-                    setNovoAmbienteNome('');
-                    setNovoAmbienteCentro({ cliente: '', projeto: '', contrato: '', local: '' });
-                    setAmbientesUi(readEstadoAmbientes());
-                  }}
-                >
-                  Criar ambiente
-                </Button>
-              </div>
-              {ambienteFormErro ? (
-                <div className="error-box" style={{ gridColumn: '1 / -1' }}>
-                  {ambienteFormErro}
-                </div>
-              ) : null}
-            </div>
-            <ul className="panel-copy" style={{ listStyle: 'disc', marginTop: 12, paddingLeft: 20 }}>
-              {ambientesUi.ambientes.map((a) => (
-                <li key={a.id} style={{ marginBottom: 8 }}>
-                  <strong>{a.nome}</strong>
-                  {resumoCentroCustoAmbiente(a.centroCusto) ? (
-                    <span style={{ display: 'block', marginTop: 4, opacity: 0.85 }}>
-                      Centro de custo: {resumoCentroCustoAmbiente(a.centroCusto)}
-                    </span>
-                  ) : null}
-                  {a.id !== 'padrao' ? (
-                    <>
-                      {' '}
-                      <Button
-                        type="button"
-                        variant="danger"
-                        onClick={async () => {
-                          if (
-                            !(await confirm({
-                              message: `Remover "${a.nome}"? Isto apaga os dados locais só desta obra neste PC (não altera a nuvem).`,
-                              danger: true,
-                            }))
-                          ) {
-                            return;
-                          }
-                          removerAmbienteObra(a.id);
-                          setAmbientesUi(readEstadoAmbientes());
-                        }}
-                      >
-                        Remover
-                      </Button>
-                    </>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
         {canAdminister && hasSupabaseConfig() ? (
           <div className="panel">
             <div className="panel-header">
               <div>
                 <p className="panel-kicker">Empresa na nuvem</p>
-                <h2>Organizações no mesmo Supabase</h2>
+                <h2>Criar e mudar de empresa</h2>
               </div>
             </div>
             <p className="panel-copy">
-              Cada linha em <code>iso_pro_tenants</code> é uma empresa ou organização: dados e utilizadores ficam isolados por{' '}
-              <code>tenant_id</code>. Ao aplicar outra organização, a página recarrega e a sessão é validada de novo para esse tenant.
-              Criar novas empresas faz-se na base (SQL com service role) até existir fluxo na app.
+              Cada empresa (organização) fica isolada na nuvem por <code>tenant_id</code>: dados, utilizadores e licenças.
+              Use <strong>Criar empresa</strong> para um cliente novo. Ao aplicar outra organização, a página recarrega.
             </p>
             <div className="form-columns">
               <Select
@@ -729,6 +615,16 @@ export function ConfiguracoesPage() {
                 </Button>
               </div>
             </div>
+            <ConfiguracaoCriarTenantPanel
+              canAdminister={canAdminister}
+              onCreated={(tenant) => {
+                setTenantsNuvemCfg((prev) => {
+                  if (prev.some((t) => t.id === tenant.id)) return prev;
+                  return [...prev, tenant].sort((a, b) => a.name.localeCompare(b.name, 'pt'));
+                });
+                setTenantCfgSelect(tenant.id);
+              }}
+            />
           </div>
         ) : null}
 
@@ -975,7 +871,7 @@ export function ConfiguracoesPage() {
           </div>
           <OperationalNotice>
             Backup Oracle (script <code>upload-backup-to-oci.ps1</code>): ao gravar estas configuracoes no desktop, o ficheiro de contexto e atualizado. No bucket, a estrutura fica{' '}
-            <strong>cliente → obra</strong>: pode usar só o nome curto da obra (ex. <code>obra 55</code>) — a pasta da obra passa a{' '}
+            <strong>cliente ? obra</strong>: pode usar só o nome curto da obra (ex. <code>obra 55</code>) — a pasta da obra passa a{' '}
             <code>Cliente - obra 55</code>. Para outra obra do mesmo cliente, altere <strong>Projeto / obra</strong>, guarde configuracoes e volte a exportar/enviar o backup.
           </OperationalNotice>
         </div>
@@ -1020,57 +916,26 @@ export function ConfiguracoesPage() {
           id="config-secao-aparencia"
           role="tabpanel"
         >
-        <div className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="panel-kicker">Interface</p>
-              <h2>Tema e preferências</h2>
-            </div>
-          </div>
-          <p className="panel-copy" style={{ marginBottom: 12 }}>
-            <strong>Tema neste utilizador:</strong> fica guardado neste navegador por login (e por ambiente de obra no PC). Não altera a
-            configuração central nem credenciais — só o aspeto da interface para si. Quem não escolhe nada segue o{' '}
-            <strong>tema padrão da instalação</strong> (abaixo, administradores).
-          </p>
-          <div className="form-columns">
-            <Select
-              label="Tema visível para mim"
-              onChange={(event) => {
-                const next = event.target.value as ConfiguracaoSistema['tema'];
-                salvarUsuarioTemaPreferido(next);
-                aplicarTemaEfetivoNaSessao();
-                setTemaPreferenciaTick((n) => n + 1);
-                setSuccess('Tema pessoal guardado neste equipamento.');
-              }}
-              value={temaEfetivoSessao}
-            >
-              {TEMAS_SISTEMA_OPCOES.map((opcao) => (
-                <option key={opcao.id} value={opcao.id}>
-                  {opcao.label}
-                </option>
-              ))}
-            </Select>
-            <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
-              <Button
-                type="button"
-                disabled={!temaPreferidoUsuario}
-                variant="ghost"
-                onClick={() => {
-                  limparUsuarioTemaPreferido();
+          <div className="config-group">
+            <h3 className="config-group__title">Tema e preferências</h3>
+            <ModuleHelp>
+              <p className="panel-copy">
+                <strong>Tema neste utilizador:</strong> fica guardado neste navegador por login. Não altera a
+                configuração central nem credenciais — só o aspeto da interface para si. Quem não escolhe nada segue o{' '}
+                <strong>tema padrão da instalação</strong> (abaixo, administradores).
+              </p>
+            </ModuleHelp>
+            <div className="form-columns">
+              <Select
+                label="Tema visível para mim"
+                onChange={(event) => {
+                  const next = event.target.value as ConfiguracaoSistema['tema'];
+                  salvarUsuarioTemaPreferido(next);
                   aplicarTemaEfetivoNaSessao();
                   setTemaPreferenciaTick((n) => n + 1);
-                  setSuccess('Passou a usar o tema padrão da instalação.');
+                  setSuccess('Tema pessoal guardado neste equipamento.');
                 }}
-              >
-                Usar tema da instalação (limpar escolha pessoal)
-              </Button>
-            </div>
-            {canAdminister ? (
-              <Select
-                disabled={!canAdminister}
-                label="Tema padrão da instalação"
-                onChange={(event) => setForm((current) => (current ? { ...current, tema: event.target.value as typeof form.tema } : current))}
-                value={form.tema}
+                value={temaEfetivoSessao}
               >
                 {TEMAS_SISTEMA_OPCOES.map((opcao) => (
                   <option key={opcao.id} value={opcao.id}>
@@ -1078,124 +943,399 @@ export function ConfiguracoesPage() {
                   </option>
                 ))}
               </Select>
-            ) : (
-              <div className="panel-copy" style={{ gridColumn: '1 / -1', opacity: 0.9 }}>
-                Tema padrão da instalação (referência): <strong>{labelTemaSistema(form.tema)}</strong> — apenas perfis com permissão de administrar configurações
-                podem alterar este valor ao gravar a ficha completa.
+              <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
+                <Button
+                  type="button"
+                  disabled={!temaPreferidoUsuario}
+                  variant="ghost"
+                  onClick={() => {
+                    limparUsuarioTemaPreferido();
+                    aplicarTemaEfetivoNaSessao();
+                    setTemaPreferenciaTick((n) => n + 1);
+                    setSuccess('Passou a usar o tema padrão da instalação.');
+                  }}
+                >
+                  Usar tema da instalação (limpar escolha pessoal)
+                </Button>
               </div>
-            )}
-            <Input disabled={!canAdminister} label="Sequencia atendimento" onChange={(event) => setForm((current) => (current ? { ...current, sequenciaAtendimento: Number(event.target.value || 0) } : current))} type="number" value={String(form.sequenciaAtendimento)} />
-            <label className="panel-copy" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', gridColumn: '1 / -1' }}>
-              <input
-                checked={form.mostrarAjudaModulos !== false}
+              <Select
+                label="Logo da barra lateral"
+                onChange={(event) => {
+                  const next = event.target.value as SidebarMarcaId;
+                  salvarUsuarioSidebarMarcaPreferida(next);
+                  setMarcaPreferenciaTick((n) => n + 1);
+                  window.dispatchEvent(new Event('iso-pro-sidebar-marca'));
+                  setSuccess('Logo da barra lateral actualizada neste equipamento.');
+                }}
+                value={marcaSidebarEfetiva}
+              >
+                {SIDEBAR_MARCA_OPCOES.map((opcao) => (
+                  <option key={opcao.id} value={opcao.id}>
+                    {opcao.label}
+                  </option>
+                ))}
+              </Select>
+              <div style={{ alignItems: 'center', display: 'flex', flexWrap: 'wrap', gap: 10, gridColumn: '1 / -1' }}>
+                <Button
+                  type="button"
+                  disabled={!marcaPreferidaUsuario}
+                  variant="ghost"
+                  onClick={() => {
+                    limparUsuarioSidebarMarcaPreferida();
+                    setMarcaPreferenciaTick((n) => n + 1);
+                    window.dispatchEvent(new Event('iso-pro-sidebar-marca'));
+                    setSuccess('Logo da barra lateral voltou ao padrão clássico.');
+                  }}
+                >
+                  Usar logo clássica (limpar escolha)
+                </Button>
+              </div>
+              <ModuleHelp>
+                <p className="panel-copy" style={{ gridColumn: '1 / -1', marginTop: -4 }}>
+                  Escolha entre a placa clássica <strong>I.S.O | PRO</strong> e a marca com ícone de barras. A preferência
+                  fica neste navegador/login (como o tema pessoal).
+                </p>
+              </ModuleHelp>
+              {canAdminister ? (
+                <Select
+                  disabled={!canAdminister}
+                  label="Tema padrão da instalação"
+                  onChange={(event) =>
+                    setForm((current) => (current ? { ...current, tema: event.target.value as typeof form.tema } : current))
+                  }
+                  value={form.tema}
+                >
+                  {TEMAS_SISTEMA_OPCOES.map((opcao) => (
+                    <option key={opcao.id} value={opcao.id}>
+                      {opcao.label}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <div className="panel-copy" style={{ gridColumn: '1 / -1', opacity: 0.9 }}>
+                  Tema padrão da instalação (referência): <strong>{labelTemaSistema(form.tema)}</strong> — apenas perfis
+                  com permissão de administrar configurações podem alterar este valor ao gravar a ficha completa.
+                </div>
+              )}
+              <Input
                 disabled={!canAdminister}
+                label="Sequencia atendimento"
                 onChange={(event) =>
-                  setForm((current) => (current ? { ...current, mostrarAjudaModulos: event.target.checked } : current))
+                  setForm((current) =>
+                    current ? { ...current, sequenciaAtendimento: Number(event.target.value || 0) } : current,
+                  )
                 }
-                type="checkbox"
+                type="number"
+                value={String(form.sequenciaAtendimento)}
               />
-              <span>
-                <strong>Mostrar textos de ajuda nos modulos</strong>
-                <span style={{ display: 'block', marginTop: 6, fontSize: '0.92rem', opacity: 0.92 }}>
-                  Desligar oculta blocos longos de explicacao (CSV, fluxos descritivos); avisos de fonte de dados, erros e permissoes
-                  mantem-se visiveis.
+              <label className="panel-copy" style={{ display: 'flex', gap: 10, alignItems: 'flex-start', gridColumn: '1 / -1' }}>
+                <input
+                  checked={form.mostrarAjudaModulos !== false}
+                  disabled={!canAdminister}
+                  onChange={(event) =>
+                    setForm((current) =>
+                      current ? { ...current, mostrarAjudaModulos: event.target.checked } : current,
+                    )
+                  }
+                  type="checkbox"
+                />
+                <span>
+                  <strong>Mostrar textos de ajuda nos modulos</strong>
+                  <span style={{ display: 'block', marginTop: 6, fontSize: '0.92rem', opacity: 0.92 }}>
+                    Desligar deixa a interface limpa: oculta dicas, regras descritivas, diagnosticos e blocos longos.
+                    Mantem-se visiveis: fonte de dados, erros, permissoes e alertas de risco operacional.
+                  </span>
                 </span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="panel-kicker">Marca</p>
-              <h2>Logo institucional</h2>
+              </label>
             </div>
           </div>
-          <p className="panel-copy">
-            Logo institucional: aparece em recibos, impressoes de RIR, RNC, etiquetas e demais relatorios gerados em HTML. Ao gravar configuracoes, o logo (e CNPJ do rodape) sincronizam para a nuvem — o app Campo usa o mesmo logo no recibo apos «Carregar dados da nuvem». Imagens carregadas sao comprimidas automaticamente (~120 KB) para reduzir o download no telemovel. Exportacoes somente em planilha (Excel/CSV) nao incluem o logo. Padrao de fabrica: chapa I.S.O PRO (mesmo modelo da sidebar); podes substituir por imagem ou URL.
-          </p>
-          {reciboNuvemPendente ? (
-            <OperationalNotice tone="warning">
-              Logo, CNPJ ou dados do projeto neste PC ainda nao constam na nuvem (app Campo). Clique em{' '}
-              <strong>Salvar configuracoes</strong> para enviar — ou aguarde a sincronizacao automatica ao abrir o sistema.
-            </OperationalNotice>
-          ) : null}
-          {logoUploadError ? <div className="error-box">{logoUploadError}</div> : null}
-          <div className="form-columns">
-            <Input
-              accept="image/*"
-              disabled={!canAdminister}
-              label="Carregar imagem do logo"
-              onChange={(event) => {
-                setLogoUploadError('');
-                const file = event.target.files?.[0] ?? null;
-                event.target.value = '';
-                if (!file) return;
-                if (!file.type.startsWith('image/')) {
-                  setLogoUploadError('Selecione um arquivo de imagem (PNG, JPG, etc.).');
-                  return;
-                }
-                if (file.size > maxLogoBytes) {
-                  setLogoUploadError(`Imagem muito grande. Limite aproximado: ${Math.round(maxLogoBytes / 1024)} KB.`);
-                  return;
-                }
-                void comprimirArquivoLogoInstitucionalParaArmazenamento(file).then((result) => {
-                  if (!result) {
-                    setLogoUploadError('Nao foi possivel processar a imagem do logo.');
+
+          <div className="config-group">
+            <h3 className="config-group__title">Logo institucional</h3>
+            <ModuleHelp>
+              <p className="panel-copy">
+                Logos de empresas variam: largo (I.S.O PRO), quadrado (TECHGEAR) ou vertical. Use o{' '}
+                <strong>formato do quadro</strong> — «Automático» escolhe horizontal/quadrado/vertical pela proporção
+                do ficheiro. O upload remove margens brancas; o zoom afina o tamanho da imagem no quadro. Logo de
+                fábrica fica sempre horizontal e calibrado. Ao gravar, sincroniza com a nuvem (app Campo).
+              </p>
+            </ModuleHelp>
+            {reciboNuvemPendente ? (
+              <OperationalNotice tone="warning">
+                Logo, CNPJ ou dados do projeto neste PC ainda nao constam na nuvem (app Campo). Clique em{' '}
+                <strong>Salvar configuracoes</strong> para enviar — ou aguarde a sincronizacao automatica ao abrir o
+                sistema.
+              </OperationalNotice>
+            ) : null}
+            {logoUploadError ? <div className="error-box">{logoUploadError}</div> : null}
+            <div className="form-columns">
+              <Input
+                accept="image/*"
+                disabled={!canAdminister}
+                label="Carregar imagem do logo"
+                onChange={(event) => {
+                  setLogoUploadError('');
+                  const file = event.target.files?.[0] ?? null;
+                  event.target.value = '';
+                  if (!file) return;
+                  if (!file.type.startsWith('image/')) {
+                    setLogoUploadError('Selecione um arquivo de imagem (PNG, JPG, etc.).');
                     return;
                   }
-                  setForm((current) =>
-                    current ? { ...current, logoInstitucionalUrl: result.dataUrl } : current,
-                  );
-                });
-              }}
-              type="file"
-            />
-            <Input
-              disabled={!canAdminister}
-              label="Ou URL / caminho (alternativa ao arquivo)"
-              onChange={(event) => setForm((current) => (current ? { ...current, logoInstitucionalUrl: event.target.value } : current))}
-              placeholder={`${LOGO_INSTITUCIONAL_PADRAO_FABRICA} ou https://...`}
-              value={form.logoInstitucionalUrl.startsWith('data:') ? '' : form.logoInstitucionalUrl}
-            />
-          </div>
-          {form.logoInstitucionalUrl ? (
-            <div className="inline-actions" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
-              <div
-                style={{
-                  border: '1px solid #cbd5e1',
-                  borderRadius: 8,
-                  padding: 8,
-                  background: '#fff',
-                  maxWidth: 220,
-                }}
-              >
-                <img
-                  alt="Preview do logo configurado"
-                  src={
-                    form.logoInstitucionalUrl.startsWith('data:')
-                      ? form.logoInstitucionalUrl
-                      : normalizarUrlAssetPublicParaAmbiente(form.logoInstitucionalUrl)
+                  if (file.size > maxLogoBytes) {
+                    setLogoUploadError(`Imagem muito grande. Limite aproximado: ${Math.round(maxLogoBytes / 1024)} KB.`);
+                    return;
                   }
-                  style={{ maxWidth: 200, maxHeight: 100, objectFit: 'contain', display: 'block' }}
-                />
-              </div>
-              {canAdminister ? (
-                <Button
-                  onClick={() => {
+                  void comprimirArquivoLogoInstitucionalParaArmazenamento(file).then(async (result) => {
+                    if (!result) {
+                      setLogoUploadError('Nao foi possivel processar a imagem do logo.');
+                      return;
+                    }
+                    const aspecto = await medirAspectoLogoUrl(result.dataUrl);
+                    setForm((current) =>
+                      current
+                        ? {
+                            ...current,
+                            logoInstitucionalUrl: result.dataUrl,
+                            logoInstitucionalZoomPct: LOGO_ZOOM_PCT_PADRAO,
+                            logoInstitucionalAspecto: aspecto,
+                            logoInstitucionalFormatoQuadro: 'auto',
+                          }
+                        : current,
+                    );
                     setLogoUploadError('');
-                    setForm((current) => (current ? { ...current, logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA } : current));
-                  }}
-                  variant="ghost"
-                >
-                  Restaurar logo padrao (fabrica)
-                </Button>
-              ) : null}
+                  });
+                }}
+                type="file"
+              />
+              <Input
+                disabled={!canAdminister}
+                label="Ou URL / caminho (alternativa ao arquivo)"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setForm((current) => (current ? { ...current, logoInstitucionalUrl: value } : current));
+                  if (value.trim()) {
+                    void medirAspectoLogoUrl(
+                      value.startsWith('data:') ? value : normalizarUrlAssetPublicParaAmbiente(value),
+                    ).then((aspecto) => {
+                      setForm((current) =>
+                        current ? { ...current, logoInstitucionalAspecto: aspecto } : current,
+                      );
+                    });
+                  }
+                }}
+                placeholder={`${LOGO_INSTITUCIONAL_PADRAO_FABRICA} ou https://...`}
+                value={form.logoInstitucionalUrl.startsWith('data:') ? '' : form.logoInstitucionalUrl}
+              />
             </div>
-          ) : null}
-
-        </div>
+            <div className="form-columns" style={{ marginTop: 12 }}>
+              <Select
+                disabled={!canAdminister}
+                label="Formato do quadro"
+                onChange={(event) =>
+                  setForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          logoInstitucionalFormatoQuadro: event.target
+                            .value as LogoInstitucionalFormatoQuadro,
+                        }
+                      : current,
+                  )
+                }
+                value={form.logoInstitucionalFormatoQuadro}
+              >
+                {LOGO_INSTITUCIONAL_FORMATOS.map((f) => (
+                  <option key={f} value={f}>
+                    {rotuloLogoInstitucionalFormato(f)}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                disabled={!canAdminister}
+                label="Escala do quadro"
+                onChange={(event) =>
+                  setForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          logoInstitucionalTamanhoRelatorio: event.target
+                            .value as LogoInstitucionalTamanhoRelatorio,
+                        }
+                      : current,
+                  )
+                }
+                value={
+                  form.logoInstitucionalTamanhoRelatorio === 'auto'
+                    ? 'padrao'
+                    : form.logoInstitucionalTamanhoRelatorio
+                }
+              >
+                {LOGO_INSTITUCIONAL_TAMANHOS.filter((t) => t !== 'auto').map((t) => (
+                  <option key={t} value={t}>
+                    {rotuloLogoInstitucionalTamanho(t)}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            {(() => {
+              const slotLogo = dimensoesLogoInstitucionalHtml({
+                tamanho: form.logoInstitucionalTamanhoRelatorio,
+                formato: form.logoInstitucionalFormatoQuadro,
+                aspecto: form.logoInstitucionalAspecto,
+              });
+              const formatoEfetivo = resolverFormatoQuadroEfetivo({
+                formato: form.logoInstitucionalFormatoQuadro,
+                aspecto: form.logoInstitucionalAspecto,
+              });
+              return (
+            <>
+            <p className="panel-copy" style={{ margin: '8px 0 0' }}>
+              Quadro {slotLogo.w}×{slotLogo.h}px
+              {form.logoInstitucionalFormatoQuadro === 'auto'
+                ? ` · automático → ${rotuloLogoInstitucionalFormato(formatoEfetivo)}`
+                : ` · ${rotuloLogoInstitucionalFormato(form.logoInstitucionalFormatoQuadro)}`}
+              {' '}
+              — igual em RIR, RF, RNC e recibos.
+            </p>
+            {form.logoInstitucionalUrl ? (
+              <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
+                <div className="inline-actions" style={{ alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
+                  <div
+                    style={{
+                      border: '1px solid #cbd5e1',
+                      borderRadius: 8,
+                      padding: 0,
+                      background: '#fff',
+                      width: slotLogo.w,
+                      height: slotLogo.h,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <img
+                      alt="Preview do logo no quadro dos relatórios"
+                      src={
+                        form.logoInstitucionalUrl.startsWith('data:')
+                          ? form.logoInstitucionalUrl
+                          : normalizarUrlAssetPublicParaAmbiente(form.logoInstitucionalUrl)
+                      }
+                      style={{
+                        width: 'auto',
+                        height: 'auto',
+                        maxWidth: '100%',
+                        maxHeight: '100%',
+                        objectFit: 'contain',
+                        objectPosition: 'center center',
+                        display: 'block',
+                        transform: `scale(${
+                          (ehLogoInstitucionalPadraoFabrica(form.logoInstitucionalUrl)
+                            ? LOGO_ZOOM_PCT_FABRICA
+                            : normalizarLogoInstitucionalZoomPct(form.logoInstitucionalZoomPct)) / 100
+                        })`,
+                        transformOrigin: 'center center',
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'grid', gap: 10, minWidth: 220, flex: '1 1 240px' }}>
+                    {ehLogoInstitucionalPadraoFabrica(form.logoInstitucionalUrl) ? (
+                      <p className="panel-copy" style={{ margin: 0 }}>
+                        Logo de fábrica: centrado e no tamanho calibrado para os relatórios (sem ajuste manual).
+                      </p>
+                    ) : (
+                      <label className="field" style={{ display: 'grid', gap: 6 }}>
+                        <span>
+                          Zoom da imagem no quadro (
+                          {normalizarLogoInstitucionalZoomPct(form.logoInstitucionalZoomPct)}%)
+                        </span>
+                        <input
+                          disabled={!canAdminister}
+                          max={LOGO_ZOOM_PCT_MAX}
+                          min={LOGO_ZOOM_PCT_MIN}
+                          onChange={(event) =>
+                            setForm((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    logoInstitucionalZoomPct: normalizarLogoInstitucionalZoomPct(
+                                      event.target.value,
+                                    ),
+                                  }
+                                : current,
+                            )
+                          }
+                          step={5}
+                          type="range"
+                          value={normalizarLogoInstitucionalZoomPct(form.logoInstitucionalZoomPct)}
+                        />
+                        <span className="panel-copy" style={{ margin: 0, fontSize: '0.85em' }}>
+                          Imagem sempre centrada no quadro. Use o zoom só para logos de empresas.
+                        </span>
+                      </label>
+                    )}
+                    <div className="inline-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+                      {canAdminister && form.logoInstitucionalUrl.startsWith('data:') ? (
+                        <Button
+                          onClick={() => {
+                            setLogoUploadError('');
+                            void recortarMargensLogoDataUrl(form.logoInstitucionalUrl).then(async (res) => {
+                              if (!res.recortou) {
+                                setLogoUploadError(
+                                  'Não havia margem branca suficiente para recortar (ou já está recortado).',
+                                );
+                                return;
+                              }
+                              const aspecto = await medirAspectoLogoUrl(res.dataUrl);
+                              setForm((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      logoInstitucionalUrl: res.dataUrl,
+                                      logoInstitucionalAspecto: aspecto,
+                                    }
+                                  : current,
+                              );
+                            });
+                          }}
+                          type="button"
+                          variant="ghost"
+                        >
+                          Recortar margens brancas
+                        </Button>
+                      ) : null}
+                      {canAdminister ? (
+                        <Button
+                          onClick={() => {
+                            setLogoUploadError('');
+                            setForm((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+                                    logoInstitucionalTamanhoRelatorio: 'padrao',
+                                    logoInstitucionalFormatoQuadro: 'horizontal',
+                                    logoInstitucionalAspecto: 2.4,
+                                    logoInstitucionalZoomPct: LOGO_ZOOM_PCT_FABRICA,
+                                  }
+                                : current,
+                            );
+                          }}
+                          variant="ghost"
+                        >
+                          Restaurar logo padrao (fabrica)
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            </>
+              );
+            })()}
+          </div>
         </div>
 
         <div
@@ -1360,6 +1500,10 @@ export function ConfiguracoesPage() {
               type="password"
               value={form.isoProAdminUserSecret}
             />
+            <OperationalNotice>
+              Segredos Edge ficam no cofre do PC (Electron) ou só nesta sessão do browser — não são gravados em texto
+              no localStorage nem sincronizados no snapshot da nuvem.
+            </OperationalNotice>
             <Select disabled={!canAdminister} label="Materiais em nuvem" onChange={(event) => setForm((current) => (current ? { ...current, materiaisNuvem: event.target.value === 'true' } : current))} value={String(form.materiaisNuvem)}>
               <option value="false">Desativado</option>
               <option value="true">Ativado</option>

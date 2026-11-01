@@ -3,6 +3,7 @@ import { SearchableSelect, type SearchableSelectOption } from '../../../componen
 import { labelDocumentoNumero, resolveSearchableOption } from '../../../components/ui/searchableSelectUtils';
 import { buscarDocumentosPendentesNuvem } from '../services/atendimento.service';
 import type { AtendimentoDocumento } from '../types/atendimento.types';
+import { formatDocumentoNumeroDisplay } from '../utils/formatDocumentoNumeroDisplay';
 
 type Props = {
   documentos: AtendimentoDocumento[];
@@ -15,7 +16,7 @@ type Props = {
 function toOption(documento: AtendimentoDocumento): SearchableSelectOption {
   return {
     value: documento.id,
-    label: `${documento.numero} Rev. ${documento.revisao} - ${documento.descricao}`,
+    label: `${formatDocumentoNumeroDisplay(documento.numero)} Rev. ${documento.revisao} - ${documento.descricao}`,
   };
 }
 
@@ -30,7 +31,8 @@ export function AtendimentoBuscaDocumento({ documentos, selectedDocumentoId, onS
   function onQueryChange(query: string) {
     window.clearTimeout(debounceRef.current);
     const q = query.trim();
-    if (q.length < 3) {
+    // Pesquisa inteligente: desde o 1.º caractere (antes exigia 3 + linha completa).
+    if (q.length < 1) {
       setRemotos([]);
       return;
     }
@@ -39,7 +41,7 @@ export function AtendimentoBuscaDocumento({ documentos, selectedDocumentoId, onS
       void buscarDocumentosPendentesNuvem(q).then((docs) => {
         if (seq === buscaSeqRef.current) setRemotos(docs);
       });
-    }, 200);
+    }, 180);
   }
 
   const combinados = useMemo(() => {
@@ -78,7 +80,7 @@ export function AtendimentoBuscaDocumento({ documentos, selectedDocumentoId, onS
       }
 
       const q = query.trim();
-      if (q.length < 3) return null;
+      if (q.length < 1) return null;
       const docs = await buscarDocumentosPendentesNuvem(q);
       setRemotos(docs);
       const optList = docs.map(toOption);
@@ -97,11 +99,12 @@ export function AtendimentoBuscaDocumento({ documentos, selectedDocumentoId, onS
 
   return (
     <SearchableSelect
+      emptyOptionsMessage="Nenhuma opcao. Continue a digitar o numero ou a descricao do desenho."
       label="Documento"
       onChange={handleSelect}
       onQueryChange={onQueryChange}
       options={options}
-      placeholder="Digite numero, revisao ou descricao — ou cole a linha completa"
+      placeholder="Digite o numero ou descricao — as opcoes aparecem ao escrever"
       resolveTypedValue={resolveTypedValue}
       value={selectedDocumentoId}
     />

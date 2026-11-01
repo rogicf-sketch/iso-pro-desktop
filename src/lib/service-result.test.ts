@@ -80,6 +80,23 @@ describe('service-result', () => {
       expect(result.meta?.source).toBe('supabase');
     });
 
+    it('se writeLocal falhar apos nuvem ok, ainda retorna sucesso com warning', async () => {
+      const writeLocal = vi.fn(() => {
+        throw new DOMException('exceeded the quota', 'QuotaExceededError');
+      });
+      const result = await executeWrite({
+        shouldWriteRemote: true,
+        writeRemote: vi.fn().mockResolvedValue(undefined),
+        writeLocal,
+        successData: { id: 'rir-1' },
+        fallbackMessage: 'falha',
+      });
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ id: 'rir-1' });
+      expect(result.warning).toBeTruthy();
+      expect(result.meta?.source).toBe('supabase');
+    });
+
     it('em falha remota com conflito de snapshot popula meta.snapshotConflict e mensagem', async () => {
       const writeLocal = vi.fn();
       const result = await executeWrite({

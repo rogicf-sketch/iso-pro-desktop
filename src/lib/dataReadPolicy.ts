@@ -1,4 +1,3 @@
-import { isIsoProDesktop } from './pdfCloud/pdfCloudConfig';
 import { hasSupabaseConfig } from './supabase';
 
 /** Tempo maximo absoluto para tentativa de leitura remota (reconciliação). */
@@ -13,11 +12,12 @@ export const REMOTE_READ_PREFER_MS = 450;
 
 /**
  * Indica se a aplicacao deve tentar Supabase antes do armazenamento local.
- * No desktop a fonte operacional e o snapshot local; a nuvem sincroniza em segundo plano.
+ * Web e desktop (com Supabase) leem a nuvem primeiro — sem isto o EXE mostra
+ * "Fonte: Supabase" na UI mas lista so o localStorage (vazio / seed), dessincronizado da web.
+ * Offline: cai no local imediatamente.
  */
 export function shouldTryRemoteRead(): boolean {
   if (!hasSupabaseConfig()) return false;
-  if (isIsoProDesktop()) return false;
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
   return true;
 }

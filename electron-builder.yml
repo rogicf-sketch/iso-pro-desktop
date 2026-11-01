@@ -22,6 +22,9 @@ copyright: Copyright © 2026 I.S.O PRO Gestão de Materiais
 directories:
   output: release
 
+# Carimba icon.ico no .exe unpackaged antes do Setup/portable (barra de tarefas).
+afterPack: scripts/electron-builder-after-pack.cjs
+
 files:
   - dist/**/*
   - dist-electron/**/*
@@ -39,6 +42,10 @@ extraResources:
     to: logo-institutional-print.png
   - from: build/icon.ico
     to: icon.ico
+  - from: build/icon.png
+    to: icon.png
+  - from: public/app-icon.png
+    to: app-icon.png
   - from: scripts/export-iso-pro-snapshot.mjs
     to: backup-scripts/export-iso-pro-snapshot.mjs
   - from: scripts/upload-backup-to-oci-node.mjs
@@ -56,7 +63,7 @@ win:
   target:
     - nsis
     - portable
-  # Ícone do .exe / atalho: gerado por `npm run build:icon` (png2icons, modo executável Windows).
+  # Ícone embutido no .exe (barra de tarefas) — .ico multi-size é o mais fiável no Windows.
   icon: build/icon.ico
 
 nsis:
@@ -73,3 +80,9 @@ nsis:
 
 portable:
   artifactName: '${productName}-${version}-portable.exe'
+
+# Feed generico electron-updater (latest.yml + Setup/portable).
+# Runtime: ISO_PRO_UPDATE_FEED_URL sobrescreve; senao usa a mesma URL (ver electron/main/updateFeed.ts).
+publish:
+  provider: generic
+  url: https://isoprogestaodemateriais.com.br/updates/iso-pro-desktop/

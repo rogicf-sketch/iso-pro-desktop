@@ -80,6 +80,17 @@ describe('mensagemSePlanejamentoIncompativelComRefsAtendimento', () => {
     ).toBeNull();
   });
 
+  it('ignora sentinela Multiplos no historico (baixa multi-desenho)', () => {
+    const payload = {
+      documentos: [{ id: 'd1', numero: 'DOC-1' }],
+      atendimentoHistorico: [{ documento: 'Multiplos' }, { documentoId: 'd1', documento: 'DOC-1' }],
+      atendimentos: [{ documentoNumero: 'MULTIPLOS' }],
+    };
+    expect(
+      mensagemSePlanejamentoIncompativelComRefsAtendimento(payload, [{ id: 'd1', numero: 'DOC-1' }]),
+    ).toBeNull();
+  });
+
   it('limparRefs remove historico orfao e permite gravacao', () => {
     const payload = {
       documentos: [{ id: 'd1', numero: 'DOC-1' }],

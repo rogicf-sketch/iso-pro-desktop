@@ -1,8 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconCheck, IconDownload, IconPencil } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { InventarioListItem } from '../types/inventario.types';
 
@@ -75,48 +75,50 @@ export function InventariosTable({
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
               {canEdit ? (
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
+                <TableIconButton label="Editar" onClick={() => onEdit(item)}>
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
               {canAdminister ? (
-                <ActionButton
+                <TableIconButton
                   disabled={item.status !== 'aberto'}
-                  disabledLabel={item.status === 'fechado' ? 'Fechado' : 'Travado'}
-                  disabledTitle={
+                  label={
                     item.status === 'fechado'
                       ? 'Inventario ja fechado.'
-                      : 'Inventario cancelado nao pode ser fechado.'
+                      : item.status === 'cancelado'
+                        ? 'Inventario cancelado nao pode ser fechado.'
+                        : 'Fechar inventario e consolidar apuracao.'
                   }
-                  enabledLabel="Fechar"
-                  enabledTitle="Fechar inventario e consolidar apuracao."
                   onClick={() => onClose(item)}
-                />
+                >
+                  <IconCheck />
+                </TableIconButton>
               ) : null}
               {canExportCsv && onExportCsv ? (
-                <Button
+                <TableIconButton
                   disabled={item.status !== 'fechado'}
-                  onClick={() => onExportCsv(item)}
-                  title={
+                  label={
                     item.status === 'fechado'
                       ? 'Exporta linhas do inventario (CSV compativel com Excel).'
                       : item.status === 'cancelado'
                         ? 'Inventarios cancelados nao podem ser exportados.'
                         : 'Feche o inventario para habilitar a exportacao (CSV compativel com Excel).'
                   }
-                  variant="ghost"
+                  onClick={() => onExportCsv(item)}
                 >
-                  Exportar Excel (CSV)
-                </Button>
+                  <IconDownload />
+                </TableIconButton>
               ) : null}
             </div>
           ),
         },
       ]}
+      emptyDescription="Abra um inventário ou ajuste o filtro de busca/status."
+      emptyText="Nenhum inventário encontrado"
       items={items}
     />
   );

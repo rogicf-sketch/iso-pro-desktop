@@ -1,9 +1,13 @@
-import { Pagination } from '../../../components/tables/Pagination';
+﻿import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
+import { IconPlus } from '../../../components/ui/TableActionIcons';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { FornecedorFilters } from '../components/FornecedorFilters';
 import { FornecedorForm } from '../components/FornecedorForm';
@@ -20,6 +24,8 @@ export function FornecedoresPage() {
     error,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,
@@ -35,6 +41,7 @@ export function FornecedoresPage() {
     importInputRef,
     importStaging,
     importingFornecedores,
+    importProgress,
     importResultado,
     openImportFornecedoresPicker,
     baixarModeloCsvImportacaoFornecedores,
@@ -48,20 +55,37 @@ export function FornecedoresPage() {
 
   const canEdit = canAccessAction('fornecedores', 'editar');
   const canAdminister = canAccessAction('fornecedores', 'administrar');
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource,
+    hasCloudConfig,
+    staleWhileRevalidate,
+    fallbackReason,
+  });
+
+  usePageChrome(
+    {
+      meta:
+        loading && total === 0
+          ? 'A carregar…'
+          : `${total.toLocaleString('pt-BR')} fornecedores · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, total, fonteNuvemOk],
+  );
 
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Modulo</p>
-          <h2>Fornecedores</h2>
-        </div>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
         {canEdit ? (
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Cadastro">
               <span className="panel-toolbar__label">Cadastro</span>
               <div className="panel-toolbar__buttons">
-                <Button onClick={openCreateModal}>Novo fornecedor</Button>
+                <Button onClick={openCreateModal}>
+                  <span className="button-with-icon">
+                    <IconPlus />
+                    Novo fornecedor
+                  </span>
+                </Button>
               </div>
             </div>
             <div className="panel-toolbar__group" role="group" aria-label="Planilha CSV">
@@ -101,23 +125,26 @@ export function FornecedoresPage() {
           (separador ponto-e-virgula, compativel com Excel em portugues; UTF-8). Use <strong>Baixar modelo CSV</strong> para o cabecalho
           correto. Colunas: <code>nome</code>, <code>cnpj</code>, <code>telefone</code>, <code>email</code>, <code>endereco</code>,{' '}
           <code>ativo</code> (sim/nao). Nome ja cadastrado e atualizado; nome repetido no mesmo arquivo e ignorado apos a primeira linha.{' '}
-          <strong>Excel — todos</strong> exporta o cadastro completo; <strong>Excel — filtro</strong> apenas o que esta visivel com os filtros da lista.
+          <strong>Excel - todos</strong> exporta o cadastro completo; <strong>Excel - filtro</strong> apenas o que esta visivel com os filtros da lista.
         </p>
       </ModuleHelp>
 
-      <OperationalNotice>
-        {cloudStatus === 'ready' && hasCloudConfig
-          ? 'Fonte atual: Supabase. Fornecedores sincronizados com a base em nuvem.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
-      </OperationalNotice>
+      <FonteDadosNotice
+        healthy={fonteNuvemOk}
+        fallbackMessage={
+          hasCloudConfig
+            ? 'Fonte atual: fallback local. A lista ainda nao veio da nuvem (rede ou sync).'
+            : cloudStatus === 'partial'
+              ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        }
+      />
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
 
       <FornecedorFilters filters={filters} onChange={setFilters} />
 
       {error ? <div className="error-box">{error}</div> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
 
       {loading ? (
         <OperationalNotice>Carregando fornecedores...</OperationalNotice>
@@ -130,7 +157,13 @@ export function FornecedoresPage() {
             onEdit={openEditModal}
             onToggleStatus={handleToggleStatus}
           />
-          <Pagination onPageChange={(page) => setFilters({ ...filters, page })} page={filters.page} pageSize={filters.pageSize} total={total} />
+          <Pagination
+            itemLabel="fornecedores"
+            onPageChange={(page) => setFilters({ ...filters, page })}
+            page={filters.page}
+            pageSize={filters.pageSize}
+            total={total}
+          />
         </>
       )}
 
@@ -164,7 +197,11 @@ export function FornecedoresPage() {
             <p>
               Importar <strong>{importStaging.linhaCount}</strong> linha(s) de dados do arquivo <strong>{importStaging.fileName}</strong>?
             </p>
-            {importingFornecedores ? <OperationalNotice>Importando fornecedores...</OperationalNotice> : null}
+            {importingFornecedores ? (
+              <OperationalNotice>
+                {importProgress || 'A gravar na nuvem…'} A janela fecha sozinha com o resultado.
+              </OperationalNotice>
+            ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
               <Button disabled={importingFornecedores} onClick={cancelImportFornecedoresStaging} type="button" variant="ghost">
                 Cancelar
@@ -180,6 +217,7 @@ export function FornecedoresPage() {
       <Modal onClose={closeImportFornecedoresResultado} open={Boolean(importResultado)} title="Importacao concluida" wide>
         {importResultado ? (
           <div className="editor-block">
+            {importResultado.mensagem ? <OperationalNotice>{importResultado.mensagem}</OperationalNotice> : null}
             <p>
               <strong>{importResultado.criados}</strong> novo(s), <strong>{importResultado.atualizados}</strong> atualizado(s),{' '}
               <strong>{importResultado.ignorados}</strong> ignorado(s).

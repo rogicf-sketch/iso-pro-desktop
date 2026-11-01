@@ -1,14 +1,18 @@
-import { useMemo, useState } from 'react';
+import { startTransition, useMemo, useState } from 'react';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import { traduzirErroImpressaoIsoPro } from '../../../lib/traduzirErroImpressaoIsoPro';
+import { descarregarLogRelatorioImportacao } from '../../../lib/importacaoRelatorioLog';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { DocumentoFilters } from '../components/DocumentoFilters';
 import { DocumentoForm } from '../components/DocumentoForm';
@@ -48,10 +52,12 @@ export function DocumentosPage() {
     items,
     total,
     loading,
+    refreshing,
     error,
     success,
     fallbackReason,
     documentosSource,
+    staleWhileRevalidate,
     syncingLocalParaNuvem,
     enviarPlanejamentoLocalParaNuvem,
     planejamentoDiag,
@@ -73,10 +79,19 @@ export function DocumentosPage() {
     importSnapshotConflict,
     importStaging,
     importingDocumentos,
+    importProgress,
+    lendoArquivoImportacao,
     importResultado,
+    setImportStagingCancelarRevisoes,
+    salvarRevisoesStaging,
+    salvarRevisoesBusy,
+    confirmarSalvarComOpcaoRevisoes,
+    cancelarSalvarRevisoesStaging,
     exportDocumentosCsvResumo,
     exportDocumentosCsvResumoFiltrado,
+    exportingDocumentosCsv,
     openImportDocumentosPicker,
+    openAtualizarDescricoesPicker,
     downloadModeloCsvImportacaoDocumentos,
     stageImportDocumentosFromFile,
     cancelImportDocumentosStaging,
@@ -97,6 +112,9 @@ export function DocumentosPage() {
     viewDocumentOpeningId,
     viewPlanejamentoMetricas,
     viewPlanejamentoLocalizacoes,
+    viewPlanejamentoMetricasAviso,
+    viewPlanejamentoMetricasPending,
+    ensureViewPlanejamentoMetricas,
     closeViewDocument,
     openViewDocumento,
     cancelDocAlvo,
@@ -134,13 +152,26 @@ export function DocumentosPage() {
     return { total, visiveis, restantes };
   }, [excluirModalResumos]);
 
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource: documentosSource ?? 'local',
+    hasCloudConfig,
+    staleWhileRevalidate,
+    fallbackReason,
+  });
+
+  usePageChrome(
+    {
+      meta:
+        loading && total === 0
+          ? 'A carregar…'
+          : `${total.toLocaleString('pt-BR')} documentos · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, total, fonteNuvemOk],
+  );
+
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Módulo</p>
-          <h2>Planejamento de Materiais</h2>
-        </div>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
         {canEdit ? (
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Cadastro">
@@ -155,14 +186,32 @@ export function DocumentosPage() {
                 <Button type="button" variant="ghost" onClick={openImportDocumentosPicker}>
                   Importar
                 </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={openAtualizarDescricoesPicker}
+                  title="Atualiza so a descricao de desenhos ja existentes (qualquer status). Use o mesmo modelo CSV da importacao (numero;revisao;descricao)."
+                >
+                  Atualizar descrições
+                </Button>
                 <Button type="button" variant="ghost" onClick={downloadModeloCsvImportacaoDocumentos}>
                   Modelo
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => void exportDocumentosCsvResumo()}>
-                  Exportar itens (tudo)
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={Boolean(exportingDocumentosCsv)}
+                  onClick={() => void exportDocumentosCsvResumo()}
+                >
+                  {exportingDocumentosCsv === 'tudo' ? 'A exportar…' : 'Exportar itens (tudo)'}
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => void exportDocumentosCsvResumoFiltrado()}>
-                  Exportar itens (filtro)
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={Boolean(exportingDocumentosCsv)}
+                  onClick={() => void exportDocumentosCsvResumoFiltrado()}
+                >
+                  {exportingDocumentosCsv === 'filtro' ? 'A exportar…' : 'Exportar itens (filtro)'}
                 </Button>
               </div>
             </div>
@@ -182,49 +231,62 @@ export function DocumentosPage() {
 
       <ModuleHelp>
         <p className="panel-copy">
-          Planejamento de materiais com itens, revisao, status e pendencia por documento. Use <strong>Baixar modelo CSV</strong> para obter
-          cabecalho e linhas de exemplo (um material por linha; repita numero/revisao/data por linha). Na importacao, se{' '}
+          Planejamento de materiais com itens, revisão, status e pendência por documento. Use <strong>Baixar modelo CSV</strong> para obter
+          cabeçalho e linhas de exemplo (um material por linha; repita numero/revisao/data por linha). A coluna{' '}
+          <strong>descricao_documento</strong> (ou <strong>descricao</strong>) é <strong>obrigatória</strong> por documento
+          (basta numa das linhas desse desenho). Use <strong>Atualizar descrições</strong> com o{' '}
+          <strong>mesmo modelo CSV da importação</strong> (só lê <code>numero</code>, <code>revisao</code> e{' '}
+          <code>descricao</code>; o resto é ignorado) para corrigir só o texto em desenhos já existentes (mesmo se não
+          estiverem pendentes). Na importação completa, se{' '}
           <strong>descricao_material</strong> estiver vazia mas o <strong>codigo</strong> existir no cadastro de materiais, o sistema completa
-          a descricao. <strong>Visualizar</strong> abre a lista de itens do documento; dentro do modal use{' '}
-          <strong>Pre-visualizar folha de campo</strong> ou <strong>Imprimir / PDF</strong> para a folha de campo em paisagem.{' '}
+          a descrição. <strong>Visualizar</strong> abre a lista de itens do documento; dentro do modal use{' '}
+          <strong>Pré-visualizar folha de campo</strong> ou <strong>Imprimir / PDF</strong> para a folha de campo em paisagem.{' '}
           <strong>Excel - itens</strong> gera uma linha por material: dados do documento (numero, revisao, descricao), do material (codigo,
           descricao, disciplina, saldo do cadastro), unidade, <strong>quantidade no documento</strong> (por desenho), atendida e pendente nesse
           documento, <strong>quantidade prevista</strong> (soma do codigo em todos os documentos ativos), totais <strong>atendido</strong> e{' '}
           <strong>recebido</strong> por codigo, <strong>status de planejamento</strong> da linha (Pendente/Parcial/Recebido/Atendido), pesos e
           saldo; colunas <code>localizacao_planejamento</code> (texto salvo no item do documento) e{' '}
           <code>localizacao_consolidada</code> (mesma regra da folha de campo: recebimentos agregados ou, se vazio, o texto do documento); arquivo
-          CSV com separador <code>;</code> para abrir no Excel em portugues.
+          CSV com separador <code>;</code> para abrir no Excel em português.
           Use <strong>(tudo)</strong> para todos
-          os documentos ou <strong>(filtro)</strong> apenas os da lista filtrada. Atualizacao por import so para documentos pendentes (mesmo
+          os documentos ou <strong>(filtro)</strong> apenas os da lista filtrada. Atualização por import só para documentos pendentes (mesmo
           numero e revisao).
         </p>
       </ModuleHelp>
 
-      <OperationalNotice>
-        {cloudStatus === 'ready' && hasCloudConfig
-          ? 'Fonte atual: Supabase. Planejamento sincronizado com a base em nuvem.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
-      </OperationalNotice>
+      <FonteDadosNotice
+        healthy={!loading && fonteNuvemOk}
+        fallbackMessage={
+          loading && hasCloudConfig
+            ? 'A carregar planejamento da nuvem…'
+            : hasCloudConfig
+              ? 'Cópia local / desatualizada — a nuvem nao confirmou esta lista. Nao use como verdade unica; o telemóvel só lê a nuvem.'
+              : cloudStatus === 'partial'
+                ? 'Fonte atual: fallback local. Configuração do Supabase incompleta.'
+                : 'Fonte atual: fallback local. Supabase ainda não está configurado.'
+        }
+      />
       <ModuleHelp>
         <OperationalNotice>
-          Status (mesma lingua em lista, Visualizar e folha): <strong>Pendente</strong> = sem recebimento;
-          <strong> Recebido</strong> = material ja no estoque (ainda pode ter QTD ATENDIDA = 0);
-          <strong> Atendido</strong> = ja baixado no Atendimento; <strong>Parcial</strong> = mistura.
+          Status (lista = detalhe): <strong>Pendente</strong> = sem estoque/saldo;
+          <strong> Recebido</strong> = material no estoque (QTD ATENDIDA pode ser 0);
+          <strong> Parcial</strong> = mistura; <strong>Atendido</strong> = baixado no Atendimento;
+          <strong> Cancelado</strong> = anulado. A barra em Qtd. atendida mostra o % baixado.
         </OperationalNotice>
       </ModuleHelp>
       {fallbackReason ? (
         <OperationalNotice tone="warning">
-          {`Fallback ativo por falha de consulta: ${fallbackReason}. O telemovel so le a nuvem — se ve desenhos aqui mas nao no app, use o botao abaixo para gravar esta lista no Supabase.`}
+          {fallbackReason.includes('alinhar o status')
+            ? fallbackReason
+            : `Fallback ativo por falha de consulta: ${fallbackReason}. O telemóvel só lê a nuvem — se vê desenhos aqui mas não no app, use o botão abaixo para gravar esta lista no Supabase.`}
         </OperationalNotice>
       ) : null}
       {hasCloudConfig && canEdit && planejamentoMaisNoLocal && planejamentoDiag ? (
         <OperationalNotice tone="warning">
-          <strong>Atencao — copia local maior que a nuvem:</strong> o snapshot no Supabase tem{' '}
+          <strong>Atenção — cópia local maior que a nuvem:</strong> o snapshot no Supabase tem{' '}
           <strong>{planejamentoDiag.noSnapshot}</strong> documento(s), mas este navegador tem <strong>{planejamentoDiag.noNavegador}</strong>{' '}
           em armazenamento local. A tabela abaixo reflete a <strong>nuvem</strong>; trabalho extra pode existir só neste PC. Exporte ou use{' '}
-          <strong>Enviar planejamento deste PC para a nuvem</strong> apos confirmar qual versao deve prevalecer (a accao substitui o snapshot
+          <strong>Enviar planejamento deste PC para a nuvem</strong> após confirmar qual versão deve prevalecer (a acção substitui o snapshot
           remoto).
         </OperationalNotice>
       ) : null}
@@ -251,13 +313,11 @@ export function DocumentosPage() {
       ) : null}
       {hasCloudConfig &&
       canEdit &&
-      (documentosSource === 'local' ||
-        Boolean(fallbackReason) ||
-        planejamentoMaisNoLocal ||
+      planejamentoDiag != null &&
+      planejamentoDiag.noNavegador > 0 &&
+      (planejamentoMaisNoLocal ||
         planejamentoNuvemSemLinhas ||
-        (planejamentoDiag != null &&
-          planejamentoDiag.noSnapshot === 0 &&
-          planejamentoDiag.noNavegador > 0)) ? (
+        (planejamentoDiag.noSnapshot === 0 && planejamentoDiag.noNavegador > 0)) ? (
         <div className="form-actions" style={{ marginBottom: 12 }}>
           <Button type="button" variant="primary" disabled={syncingLocalParaNuvem} onClick={() => void enviarPlanejamentoLocalParaNuvem()}>
             {syncingLocalParaNuvem ? 'A enviar…' : 'Enviar planejamento deste PC para a nuvem (mobile)'}
@@ -272,8 +332,16 @@ export function DocumentosPage() {
 
       <DocumentoFilters filters={filters} onChange={setFilters} />
 
+      {lendoArquivoImportacao ? <OperationalNotice>A ler o arquivo...</OperationalNotice> : null}
       {error ? <div className="error-box">{error}</div> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {exportingDocumentosCsv ? (
+        <OperationalNotice>
+          {exportingDocumentosCsv === 'filtro'
+            ? `A exportar itens do filtro atual (${total.toLocaleString('pt-BR')} documento${total === 1 ? '' : 's'})… Aguarde o download.`
+            : 'A exportar todos os itens do planejamento para Excel… Aguarde o download.'}
+        </OperationalNotice>
+      ) : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
       {canAdminister ? (
         <ModuleHelp>
           <OperationalNotice tone="warning">
@@ -293,6 +361,7 @@ export function DocumentosPage() {
         <OperationalNotice>Carregando documentos...</OperationalNotice>
       ) : (
         <>
+          {refreshing ? <OperationalNotice>A actualizar página…</OperationalNotice> : null}
           <DocumentosTable
             canAdminister={canAdminister}
             canEdit={canEdit}
@@ -347,7 +416,11 @@ export function DocumentosPage() {
             </div>
           ) : null}
           <Pagination
-            onPageChange={(page) => setFilters({ ...filters, page })}
+            itemLabel="documentos"
+            onPageChange={(page) => {
+              startTransition(() => setFilters({ ...filters, page }));
+            }}
+            onPagePrefetch={undefined}
             page={filters.page}
             pageSize={filters.pageSize}
             total={total}
@@ -523,47 +596,188 @@ export function DocumentosPage() {
           if (!importingDocumentos) cancelImportDocumentosStaging();
         }}
         open={Boolean(importStaging) && canEdit}
-        title="Confirmar importacao"
+        title={importStaging?.modo === 'descricoes' ? 'Confirmar atualização de descrições' : 'Confirmar importacao'}
         wide
       >
         {importStaging ? (
           <div className="editor-block">
-            <p>
-              Importar <strong>{importStaging.linhaCount}</strong> linha(s) de dados do arquivo{' '}
-              <strong>{importStaging.fileName}</strong>?
-            </p>
+            {importStaging.modo === 'descricoes' ? (
+              <>
+                <OperationalNotice tone="warning">
+                  Isto actualiza <strong>apenas a descricao</strong> de desenhos ja existentes (qualquer status). Nao cria
+                  documentos nem altera itens ou quantidades.
+                </OperationalNotice>
+                <p style={{ marginTop: 12 }}>
+                  Atualizar descrição de <strong>{importStaging.linhaCount}</strong> documento(s) a partir de{' '}
+                  <strong>{importStaging.fileName}</strong>?
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  Importar <strong>{importStaging.linhaCount}</strong> linha(s) de dados do arquivo{' '}
+                  <strong>{importStaging.fileName}</strong>?
+                </p>
+                {importStaging.revisoesAntigasActivas && importStaging.revisoesAntigasActivas.length > 0 ? (
+                  <div style={{ marginTop: 12 }}>
+                    <OperationalNotice tone="warning">
+                      Existem <strong>{importStaging.revisoesAntigasActivas.length}</strong> revisao(oes) activa(s) do
+                      mesmo numero (outra revisao). Nao e cancelamento automatico — marque a opcao abaixo se a revisao
+                      nova substitui a antiga.
+                    </OperationalNotice>
+                    <ul className="panel-copy" style={{ margin: '8px 0 0', paddingLeft: 18, maxHeight: 160, overflow: 'auto' }}>
+                      {importStaging.revisoesAntigasActivas.slice(0, 40).map((r) => (
+                        <li key={r.id}>
+                          {r.numero} Rev. {r.revisao} ({r.status})
+                        </li>
+                      ))}
+                      {importStaging.revisoesAntigasActivas.length > 40 ? (
+                        <li>… e mais {importStaging.revisoesAntigasActivas.length - 40}</li>
+                      ) : null}
+                    </ul>
+                    <label
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'flex-start',
+                        marginTop: 12,
+                        cursor: importingDocumentos ? 'default' : 'pointer',
+                      }}
+                    >
+                      <input
+                        checked={importStaging.cancelarRevisoesAntigas === true}
+                        disabled={importingDocumentos}
+                        onChange={(e) => setImportStagingCancelarRevisoes(e.target.checked)}
+                        type="checkbox"
+                      />
+                      <span className="panel-copy">
+                        Cancelar essas revisoes antigas activas ao importar (motivo: substituida pela revisao do ficheiro)
+                      </span>
+                    </label>
+                  </div>
+                ) : null}
+              </>
+            )}
             {importingDocumentos ? (
-              <OperationalNotice>Importando documentos...</OperationalNotice>
+              <OperationalNotice>
+                {importProgress || 'A gravar na nuvem…'} A janela fecha sozinha com o resultado.
+              </OperationalNotice>
             ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
               <Button disabled={importingDocumentos} onClick={cancelImportDocumentosStaging} type="button" variant="ghost">
                 Cancelar
               </Button>
               <Button disabled={importingDocumentos} onClick={() => void confirmImportDocumentosStaging()} type="button">
-                Importar
+                {importStaging.modo === 'descricoes' ? 'Atualizar descrições' : 'Importar'}
               </Button>
             </div>
           </div>
         ) : null}
       </Modal>
 
-      <Modal onClose={closeImportDocumentosResultado} open={Boolean(importResultado)} title="Importacao concluida" wide>
+      <Modal
+        onClose={cancelarSalvarRevisoesStaging}
+        open={Boolean(salvarRevisoesStaging) && canEdit}
+        title="Outras revisoes do mesmo numero"
+        wide
+      >
+        {salvarRevisoesStaging ? (
+          <div className="editor-block">
+            <OperationalNotice tone="warning">
+              O numero <strong>{salvarRevisoesStaging.data.numero}</strong> ja tem outras revisoes activas. Se esta a
+              criar uma linha nova (nao e subir revisao no mesmo documento), pode cancelar as antigas. Se for so
+              complementar, grave sem cancelar.
+            </OperationalNotice>
+            <ul className="panel-copy" style={{ margin: '12px 0 0', paddingLeft: 18 }}>
+              {salvarRevisoesStaging.revisoesAntigasActivas.map((r) => (
+                <li key={r.id}>
+                  Rev. {r.revisao} — {r.status}
+                </li>
+              ))}
+            </ul>
+            <p className="panel-copy" style={{ marginTop: 12 }}>
+              Revisao a gravar: <strong>{salvarRevisoesStaging.data.revisao}</strong>
+            </p>
+            <div className="form-actions" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
+              <Button disabled={salvarRevisoesBusy} onClick={cancelarSalvarRevisoesStaging} type="button" variant="ghost">
+                Voltar
+              </Button>
+              <Button
+                disabled={salvarRevisoesBusy}
+                onClick={() => void confirmarSalvarComOpcaoRevisoes(false)}
+                type="button"
+                variant="ghost"
+              >
+                Gravar so esta
+              </Button>
+              <Button disabled={salvarRevisoesBusy} onClick={() => void confirmarSalvarComOpcaoRevisoes(true)} type="button">
+                Gravar e cancelar antigas
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
+        onClose={closeImportDocumentosResultado}
+        open={Boolean(importResultado)}
+        title={
+          importResultado && importResultado.criados === 0 && importResultado.atualizados === 0
+            ? 'Importacao sem alteracoes'
+            : 'Importacao concluida'
+        }
+        wide
+      >
         {importResultado ? (
           <div className="editor-block">
-            <p>
+            {importResultado.mensagem ? (
+              <OperationalNotice
+                tone={
+                  importResultado.criados === 0 && importResultado.atualizados === 0 ? 'warning' : 'neutral'
+                }
+              >
+                {importResultado.mensagem}
+              </OperationalNotice>
+            ) : null}
+            <p style={{ marginTop: importResultado.mensagem ? 12 : 0 }}>
               <strong>{importResultado.criados}</strong> novo(s), <strong>{importResultado.atualizados}</strong>{' '}
               atualizado(s), <strong>{importResultado.ignorados}</strong> ignorado(s).
             </p>
             {importResultado.detalhes.length ? (
-              <div style={{ marginTop: 12, maxHeight: 240, overflow: 'auto', fontSize: '0.9rem' }}>
-                {importResultado.detalhes.map((linha) => (
-                  <div key={linha}>{linha}</div>
+              <div style={{ marginTop: 12, maxHeight: 280, overflow: 'auto', fontSize: '0.9rem' }}>
+                {importResultado.detalhes.slice(0, 40).map((linha, idx) => (
+                  <div key={`${idx}-${linha.slice(0, 48)}`}>{linha}</div>
                 ))}
+                {importResultado.detalhes.length > 40 ? (
+                  <div>e mais {importResultado.detalhes.length - 40} linha(s) no log.</div>
+                ) : null}
               </div>
             ) : null}
-            <div className="form-actions" style={{ marginTop: 16 }}>
+            <div className="form-actions" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
+              {importResultado.detalhes.length ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    descarregarLogRelatorioImportacao(
+                      {
+                        modulo: 'Planejamento',
+                        mensagem: importResultado.mensagem,
+                        ficheiroOrigem: importResultado.ficheiroOrigem,
+                        criados: importResultado.criados,
+                        atualizados: importResultado.atualizados,
+                        ignorados: importResultado.ignorados,
+                        detalhes: importResultado.detalhes,
+                      },
+                      'planejamento',
+                    )
+                  }
+                >
+                  Descarregar log
+                </Button>
+              ) : null}
               <Button onClick={closeImportDocumentosResultado} type="button">
-                OK
+                Fechar
               </Button>
             </div>
           </div>
@@ -581,17 +795,20 @@ export function DocumentosPage() {
             {importSubstituirPasso === 1 ? (
               <>
                 <OperationalNotice tone="critical">
-                  A nuvem tem registos de atendimento ligados a desenhos que nao constam no ficheiro importado. Por
-                  seguranca, a gravacao foi bloqueada para evitar historico orfao.
+                  A gravacao foi bloqueada: o planejamento a gravar nao cobre referencias de atendimento ja
+                  existentes na nuvem (historico orfao). Isto tambem acontece se o posto nao leu o catalogo
+                  completo antes de importar — nesse caso nao use «substituir».
                 </OperationalNotice>
                 <p className="panel-copy" style={{ marginTop: 12 }}>
                   {importHistoricoBloqueio.error}
                 </p>
                 <p className="panel-copy" style={{ marginTop: 12 }}>
-                  Opcoes: (1) importar a lista completa de desenhos; (2) usar{' '}
-                  <strong>Limpar cadastros local + nuvem</strong> em Configuracoes se for recomeco total; (3){' '}
-                  <strong>substituir planejamento e limpar historico incompatible</strong> — remove da nuvem apenas
-                  atendimentos/historico que referenciam desenhos fora do ficheiro importado.
+                  Opcoes: (1) recarregue a pagina (F5) e volte a importar (o sistema deve manter os{' '}
+                  {total.toLocaleString('pt-BR')} desenhos da nuvem e so acrescentar/atualizar os do ficheiro);
+                  (2) use <strong>Limpar cadastros local + nuvem</strong> em Configuracoes so se for recomeco
+                  total; (3) <strong>substituir e limpar historico incompatible</strong> — remove da nuvem
+                  atendimentos/historico que referenciam desenhos fora da lista a gravar (perigoso se a lista
+                  estiver incompleta).
                 </p>
                 {importHistoricoBloqueio.resumo ? (
                   <p className="panel-copy" style={{ marginTop: 8 }}>
@@ -637,7 +854,9 @@ export function DocumentosPage() {
                 </div>
                 {importSubstituirBusy ? (
                   <div style={{ marginTop: 12 }}>
-                    <OperationalNotice>A importar e limpar historico...</OperationalNotice>
+                    <OperationalNotice>
+                      {importProgress || 'A gravar na nuvem…'} A janela fecha sozinha com o resultado.
+                    </OperationalNotice>
                   </div>
                 ) : null}
                 <div className="form-actions" style={{ marginTop: 16 }}>
@@ -665,6 +884,7 @@ export function DocumentosPage() {
       </Modal>
 
       <Modal
+        browserFullscreen
         onClose={closeViewDocument}
         open={Boolean(viewDocument) || viewDocumentLoading}
         title={
@@ -687,6 +907,19 @@ export function DocumentosPage() {
               {viewDocument.descricao || 'Sem descricao.'} — Responsavel: {viewDocument.responsavel || '-'} — Data:{' '}
               {formatarDataDocumentoPtBr(viewDocument.dataDocumento)}
             </p>
+            {viewPlanejamentoMetricasPending && viewPlanejamentoMetricas.size === 0 ? (
+              <p className="panel-copy" style={{ marginTop: 0, marginBottom: 8, opacity: 0.85 }}>
+                A actualizar estoque e localização…
+              </p>
+            ) : viewPlanejamentoMetricasAviso && viewPlanejamentoMetricas.size === 0 ? (
+              <OperationalNotice tone="warning">{viewPlanejamentoMetricasAviso}</OperationalNotice>
+            ) : viewDocument.status === 'parcial' || viewDocument.status === 'recebido' ? (
+              <p className="panel-copy" style={{ marginTop: 0, marginBottom: 8, opacity: 0.85 }}>
+                Na lista, <strong>Parcial/Recebido</strong> inclui material já no estoque. A coluna{' '}
+                <strong>Qtd. atendida</strong> só sobe com baixa no Atendimento — pode ser 0% e o documento ainda
+                Parcial.
+              </p>
+            ) : null}
             <div className="table-shell">
               <table className="data-table">
                 <thead>
@@ -709,11 +942,20 @@ export function DocumentosPage() {
                     </tr>
                   ) : (
                     viewDocument.itens.map((it) => {
+                      // Enquanto métricas não chegam: «…» (nunca Pendente falso).
                       const st =
-                        it.codigoMaterial.trim() && viewPlanejamentoMetricas.size > 0
-                          ? resolverStatusLinhaDocumento(it, viewPlanejamentoMetricas)
-                          : null;
+                        viewPlanejamentoMetricasPending && viewPlanejamentoMetricas.size === 0
+                          ? null
+                          : !it.codigoMaterial.trim()
+                            ? null
+                            : resolverStatusLinhaDocumento(it, viewPlanejamentoMetricas);
                       const meta = st ? statusLinhaPlanejamentoMeta(st) : null;
+                      const qDoc = Number(it.quantidadeProjeto) || 0;
+                      const qAtd = Number(it.quantidadeAtendida) || 0;
+                      const fmtQ = (n: number) =>
+                        Number.isInteger(n)
+                          ? String(n)
+                          : n.toLocaleString('pt-BR', { maximumFractionDigits: 4 });
                       return (
                         <tr key={it.id}>
                           <td>{it.codigoMaterial}</td>
@@ -724,10 +966,16 @@ export function DocumentosPage() {
                             {resolverLocalizacaoExibicaoPlanejamento(it, viewPlanejamentoLocalizacoes) || '—'}
                           </td>
                           <td>{it.unidade}</td>
-                          <td>{it.quantidadeProjeto}</td>
-                          <td>{it.quantidadeAtendida}</td>
+                          <td>{fmtQ(qDoc)}</td>
+                          <td>{fmtQ(qAtd)}</td>
                           <td>
-                            {meta ? <StatusBadge text={meta.text} tone={meta.tone} /> : <span>-</span>}
+                            {viewPlanejamentoMetricasPending && viewPlanejamentoMetricas.size === 0 ? (
+                              <span style={{ opacity: 0.65 }}>…</span>
+                            ) : meta ? (
+                              <StatusBadge text={meta.text} tone={meta.tone} />
+                            ) : (
+                              <span>—</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -753,10 +1001,16 @@ export function DocumentosPage() {
                   setFolhaCampoAviso(null);
                   void (async () => {
                     try {
+                      // Abre já — não bloqueia por aviso de estoque (status pela linha se mapa vazio).
+                      const met = await ensureViewPlanejamentoMetricas(viewDocument);
+                      // Aviso só se não houver mapa — PDF abre na mesma.
+                      if (met.metricasAviso && met.metricas.size === 0) {
+                        setFolhaCampoAviso(met.metricasAviso);
+                      }
                       const ok = await imprimirPlanejamentoCampoHtml(
                         viewDocument,
-                        viewPlanejamentoMetricas,
-                        viewPlanejamentoLocalizacoes,
+                        met.metricas,
+                        met.localizacoesRecebimentoPorCodigo,
                       );
                       if (!ok) {
                         setFolhaCampoAviso(
@@ -783,10 +1037,14 @@ export function DocumentosPage() {
                   setFolhaCampoAviso(null);
                   void (async () => {
                     try {
+                      const met = await ensureViewPlanejamentoMetricas(viewDocument);
+                      if (met.metricasAviso && met.metricas.size === 0) {
+                        setFolhaCampoAviso(met.metricasAviso);
+                      }
                       const res = await preVisualizarPlanejamentoCampoHtml(
                         viewDocument,
-                        viewPlanejamentoMetricas,
-                        viewPlanejamentoLocalizacoes,
+                        met.metricas,
+                        met.localizacoesRecebimentoPorCodigo,
                       );
                       if (!res.ok && res.error) {
                         setFolhaCampoAviso(traduzirErroImpressaoIsoPro(res.error));

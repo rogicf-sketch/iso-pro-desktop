@@ -2,8 +2,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { listOperationalAudit } from '../../../lib/operationalAudit';
+import { listDomainEvents } from '../../../lib/domainEventsRead';
+import { listDomainEventsDailyCounts } from '../../../lib/domainEventsDailyCounts';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { exportAuthAuditEventsCsv, listAuthAuditEvents, type AuthAuditEvent } from '../../auth/services/authAudit.service';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -50,7 +52,7 @@ export function useUsuarios() {
   /** Incrementa ao abrir modal ou ao recarregar o utilizador na nuvem — força remount do formulario com `key`. */
   const [usuarioFormInstance, setUsuarioFormInstance] = useState(0);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -73,6 +75,20 @@ export function useUsuarios() {
     queryKey: ['usuarios', 'audit-nuvem', user?.login],
     enabled: hasSupabaseConfig(),
     queryFn: async () => listOperationalAudit({ limit: 100 }),
+    staleTime: 30_000,
+  });
+
+  const domainEventsQuery = useQuery({
+    queryKey: ['usuarios', 'domain-events', user?.login],
+    enabled: hasSupabaseConfig(),
+    queryFn: async () => listDomainEvents({ limit: 50 }),
+    staleTime: 30_000,
+  });
+
+  const domainEventsDailyQuery = useQuery({
+    queryKey: ['usuarios', 'domain-events-daily', user?.login],
+    enabled: hasSupabaseConfig(),
+    queryFn: async () => listDomainEventsDailyCounts({ days: 30 }),
     staleTime: 30_000,
   });
 
@@ -211,6 +227,22 @@ export function useUsuarios() {
     cloudAuditLoading: cloudAuditQuery.isLoading,
     cloudAuditError: cloudAuditQuery.data?.error || (cloudAuditQuery.isError ? 'Falha ao ler auditoria da nuvem.' : ''),
     refreshCloudAudit: () => cloudAuditQuery.refetch(),
+    domainEventsItems: domainEventsQuery.data?.events ?? [],
+    domainEventsTotal: domainEventsQuery.data?.count ?? 0,
+    domainEventsLoading: domainEventsQuery.isLoading,
+    domainEventsError:
+      domainEventsQuery.data?.error ||
+      (domainEventsQuery.isError ? 'Falha ao ler eventos de dominio.' : ''),
+    domainEventsDailyTotals: domainEventsDailyQuery.data?.totals ?? [],
+    domainEventsDailyWindowDays: domainEventsDailyQuery.data?.windowDays ?? 30,
+    domainEventsDailyLoading: domainEventsDailyQuery.isLoading,
+    domainEventsDailyError:
+      domainEventsDailyQuery.data?.error ||
+      (domainEventsDailyQuery.isError ? 'Falha ao ler rollup de eventos.' : ''),
+    refreshDomainEvents: () => {
+      void domainEventsQuery.refetch();
+      void domainEventsDailyQuery.refetch();
+    },
     isModalOpen,
     selected,
     formInitialValue,

@@ -3,6 +3,11 @@ import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { ColaboradorFormData } from '../types/colaborador.types';
 import {
+  listAllColaboradoresFromCloud,
+  replaceColaboradoresOnCloud,
+  syncColaboradoresFromSnapshotCloud,
+} from '../../../lib/colaboradoresCloud';
+import {
   montarExportacaoColaboradoresCsv,
   registrarRetiranteExterno,
   salvarColaborador,
@@ -22,6 +27,23 @@ vi.mock('../../../lib/snapshotSliceRead', () => ({
   readSnapshotRemoteSliceOrFull: (keys: readonly unknown[]) => mockReadPayload(keys),
 }));
 
+vi.mock('../../../lib/colaboradoresCloud', () => ({
+  listAllColaboradoresFromCloud: vi.fn(async () => ({
+    colaboradores: [],
+    missing: false,
+    error: undefined,
+  })),
+  replaceColaboradoresOnCloud: vi.fn(async () => ({
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    missing: false,
+  })),
+  syncColaboradoresFromSnapshotCloud: vi.fn(async () => ({
+    ok: true,
+    count: 0,
+    missing: false,
+  })),
+}));
+
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
 }));
@@ -34,8 +56,13 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
     readIsoProSnapshotSlices: mockReadPayload,
     readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
-      const r = await mockReadForWrite();
-      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+      const r = (await mockReadForWrite()) as
+        | { payload?: Record<string, unknown>; baselineUpdatedAt?: string | null }
+        | undefined;
+      return {
+        slices: r?.payload ?? {},
+        baselineUpdatedAt: r?.baselineUpdatedAt ?? null,
+      };
     }),
     commitIsoProSnapshotWrite: mockCommitWrite,
     commitIsoProSnapshotPatch: mockCommitPatch,
@@ -43,18 +70,23 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
 });
 
 function wireSnapshotPatchMock() {
+  mockReadForWrite.mockResolvedValue({
+    payload: { colaboradores: [] },
+    baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+  });
   mockCommitWrite.mockImplementation(async (prepare: () => Promise<unknown>) => {
     await prepare();
   });
   mockCommitPatch.mockImplementation(async (prepare: () => Promise<{ patch: Record<string, unknown>; baselineUpdatedAt: string | null }>) => {
     return mockCommitWrite(async () => {
       const plan = await prepare();
-      const base = mockReadForWrite.getMockImplementation()
-        ? await mockReadForWrite()
-        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      const base = (await mockReadForWrite()) as {
+        payload?: Record<string, unknown>;
+        baselineUpdatedAt?: string | null;
+      };
       return {
-        nextPayload: { ...(base.payload ?? {}), ...plan.patch },
-        baselineUpdatedAt: plan.baselineUpdatedAt ?? base.baselineUpdatedAt ?? null,
+        nextPayload: { ...(base?.payload ?? {}), ...plan.patch },
+        baselineUpdatedAt: plan.baselineUpdatedAt ?? base?.baselineUpdatedAt ?? null,
       };
     });
   });
@@ -81,6 +113,20 @@ describe('colaboradores.service / salvarColaborador criacao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(listAllColaboradoresFromCloud).mockResolvedValue({
+      colaboradores: [],
+      missing: false,
+      error: undefined,
+    });
+    vi.mocked(replaceColaboradoresOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(syncColaboradoresFromSnapshotCloud).mockResolvedValue({
+      ok: true,
+      count: 0,
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -103,7 +149,9 @@ describe('colaboradores.service / salvarColaborador criacao (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito colaborador.'));
+    vi.mocked(replaceColaboradoresOnCloud).mockRejectedValue(
+      new IsoProSnapshotConflictError('Conflito colaborador.'),
+    );
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -140,6 +188,20 @@ describe('colaboradores.service / salvarColaborador edicao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(listAllColaboradoresFromCloud).mockResolvedValue({
+      colaboradores: [],
+      missing: false,
+      error: undefined,
+    });
+    vi.mocked(replaceColaboradoresOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(syncColaboradoresFromSnapshotCloud).mockResolvedValue({
+      ok: true,
+      count: 0,
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -177,7 +239,9 @@ describe('colaboradores.service / salvarColaborador edicao (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito edicao col.'));
+    vi.mocked(replaceColaboradoresOnCloud).mockRejectedValue(
+      new IsoProSnapshotConflictError('Conflito edicao col.'),
+    );
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -230,6 +294,20 @@ describe('colaboradores.service / toggleColaboradorStatus (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(listAllColaboradoresFromCloud).mockResolvedValue({
+      colaboradores: [],
+      missing: false,
+      error: undefined,
+    });
+    vi.mocked(replaceColaboradoresOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(syncColaboradoresFromSnapshotCloud).mockResolvedValue({
+      ok: true,
+      count: 0,
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -267,7 +345,9 @@ describe('colaboradores.service / toggleColaboradorStatus (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito toggle col.'));
+    vi.mocked(replaceColaboradoresOnCloud).mockRejectedValue(
+      new IsoProSnapshotConflictError('Conflito toggle col.'),
+    );
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -304,6 +384,20 @@ describe('colaboradores.service / registrarRetiranteExterno (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(listAllColaboradoresFromCloud).mockResolvedValue({
+      colaboradores: [],
+      missing: false,
+      error: undefined,
+    });
+    vi.mocked(replaceColaboradoresOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(syncColaboradoresFromSnapshotCloud).mockResolvedValue({
+      ok: true,
+      count: 0,
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -326,7 +420,9 @@ describe('colaboradores.service / registrarRetiranteExterno (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito retirante.'));
+    vi.mocked(replaceColaboradoresOnCloud).mockRejectedValue(
+      new IsoProSnapshotConflictError('Conflito retirante.'),
+    );
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -375,6 +471,20 @@ describe('colaboradores.service / registrarRetiranteExterno atualiza existente (
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(listAllColaboradoresFromCloud).mockResolvedValue({
+      colaboradores: [],
+      missing: false,
+      error: undefined,
+    });
+    vi.mocked(replaceColaboradoresOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(syncColaboradoresFromSnapshotCloud).mockResolvedValue({
+      ok: true,
+      count: 0,
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -412,7 +522,9 @@ describe('colaboradores.service / registrarRetiranteExterno atualiza existente (
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito atualiza retirante.'));
+    vi.mocked(replaceColaboradoresOnCloud).mockRejectedValue(
+      new IsoProSnapshotConflictError('Conflito atualiza retirante.'),
+    );
 
     store[STORAGE_KEY] = JSON.stringify([]);
 

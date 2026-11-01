@@ -2,7 +2,6 @@ import type { ServiceResult } from '../types/common.types';
 import { REMOTE_READ_PREFER_MS, withRemoteReadTimeout } from './dataReadPolicy';
 import { captureOperationalEvent } from './errorReporting';
 import { isIsoProSnapshotConflictError } from './isoProSnapshot';
-import { isIsoProDesktop } from './pdfCloud/pdfCloudConfig';
 import { businessWriteBlockedFailure, isBusinessLocalWriteBlocked } from './writePolicy';
 import { traduzirErroOperacionalIsoPro } from './traduzirErroOperacionalIsoPro';
 
@@ -69,9 +68,7 @@ export async function withLocalFallback<T>(options: {
   const local = await localPromise;
 
   if (raced.kind === 'err') {
-    const fallbackReason = isIsoProDesktop()
-      ? undefined
-      : traduzirErroOperacionalIsoPro(getErrorMessage(raced.error, options.fallbackMessage));
+    const fallbackReason = traduzirErroOperacionalIsoPro(getErrorMessage(raced.error, options.fallbackMessage));
     return {
       data: local,
       meta: {
@@ -112,12 +109,26 @@ export async function executeWrite<T>(options: {
   if (options.shouldWriteRemote) {
     try {
       await options.writeRemote();
-      options.writeLocal();
+      // Nuvem ja gravou: falha de cache local (quota) nao pode virar "erro de salvar"
+      // — senao o utilizador clica de novo e cria duplicados.
+      let localWarning: string | undefined;
+      try {
+        options.writeLocal();
+      } catch (localErr) {
+        localWarning = traduzirErroOperacionalIsoPro(
+          getErrorMessage(
+            localErr,
+            'Gravado na nuvem; cache local deste equipamento nao atualizou (armazenamento cheio).',
+          ),
+        );
+      }
       return {
         success: true,
         data: options.successData,
+        warning: localWarning,
         meta: {
           source: 'supabase',
+          fallbackReason: localWarning,
         },
       };
     } catch (error) {
@@ -142,7 +153,15 @@ export async function executeWrite<T>(options: {
     return businessWriteBlockedFailure<T>();
   }
 
-  options.writeLocal();
+  try {
+    options.writeLocal();
+  } catch (error) {
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, options.fallbackMessage)),
+      meta: { source: 'local' },
+    };
+  }
   return {
     success: true,
     data: options.successData,

@@ -3,6 +3,7 @@ import { segmentoInstituicaoRodapeEletronico } from '../../../lib/htmlRelatorioI
 import type { RirRegistro } from '../types/qualidade.types';
 import { rirObraDefaultsFromConfig } from '../utils/rirConfigDefaults';
 import { formatarDisciplinaExibicaoRir, resolverDisciplinaRir } from '../utils/rirDisciplina';
+import { juntarEscopoLinhaRir } from '../utils/rirEscopoLinha';
 import { formatDateTimePtPdf } from './rirPdfText';
 import { carregarBytesFontesRirPdf } from './rirPdfFonts';
 import type { RirPdfBranding, RirPdfContexto } from './rirPdfDocument';
@@ -26,8 +27,7 @@ export async function montarContextoRirPdf(registro: RirRegistro): Promise<RirPd
       itensRir: itens,
     });
 
-  const escopoPartes = [cfg.cliente, cfg.projeto, uoExibir].filter((s) => !!String(s).trim());
-  const escopoLinha = [...new Set(escopoPartes.map((s) => String(s).trim()))].join(' · ') || uoExibir || '—';
+  const escopoLinha = juntarEscopoLinhaRir(cfg.cliente, cfg.projeto, uoExibir);
 
   const logo = await carregarLogoInstitucionalParaPdf(cfg.logoInstitucionalUrl);
   const fontes = await carregarBytesFontesRirPdf();

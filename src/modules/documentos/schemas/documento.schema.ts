@@ -3,6 +3,7 @@ import type { DocumentoFormData } from '../types/documento.types';
 export function validateDocumento(data: DocumentoFormData) {
   if (!data.numero.trim()) return 'Informe o numero do documento.';
   if (!data.revisao.trim()) return 'Informe a revisao.';
+  if (!data.descricao.trim()) return 'Informe a descricao do documento.';
   if (!data.dataDocumento.trim()) return 'Informe a data do documento.';
   if (!data.itens.length) return 'Adicione ao menos um item ao documento.';
 

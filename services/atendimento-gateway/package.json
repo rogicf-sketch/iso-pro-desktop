@@ -1,0 +1,8 @@
+{
+  "name": "iso-pro-atendimento-gateway",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}

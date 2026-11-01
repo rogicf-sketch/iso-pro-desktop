@@ -57,20 +57,45 @@ export async function comprimirBlobLogoInstitucionalParaSnapshot(blob: Blob): Pr
   return blobToDataUrl(compressed.blob);
 }
 
-/** Comprime ficheiro escolhido em Configuracoes (armazenamento local + futura sync). */
+/**
+ * Prepara ficheiro de logo: recorta margens brancas/transparentes (ex. PNG quadrado com padding)
+ * e, se raster, comprime para JPEG leve. SVG passa intacto.
+ */
 export async function comprimirArquivoLogoInstitucionalParaArmazenamento(
   file: File,
-): Promise<{ dataUrl: string; compressed: boolean } | null> {
+): Promise<{ dataUrl: string; compressed: boolean; recortou: boolean } | null> {
   if (!file.type.startsWith('image/')) return null;
   if (ehSvgBlob(file)) {
     const dataUrl = await blobToDataUrl(file);
-    return { dataUrl, compressed: false };
+    return { dataUrl, compressed: false, recortou: false };
   }
-  const compressed = await compressImageFileToJpeg(file, LOGO_INSTITUCIONAL_SNAPSHOT_COMPRESS_OPTS);
-  if (!compressed) return null;
+
+  const { processarArquivoLogoInstitucionalComRecorte } = await import(
+    '../../../lib/logoInstitucionalAjuste'
+  );
+  const processado = await processarArquivoLogoInstitucionalComRecorte(file, blobToDataUrl);
+  if (!processado) return null;
+
+  // Após recorte, comprimir o resultado (não o ficheiro original com margem).
+  try {
+    const blob = await dataUrlToBlob(processado.dataUrl);
+    const asFile = new File([blob], file.name || 'logo.png', { type: blob.type || 'image/png' });
+    const compressed = await compressImageFileToJpeg(asFile, LOGO_INSTITUCIONAL_SNAPSHOT_COMPRESS_OPTS);
+    if (compressed) {
+      return {
+        dataUrl: await blobToDataUrl(compressed.blob),
+        compressed: true,
+        recortou: processado.recortou,
+      };
+    }
+  } catch {
+    /* usa PNG recortado */
+  }
+
   return {
-    dataUrl: await blobToDataUrl(compressed.blob),
-    compressed: compressed.blob.size < file.size,
+    dataUrl: processado.dataUrl,
+    compressed: false,
+    recortou: processado.recortou,
   };
 }
 

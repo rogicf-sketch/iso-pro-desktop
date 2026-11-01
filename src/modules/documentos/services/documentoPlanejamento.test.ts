@@ -258,6 +258,76 @@ describe('resolverStatusDocumentoPlanejamento', () => {
     expect(resolverStatusDocumentoPlanejamento(doc, metricas)).toBe('recebido');
   });
 
+  it('documento parcial quando ha linhas Recebido e Parcial (qtd atendida ainda 0)', () => {
+    const doc = documentoBase({
+      numero: 'DOC-MISTO',
+      itens: [
+        {
+          id: '1',
+          codigoMaterial: 'MAT-FULL',
+          descricaoMaterial: 'Cobertura total',
+          unidade: 'PC',
+          quantidadeProjeto: 10,
+          quantidadeAtendida: 0,
+          localizacao: '',
+        },
+        {
+          id: '2',
+          codigoMaterial: 'MAT-PART',
+          descricaoMaterial: 'Cobertura parcial',
+          unidade: 'PC',
+          quantidadeProjeto: 20,
+          quantidadeAtendida: 0,
+          localizacao: '',
+        },
+      ],
+    });
+
+    const recebimentos = [
+      recebimentoBase({
+        itens: [
+          itemLinha({
+            codigoMaterial: 'MAT-FULL',
+            quantidadeRecebida: 10,
+            quantidadeConferida: 10,
+            localizacao: 'A1',
+          }),
+          itemLinha({
+            codigoMaterial: 'MAT-PART',
+            quantidadeRecebida: 5,
+            quantidadeConferida: 5,
+            localizacao: 'A1',
+          }),
+        ],
+      }),
+    ];
+
+    const metricas = montarMetricasPorCodigoMaterial([doc], recebimentos);
+    expect(resolverStatusLinhaDocumento(doc.itens[0]!, metricas)).toBe('recebido');
+    expect(resolverStatusLinhaDocumento(doc.itens[1]!, metricas)).toBe('parcial');
+    expect(resolverStatusDocumentoPlanejamento(doc, metricas)).toBe('parcial');
+  });
+
+  it('documento pendente quando nao ha recebimento e qtd atendida e 0', () => {
+    const doc = documentoBase({
+      numero: 'DOC-PEND',
+      itens: [
+        {
+          id: '1',
+          codigoMaterial: 'MAT-X',
+          descricaoMaterial: 'Sem NF',
+          unidade: 'PC',
+          quantidadeProjeto: 8,
+          quantidadeAtendida: 0,
+          localizacao: '',
+        },
+      ],
+    });
+    const metricas = montarMetricasPorCodigoMaterial([doc], []);
+    expect(resolverStatusLinhaDocumento(doc.itens[0]!, metricas)).toBe('pendente');
+    expect(resolverStatusDocumentoPlanejamento(doc, metricas)).toBe('pendente');
+  });
+
   it('documento atendido quando todas as linhas estao Atendido', () => {
     const cod = 'peca-y';
     const doc = documentoBase({

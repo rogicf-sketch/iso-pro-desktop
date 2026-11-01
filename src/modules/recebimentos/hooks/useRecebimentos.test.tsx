@@ -83,7 +83,7 @@ describe('useRecebimentos — lista', () => {
         ],
         total: 1,
         page: 1,
-        pageSize: 6,
+        pageSize: 18,
       },
       meta: { source: 'local' as const },
     });

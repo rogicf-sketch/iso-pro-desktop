@@ -1,4 +1,7 @@
 import { captureOperationalEvent } from './errorReporting';
+import { runAtendimentoHistoricoReconcileBestEffort } from './atendimentoHistoricoReconcile';
+import { runEscalaSotReconcileBestEffort } from './escalaSotReconcile';
+import { isFeatureEnabled } from './isoProFeatureFlags';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase } from './supabase';
 
@@ -130,10 +133,23 @@ export function startEscalaOutboxIdleFlush(opts?: {
 
   const intervalMs = opts?.intervalMs ?? 60_000;
   const maxJobs = opts?.maxJobs ?? 5;
+  const reconcileEveryMs = 10 * 60_000;
+  let lastReconcileAt = 0;
 
   const tick = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     void flushEscalaOutboxBestEffort(maxJobs);
+    const now = Date.now();
+    if (now - lastReconcileAt >= reconcileEveryMs) {
+      lastReconcileAt = now;
+      // Heal automatico (kill-switch / feature flags podem desligar).
+      if (isFeatureEnabled('heal_idle_escala')) {
+        void runEscalaSotReconcileBestEffort({ heal: true, source: 'idle_flush' });
+      }
+      if (isFeatureEnabled('heal_idle_historico')) {
+        void runAtendimentoHistoricoReconcileBestEffort({ heal: true, source: 'idle_flush' });
+      }
+    }
   };
 
   tick();

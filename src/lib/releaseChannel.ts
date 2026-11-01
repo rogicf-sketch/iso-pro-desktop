@@ -10,6 +10,6 @@ export function getReleaseChannel(): ReleaseChannel {
   return raw === 'canary' ? 'canary' : 'stable';
 }
 
-/** MFA no login: só contas Auth com factor — política I.S.O PRO = admins/TI, não operadores de campo. */
+/** MFA no login: obrigatório para administradores (inclui admin de cada empresa nova). Operadores de obra: login + senha. */
 export const MFA_POLICY_NOTE =
-  'MFA recomendado apenas para administradores e TI. Operadores de obra: login + senha + dispositivo autorizado.';
+  'MFA obrigatório para administradores e TI (incluindo o admin de cada empresa na nuvem). Operadores de obra: login + senha + dispositivo autorizado.';

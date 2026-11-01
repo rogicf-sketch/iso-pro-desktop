@@ -8,6 +8,7 @@
  *   node scripts/load-test-atendimento-canteiro.mjs --mode flush-burst --operators 20
  */
 import { createClient } from '@supabase/supabase-js';
+import { assertLoadTestStagingOnly } from './load-test-staging-guard.mjs';
 
 const args = process.argv.slice(2);
 function arg(name, fallback) {
@@ -22,12 +23,13 @@ const MODE = arg('--mode', 'hotspot');
 const OPERATORS = Number(arg('--operators', process.env.LOAD_TEST_OPERATORS ?? '10'));
 const ROUNDS = Number(arg('--rounds', process.env.LOAD_TEST_ROUNDS ?? '2'));
 const HOTSPOT_DOC_ID = arg('--doc-id', 'load-canteiro-doc-1');
-const CONFLICT_RETRY_MAX = 6;
+const CONFLICT_RETRY_MAX = 16;
 
 if (!SUPABASE_URL || !SUPABASE_KEY || !TENANT_ID) {
   console.error('Defina SUPABASE_URL, SUPABASE_ANON_KEY e SUPABASE_TENANT_ID.');
   process.exit(1);
 }
+assertLoadTestStagingOnly(SUPABASE_URL);
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -55,25 +57,17 @@ function buildPayload(operatorId, round, suffix = '') {
       data: new Date().toISOString(),
     },
   ];
-  const documentos = [
-    {
-      id: HOTSPOT_DOC_ID,
-      numero: 'LOAD-CANTEIRO',
-      itens: [{ id: 'cant-item-1', codigo: 'CANT-MAT', quantidade: 1000, quantidadeAtendida: operatorId }],
-    },
-  ];
-  return { key, historico, documentos };
+  return { key, historico };
 }
 
 async function submitComando(operatorId, round, baseline, suffix = '') {
-  const { key, historico, documentos } = buildPayload(operatorId, round, suffix);
+  const { key, historico } = buildPayload(operatorId, round, suffix);
   const t0 = performance.now();
   const { data, error } = await supabase.rpc('iso_pro_submit_atendimento_comando', {
     p_tenant_id: TENANT_ID,
     p_idempotency_key: key,
     p_baseline: baseline,
     p_historico_novas: historico,
-    p_documentos: documentos,
   });
   const ms = Math.round(performance.now() - t0);
   if (error) {
@@ -93,6 +87,7 @@ async function submitWithOccRetry(operatorId, round, initialBaseline, suffix = '
   let retries = 0;
   while (!last.ok && last.conflict && retries < CONFLICT_RETRY_MAX) {
     retries += 1;
+    await new Promise((r) => setTimeout(r, 20 + retries * 15 + Math.floor(Math.random() * 40)));
     baseline = await readBaseline();
     last = await submitComando(operatorId, round, baseline, suffix);
   }

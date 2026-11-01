@@ -10,7 +10,7 @@ const etiquetaModeloSchema = z.enum([
   'liberacao',
 ]);
 
-const etiquetaFormatoSchema = z.enum(['a4_2col', 'a4_1col', 'termica_58', 'termica_80']);
+const etiquetaFormatoSchema = z.enum(['a4_3col', 'a4_2col', 'a4_1col', 'termica_58', 'termica_80']);
 
 const etiquetaPersistidaSchema = z.object({
   id: z.string(),

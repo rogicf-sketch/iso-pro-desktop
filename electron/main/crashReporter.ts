@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { captureMainException, initSentryMain } from './sentryMain';
 
 /**
  * Observabilidade do processo principal do Electron.
@@ -8,6 +9,7 @@ import path from 'node:path';
  * Antes: uma exceção não tratada no main process (IPC de PDF, backup, mail…)
  * derrubava a app sem deixar rasto. Agora ficam num log rotativo em
  * `userData/logs/main-process.log`, mesmo offline, para diagnóstico na obra.
+ * Com DSN Sentry: também envia ao projecto (best-effort).
  */
 
 export type CrashLevel = 'fatal' | 'error' | 'warning';
@@ -87,6 +89,9 @@ export function logMainProcessEvent(
     console.warn('[I.S.O PRO main]', origin, error);
   } else {
     console.error('[I.S.O PRO main]', origin, error);
+    if (level === 'fatal' || level === 'error') {
+      captureMainException(error, origin, context);
+    }
   }
 }
 
@@ -97,6 +102,7 @@ export function logMainProcessEvent(
 export function initMainProcessCrashReporter(): void {
   if (installed) return;
   installed = true;
+  initSentryMain();
 
   process.on('uncaughtException', (error) => {
     logMainProcessEvent('fatal', 'uncaughtException', error);

@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { tentarRepararCacheMateriaisLocalNaEntrada } from '../modules/materiais/services/materiais.service';
 import { tentarAutoSyncEscalaNuvemNaEntrada } from '../lib/escalaNuvemAutoSync';
+import { AppVersionOutdatedBanner } from '@/components/AppVersionOutdatedBanner';
 import { LocalStorageCorruptoBanner } from '@/components/LocalStorageCorruptoBanner';
 import { SnapshotSessionBanner } from '@/components/SnapshotSessionBanner';
 import { SessionCloudStaleBanner } from '@/components/SessionCloudStaleBanner';
@@ -9,29 +10,44 @@ import { GlobalConsultaRapida } from '@/components/GlobalConsultaRapida';
 import { AtendimentoOperacaoGuardProvider } from '../modules/atendimento/context/AtendimentoOperacaoGuard';
 import { useAtendimentoOperacaoGuard } from '../modules/atendimento/context/atendimentoOperacaoGuard.hooks';
 import { getTitularSistemaLinhaResumo } from '../lib/titularSistemaCodigo';
+import { getSidebarMarcaEfetiva, type SidebarMarcaId } from '../lib/sidebarMarca';
 import { useAuth } from '../modules/auth/hooks/useAuth';
+import { AlterarMinhaSenhaModal } from '../modules/auth/components/AlterarMinhaSenhaModal';
 import { useMenuBadgeCounts } from '../modules/dashboard/hooks/useMenuBadgeCounts';
 import { MENU_BADGE_BY_ROUTE } from '../modules/dashboard/utils/pendenciasOperacionais.utils';
 import { getModuleTitleForPath, moduleNavigation } from '../routes/navigation';
+import { SidebarBrand } from '../components/SidebarBrand';
 import { SidebarNavIcon } from '../components/SidebarNavIcon';
+import { PageChromeProvider, usePageChromeContext } from './PageChromeContext';
 
 function MainLayoutInner() {
   const { user, logout, canAccessModule } = useAuth();
   const operacaoGuard = useAtendimentoOperacaoGuard();
   const { counts: menuBadges } = useMenuBadgeCounts();
+  const { chrome } = usePageChromeContext();
   const navigate = useNavigate();
   const location = useLocation();
-  const moduleTitle = getModuleTitleForPath(location.pathname);
+  const routeTitle = getModuleTitleForPath(location.pathname);
+  const pageTitle = chrome.title?.trim() || routeTitle;
+  const pageMeta = chrome.meta?.trim() || '';
   const visibleMenuItems = moduleNavigation.filter(
     (item) => canAccessModule(item.modulo) && !('hideInSidebar' in item && item.hideInSidebar),
   );
   const titularLinha = getTitularSistemaLinhaResumo();
+  const [senhaModalOpen, setSenhaModalOpen] = useState(false);
+  const [sidebarMarca, setSidebarMarca] = useState<SidebarMarcaId>(() => getSidebarMarcaEfetiva());
 
   useEffect(() => {
     void tentarRepararCacheMateriaisLocalNaEntrada();
-    // Fundo: preenche tabelas de escala só se estiverem vazias (não trava o PC).
     void tentarAutoSyncEscalaNuvemNaEntrada();
   }, []);
+
+  useEffect(() => {
+    setSidebarMarca(getSidebarMarcaEfetiva());
+    const onMarca = () => setSidebarMarca(getSidebarMarcaEfetiva());
+    window.addEventListener('iso-pro-sidebar-marca', onMarca);
+    return () => window.removeEventListener('iso-pro-sidebar-marca', onMarca);
+  }, [user?.login]);
 
   function handleSidebarNav(event: React.MouseEvent, to: string) {
     if (!operacaoGuard?.isActive) return;
@@ -48,41 +64,29 @@ function MainLayoutInner() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="sidebar-brand">
-          <div className="sidebar-brand-plate" aria-label="I.S.O PRO — Gestão de Materiais">
-            <div className="sidebar-brand-plate-shine" aria-hidden />
-            <div className="sidebar-brand-plate-inner">
-              <div className="sidebar-brand-plate-row">
-                <span className="sidebar-brand-iso">I.S.O</span>
-                <span className="sidebar-brand-plate-divider" aria-hidden />
-                <span className="sidebar-brand-pro">PRO</span>
-              </div>
-              <p className="sidebar-brand-product">Gestão de Materiais</p>
-            </div>
-          </div>
-        </div>
+        <SidebarBrand marca={sidebarMarca} />
 
         <nav className="sidebar-nav">
           {visibleMenuItems.map((item) => {
             const badgeKey = MENU_BADGE_BY_ROUTE[item.to];
             const badgeCount = badgeKey ? menuBadges[badgeKey] : 0;
             return (
-            <NavLink
-              key={item.to}
-              className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
-              onClick={(event) => handleSidebarNav(event, item.to)}
-              to={item.to}
-            >
-              <span className="sidebar-link__main">
-                <SidebarNavIcon className="sidebar-link__icon" to={item.to} />
-                <span className="sidebar-link__label">{item.label}</span>
-              </span>
-              {badgeCount > 0 ? (
-                <span aria-label={`${badgeCount} pendencia(s)`} className="sidebar-link__badge" title={`${badgeCount} pendencia(s)`}>
-                  {badgeCount > 99 ? '99+' : badgeCount}
+              <NavLink
+                key={item.to}
+                className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+                onClick={(event) => handleSidebarNav(event, item.to)}
+                to={item.to}
+              >
+                <span className="sidebar-link__main">
+                  <SidebarNavIcon className="sidebar-link__icon" to={item.to} />
+                  <span className="sidebar-link__label">{item.label}</span>
                 </span>
-              ) : null}
-            </NavLink>
+                {badgeCount > 0 ? (
+                  <span aria-label={`${badgeCount} pendencia(s)`} className="sidebar-link__badge" title={`${badgeCount} pendencia(s)`}>
+                    {badgeCount > 99 ? '99+' : badgeCount}
+                  </span>
+                ) : null}
+              </NavLink>
             );
           })}
         </nav>
@@ -96,18 +100,27 @@ function MainLayoutInner() {
       </aside>
 
       <main className="main-content">
-        <header className="topbar">
-          <div className="topbar-module-wrap">
-            <p className="topbar-kicker">Módulo</p>
-            <p className="topbar-module-title">{moduleTitle}</p>
+        <header className="topbar topbar--app">
+          <div className="topbar-title-block">
+            <h1 className="topbar-page-title">{pageTitle}</h1>
+            {pageMeta ? <p className="topbar-page-meta">{pageMeta}</p> : null}
           </div>
 
-          <div className="topbar-right">
-            <div className="topbar-session">
-              <p className="topbar-kicker">Sessão ativa</p>
-              <strong>{user?.nome ?? 'Utilizador'}</strong>
-              <p className="panel-copy">Perfil: {user?.perfil.nome ?? '—'}</p>
+          <div className="topbar-right topbar-right--end">
+            <div className="topbar-session topbar-session--compact" title={`Perfil: ${user?.perfil.nome ?? '—'}`}>
+              <span className="topbar-session-name">{user?.nome ?? 'Utilizador'}</span>
+              {user?.perfil.nome &&
+              user.perfil.nome.trim().toLowerCase() !== (user.nome ?? '').trim().toLowerCase() ? (
+                <span className="topbar-session-role">{user.perfil.nome}</span>
+              ) : null}
             </div>
+            <button
+              className="ghost-button topbar-sair"
+              onClick={() => setSenhaModalOpen(true)}
+              type="button"
+            >
+              Alterar senha
+            </button>
             <button className="ghost-button topbar-sair" onClick={handleLogout} type="button">
               Sair
             </button>
@@ -115,6 +128,7 @@ function MainLayoutInner() {
         </header>
 
         <section className="page-content">
+          <AppVersionOutdatedBanner />
           <LocalStorageCorruptoBanner />
           <SnapshotSessionBanner />
           <SessionCloudStaleBanner />
@@ -122,6 +136,8 @@ function MainLayoutInner() {
           <Outlet />
         </section>
       </main>
+
+      <AlterarMinhaSenhaModal open={senhaModalOpen} onClose={() => setSenhaModalOpen(false)} />
     </div>
   );
 }
@@ -129,7 +145,9 @@ function MainLayoutInner() {
 export function MainLayout() {
   return (
     <AtendimentoOperacaoGuardProvider>
-      <MainLayoutInner />
+      <PageChromeProvider>
+        <MainLayoutInner />
+      </PageChromeProvider>
     </AtendimentoOperacaoGuardProvider>
   );
 }

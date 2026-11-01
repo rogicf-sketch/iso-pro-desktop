@@ -6,9 +6,11 @@ import { testSupabaseDispositivosMobile } from '../services/mobileDevices.servic
 
 type Props = {
   canAdministerConfiguracoes: boolean;
+  /** Quando a nuvem está OK, o bloco fica recolhido (diagnóstico, não 1.ª pintura). */
+  collapsedByDefault?: boolean;
 };
 
-export function SupabaseMobileDiagnostics({ canAdministerConfiguracoes }: Props) {
+export function SupabaseMobileDiagnostics({ canAdministerConfiguracoes, collapsedByDefault = false }: Props) {
   const diag = getSupabaseConfigDiagnostics();
   const [testLine, setTestLine] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
@@ -28,7 +30,7 @@ export function SupabaseMobileDiagnostics({ canAdministerConfiguracoes }: Props)
 
   const ok = diag.hasUrl && diag.hasKey;
 
-  return (
+  const body = (
     <div className="stack-grid" style={{ gap: 12 }}>
       <OperationalNotice tone={ok ? 'neutral' : 'warning'}>
         <strong>Ligacao Supabase neste browser</strong>
@@ -77,5 +79,16 @@ export function SupabaseMobileDiagnostics({ canAdministerConfiguracoes }: Props)
         <OperationalNotice tone={testLine.startsWith('Sucesso') ? 'neutral' : 'warning'}>{testLine}</OperationalNotice>
       ) : null}
     </div>
+  );
+
+  if (!collapsedByDefault) {
+    return body;
+  }
+
+  return (
+    <details className="config-diagnostics-details">
+      <summary>Diagnóstico de ligação (admin)</summary>
+      <div className="config-diagnostics-details__body">{body}</div>
+    </details>
   );
 }

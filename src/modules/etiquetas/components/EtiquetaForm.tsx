@@ -69,6 +69,7 @@ export function EtiquetaForm({ initialValue, onCancel, onApplyPreset, onSubmit }
             <option value="liberacao">Liberacao (etiqueta: Liberado)</option>
           </Select>
           <Select label="Formato" onChange={(event) => handlePreset(form.modelo, event.target.value as EtiquetaFormData['formato'])} value={form.formato}>
+            <option value="a4_3col">A4 3 colunas (denso)</option>
             <option value="a4_2col">A4 2 colunas</option>
             <option value="a4_1col">A4 1 coluna</option>
             <option value="termica_58">Termica 58mm</option>

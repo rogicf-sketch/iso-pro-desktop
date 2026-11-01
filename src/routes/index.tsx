@@ -5,6 +5,7 @@ import { AuthLayout } from '@/layouts/AuthLayout';
 import { MainLayout } from '@/layouts/MainLayout';
 import { DefaultModuleRedirect } from './DefaultModuleRedirect';
 import { ModuleAccessRoute } from './ModuleAccessRoute';
+import { DocumentoVerificacaoPage } from '@/pages/DocumentoVerificacaoPage';
 import { NoAccessPage } from './NoAccessPage';
 import { ProtectedRoute } from './ProtectedRoute';
 import {
@@ -43,6 +44,8 @@ export const router = createHashRouter([
       { path: '/login', element: withSuspense(<LoginPage />) },
     ],
   },
+  /** Pública: QR dos relatórios (RIR/RNC/RF) — sem login. */
+  { path: '/verificar', element: withSuspense(<DocumentoVerificacaoPage />) },
   {
     element: <ProtectedRoute />,
     children: [

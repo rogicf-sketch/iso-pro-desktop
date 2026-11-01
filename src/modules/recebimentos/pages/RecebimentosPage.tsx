@@ -1,11 +1,14 @@
-import { useMemo } from 'react';
+﻿import { useMemo } from 'react';
 import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { RecebimentoFilters } from '../components/RecebimentoFilters';
 import { RecebimentoForm } from '../components/RecebimentoForm';
@@ -30,10 +33,13 @@ export function RecebimentosPage() {
     error,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,
     isModalOpen,
+    viewOpening,
     selected,
     setFilters,
     openCreateModal,
@@ -45,11 +51,13 @@ export function RecebimentosPage() {
     submitRecebimento,
     handleCancelar,
     exportRecebimentosExcel,
+    exportingRecebimentosCsv,
     downloadModeloCsvImportacaoRecebimentos,
     downloadModeloCsvImportacaoRecebimentosItens,
     importMassInputRef,
     importMassStaging,
     importingRecebimentosMass,
+    importMassProgress,
     importMassResultado,
     importMassSnapshotConflict,
     openImportRecebimentosMassaPicker,
@@ -86,6 +94,23 @@ export function RecebimentosPage() {
   const canEdit = canAccessAction('recebimentos', 'editar');
   const canAdminister = canAccessAction('recebimentos', 'administrar');
 
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource,
+    hasCloudConfig,
+    staleWhileRevalidate,
+    fallbackReason,
+  });
+
+  usePageChrome(
+    {
+      meta:
+        loading && total === 0
+          ? 'A carregar…'
+          : `${total.toLocaleString('pt-BR')} recebimentos · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, total, fonteNuvemOk],
+  );
+
   const resumoLinhasExclusao = useMemo(() => {
     const total = excluirModalResumos.length;
     const visiveis = excluirModalResumos.slice(0, MAX_RECEBIMENTOS_RESUMO_MODAL);
@@ -95,11 +120,7 @@ export function RecebimentosPage() {
 
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Modulo</p>
-          <h2>Recebimentos</h2>
-        </div>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
         {canEdit ? (
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Novo recebimento">
@@ -120,8 +141,13 @@ export function RecebimentosPage() {
                 <Button type="button" variant="ghost" onClick={downloadModeloCsvImportacaoRecebimentosItens}>
                   Modelo itens
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => void exportRecebimentosExcel()}>
-                  Exportar
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={exportingRecebimentosCsv}
+                  onClick={() => void exportRecebimentosExcel()}
+                >
+                  {exportingRecebimentosCsv ? 'A exportar…' : 'Exportar'}
                 </Button>
               </div>
             </div>
@@ -155,13 +181,16 @@ export function RecebimentosPage() {
         </p>
       </ModuleHelp>
 
-      <OperationalNotice>
-        {cloudStatus === 'ready' && hasCloudConfig
-          ? 'Fonte atual: Supabase. Recebimentos operando com persistencia em nuvem.'
-          : cloudStatus === 'partial'
-            ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-            : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
-      </OperationalNotice>
+      <FonteDadosNotice
+        healthy={fonteNuvemOk}
+        fallbackMessage={
+          hasCloudConfig
+            ? 'Cópia local / desatualizada — a nuvem nao confirmou esta lista. Nao use como verdade unica.'
+            : cloudStatus === 'partial'
+              ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        }
+      />
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
 
       <SnapshotConflictHint
@@ -172,39 +201,41 @@ export function RecebimentosPage() {
       <RecebimentoFilters filters={filters} onChange={setFilters} />
 
       {error ? <div className="error-box">{error}</div> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
-      {canAdminister ? (
+      {exportingRecebimentosCsv ? (
+        <OperationalNotice>A exportar recebimentos para Excel… Aguarde o download.</OperationalNotice>
+      ) : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
+      {canEdit || canAdminister ? (
         <ModuleHelp>
           <OperationalNotice tone="warning">
-            Regra operacional: recebimentos ja conferidos ou cancelados aparecem travados para cancelamento, preservando a consistencia do estoque e da conferencia.{' '}
-            <strong>Destravar...</strong> (senha) volta o recebimento para <strong>aguardando conferencia</strong> mantendo as quantidades e observacoes ja conferidas, para corrigir linhas pontuais, cancelar ou excluir.{' '}
-            <strong>Exclusao definitiva</strong> (com senha) remove a linha do cadastro apenas para recebimentos em{' '}
-            <strong>aguardando conferencia</strong>, <strong>cancelados</strong> ou <strong>rascunho</strong>; recebimentos ja conferidos
-            nao podem ser apagados sem destravar antes. Pode selecionar varios ou todos do filtro e excluir em massa.
+            Recebimentos ja conferidos ficam travados para proteger o estoque.{' '}
+            <strong>Destravar</strong> (cadeado + a sua senha) volta para <strong>aguardando conferencia</strong> mantendo as
+            quantidades conferidas — depois use <strong>Editar</strong>.{' '}
+            {canAdminister ? (
+              <>
+                <strong>Cancelar</strong> e <strong>exclusao definitiva</strong> exigem permissao administrar.
+              </>
+            ) : (
+              <>Cancelar e exclusao definitiva so um administrador pode fazer.</>
+            )}
           </OperationalNotice>
         </ModuleHelp>
       ) : null}
 
       {canAdminister ? (
-        <div className="editor-block" style={{ marginBottom: 16 }}>
-          <ModuleHelp>
-            <p className="panel-copy" style={{ marginBottom: 8 }}>
-              <strong>Administracao:</strong> marque linhas ou <strong>Selecionar todos (filtro atual)</strong>; depois{' '}
-              <strong>Excluir selecionados...</strong> (senha). Se a selecao incluir recebimentos conferidos, a operacao sera recusada.
-            </p>
-          </ModuleHelp>
-          <div className="form-actions" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ marginRight: 8, fontSize: '0.9rem' }}>
-              {selectedRecebimentoIds.length} selecionado(s)
-              {total > 0 ? ` · ${total} no filtro atual` : null}
-            </span>
+        <div className="etiquetas-bulk-bar etiquetas-bulk-bar--compact recebimentos-bulk-bar">
+          <span className="recebimentos-bulk-bar__count">
+            {selectedRecebimentoIds.length} selecionado(s)
+            {total > 0 ? ` · ${total} no filtro` : null}
+          </span>
+          <div className="etiquetas-bulk-bar__actions">
             <Button
               disabled={selectAllFilteredBusy || loading}
               onClick={() => void selectAllRecebimentosFiltered()}
               type="button"
               variant="ghost"
             >
-              {selectAllFilteredBusy ? 'A selecionar...' : 'Selecionar todos (filtro atual)'}
+              {selectAllFilteredBusy ? 'A selecionar...' : 'Selecionar todos'}
             </Button>
             <Button disabled={!selectedRecebimentoIds.length} onClick={clearRecebimentosSelection} type="button" variant="ghost">
               Limpar selecao
@@ -232,13 +263,14 @@ export function RecebimentosPage() {
             onCancel={handleCancelar}
             onEdit={openEditModal}
             onExcluirDefinitivo={canAdminister ? abrirExclusaoDefinitivaRecebimento : undefined}
-            onDestravar={canAdminister ? abrirDestravarRecebimento : undefined}
+            onDestravar={canEdit || canAdminister ? abrirDestravarRecebimento : undefined}
             onToggleSelect={canAdminister ? toggleSelectRecebimentoId : undefined}
             onToggleSelectPagina={canAdminister ? toggleSelectRecebimentosPaginaAtual : undefined}
             onView={openViewModal}
             selectedIds={canAdminister ? selectedRecebimentoIdSet : undefined}
           />
           <Pagination
+            itemLabel="recebimentos"
             onPageChange={(page) => setFilters({ ...filters, page })}
             page={filters.page}
             pageSize={filters.pageSize}
@@ -267,7 +299,9 @@ export function RecebimentosPage() {
               <strong>{importMassStaging.fileName}</strong>?
             </p>
             {importingRecebimentosMass ? (
-              <OperationalNotice>A importar recebimentos...</OperationalNotice>
+              <OperationalNotice>
+                {importMassProgress || 'A gravar na nuvem…'} A janela fecha sozinha com o resultado.
+              </OperationalNotice>
             ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
               <Button
@@ -289,6 +323,9 @@ export function RecebimentosPage() {
       <Modal onClose={closeImportRecebimentosMassaResultado} open={Boolean(importMassResultado)} title="Importacao concluida" wide>
         {importMassResultado ? (
           <div className="editor-block">
+            {importMassResultado.mensagem ? (
+              <OperationalNotice>{importMassResultado.mensagem}</OperationalNotice>
+            ) : null}
             <p>
               <strong>{importMassResultado.criados}</strong> novo(s), <strong>{importMassResultado.atualizados}</strong> atualizado(s),{' '}
               <strong>{importMassResultado.ignorados}</strong> ignorado(s).
@@ -311,7 +348,7 @@ export function RecebimentosPage() {
 
       <Modal
         onClose={fecharDestravarRecebimento}
-        open={Boolean(destravarContext) && canAdminister}
+        open={Boolean(destravarContext) && (canEdit || canAdminister)}
         title="Destravar recebimento para correcao"
         wide
       >
@@ -320,7 +357,7 @@ export function RecebimentosPage() {
             <p>
               O recebimento <strong>{destravarContext.notaFiscal || '-'}</strong> /{' '}
               <strong>{destravarContext.romaneio || '-'}</strong> ({destravarContext.fornecedor}) voltara para{' '}
-              <strong>aguardando conferencia</strong>. A conferencia feita (quantidades e observacoes por linha) sera mantida — altere apenas o necessario e grave. Esta accao e registada na auditoria.
+              <strong>aguardando conferencia</strong>. A conferencia feita (quantidades e observacoes por linha) sera mantida - altere apenas o necessario e grave. Esta accao e registada na auditoria.
             </p>
             <p className="panel-copy" style={{ marginTop: 8 }}>
               Confirme com a sua senha. Com o foco no campo abaixo, pode premir <kbd>Enter</kbd> para confirmar.
@@ -392,7 +429,7 @@ export function RecebimentosPage() {
                     {' '}
                     ({resumoLinhasExclusao.total} encontrado(s)
                     {idsParaExcluirRecebimentos.length !== resumoLinhasExclusao.total
-                      ? ` · ${idsParaExcluirRecebimentos.length} pedido(s)`
+                      ? ` Â· ${idsParaExcluirRecebimentos.length} pedido(s)`
                       : ''}
                     )
                   </span>
@@ -420,7 +457,7 @@ export function RecebimentosPage() {
                 >
                   {resumoLinhasExclusao.visiveis.map((r, index) => (
                     <div key={`${index}-${r.notaFiscal}-${r.romaneio}`}>
-                      {encurtarLinhaResumoRecebimento(`${r.fornecedor} — NF ${r.notaFiscal || '-'} / ${r.romaneio || '-'}`)}
+                      {encurtarLinhaResumoRecebimento(`${r.fornecedor} - NF ${r.notaFiscal || '-'} / ${r.romaneio || '-'}`)}
                     </div>
                   ))}
                   {resumoLinhasExclusao.restantes > 0 ? (
@@ -489,8 +526,12 @@ export function RecebimentosPage() {
         }
         wide
       >
+        {viewOpening && !selected ? (
+          <OperationalNotice>A carregar recebimento...</OperationalNotice>
+        ) : (
         <RecebimentoForm
           allowImportItens={!selected && !isViewOnly}
+          editId={selected?.id}
           key={selected?.id ?? 'new-rec'}
           initialValue={formInitialValue}
           onCancel={closeModal}
@@ -509,6 +550,7 @@ export function RecebimentosPage() {
               : undefined
           }
         />
+        )}
       </Modal>
     </div>
   );

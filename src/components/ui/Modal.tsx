@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { IconFullscreenEnter, IconFullscreenExit } from './FullscreenIcons';
 import { ModalFormGuardProvider, useModalBeforeUnloadGuard, useModalRequestClose } from './modalFormGuard';
 
@@ -156,7 +157,7 @@ export function Modal({
   const backdropClass =
     resolved === 'fullscreen' ? 'modal-backdrop modal-backdrop--fullscreen' : 'modal-backdrop';
 
-  return (
+  return createPortal(
     <ModalFormGuardProvider externalDirty={dirty}>
       <ModalChrome
         backdropClass={backdropClass}
@@ -168,6 +169,7 @@ export function Modal({
       >
         {children}
       </ModalChrome>
-    </ModalFormGuardProvider>
+    </ModalFormGuardProvider>,
+    document.body,
   );
 }

@@ -24,27 +24,39 @@ export function ConferenciaEditor({
   onSubmit,
 }: Props) {
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <div>
-          <p className="panel-kicker">Recebimento selecionado</p>
-          <h2>{item.fornecedor}</h2>
-        </div>
+    <div className="conferencia-editor">
+      <div className="conferencia-editor__chrome">
+        <span className="conferencia-editor__meta">
+          <strong>{item.fornecedor}</strong>
+          <span className="conferencia-editor__sep">·</span>
+          NF {item.notaFiscal || '—'}
+          <span className="conferencia-editor__sep">·</span>
+          {item.romaneio ? `Rom. ${item.romaneio}` : 'Sem romaneio'}
+          <span className="conferencia-editor__sep">·</span>
+          {item.dataRecebimento}
+        </span>
+        <span className="conferencia-editor__totais">
+          Recebido <strong>{totalRecebido}</strong>
+          <span className="conferencia-editor__sep">·</span>
+          Conferido <strong>{totalConferido}</strong>
+        </span>
       </div>
 
-      <div className="form-columns">
-        <Input label="Nota fiscal" readOnly value={item.notaFiscal} />
-        <Input label="Romaneio" readOnly value={item.romaneio} />
-        <Input label="Data" readOnly value={item.dataRecebimento} />
-      </div>
-
-      <div className="form-columns">
+      <div className="form-columns conferencia-editor__fields">
         <Input disabled={!canEdit} label="Conferente" onChange={(event) => onConferenteChange(event.target.value)} value={item.conferente} />
-        <Input label="Total recebido" readOnly value={String(totalRecebido)} />
-        <Input label="Total conferido" readOnly value={String(totalConferido)} />
+        <label className="field" style={{ gridColumn: 'span 2' }}>
+          <span>Observacoes</span>
+          <textarea
+            className="input-control text-area"
+            disabled={!canEdit}
+            onChange={(event) => onObservacoesChange(event.target.value)}
+            rows={2}
+            value={item.observacoes}
+          />
+        </label>
       </div>
 
-      <div className="table-shell">
+      <div className="table-shell conferencia-editor__itens">
         <table className="data-table">
           <thead>
             <tr>
@@ -80,13 +92,8 @@ export function ConferenciaEditor({
         </table>
       </div>
 
-      <label className="field">
-        <span>Observacoes da conferencia</span>
-        <textarea className="input-control text-area" disabled={!canEdit} onChange={(event) => onObservacoesChange(event.target.value)} rows={3} value={item.observacoes} />
-      </label>
-
       {canEdit ? (
-        <div className="form-actions">
+        <div className="form-actions conferencia-editor__actions">
           <Button onClick={onSubmit}>Salvar conferencia</Button>
         </div>
       ) : null}

@@ -4,7 +4,11 @@ import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
 import { Input } from '../../../components/ui/Input';
 import { Modal } from '../../../components/ui/Modal';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
-import { readConfiguracoes, salvarConfiguracoes } from '../../configuracoes/services/configuracoes.service';
+import {
+  readConfiguracoes,
+  salvarConfiguracoes,
+  tentarRecuperarProcedimentosRirSeVazio,
+} from '../../configuracoes/services/configuracoes.service';
 import type { RirProcedimentoCadastroItem } from '../../configuracoes/types/configuracao.types';
 
 type Props = {
@@ -21,6 +25,7 @@ export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
   const [revisao, setRevisao] = useState('');
   const [editId, setEditId] = useState<string | null>(null);
   const [versao, setVersao] = useState(0);
+  const [recuperando, setRecuperando] = useState(false);
 
   const lista = useMemo(() => {
     void versao;
@@ -82,6 +87,24 @@ export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
     if (editId === id) limparForm();
   }
 
+  async function recuperarDosRir() {
+    if (!canEdit || recuperando) return;
+    setError('');
+    setSuccess('');
+    setRecuperando(true);
+    try {
+      const { recuperados } = await tentarRecuperarProcedimentosRirSeVazio();
+      if (recuperados === 0) {
+        setError('Nao foi possivel recuperar: nenhum Nº Procedimento encontrado nos RIR.');
+        return;
+      }
+      setSuccess(`${recuperados} procedimento(s) recuperado(s) a partir dos RIR.`);
+      setVersao((v) => v + 1);
+    } finally {
+      setRecuperando(false);
+    }
+  }
+
   return (
     <Modal onClose={onClose} open={open} title="Nº do procedimento — cadastro" wide>
       <OperationalNotice tone="warning">
@@ -104,6 +127,16 @@ export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
             <Button onClick={limparForm} type="button" variant="ghost">
               Limpar formulario
             </Button>
+            {lista.length === 0 ? (
+              <Button
+                onClick={() => void recuperarDosRir()}
+                type="button"
+                variant="ghost"
+                disabled={recuperando}
+              >
+                {recuperando ? 'A recuperar…' : 'Recuperar dos RIR'}
+              </Button>
+            ) : null}
           </>
         ) : null}
       </div>
@@ -125,6 +158,9 @@ export function RirProcedimentoModal({ open, onClose, canEdit }: Props) {
               <tr>
                 <td colSpan={3} style={{ padding: 16, color: 'var(--muted)' }}>
                   Nenhum procedimento cadastrado.
+                  {canEdit
+                    ? ' Se já houver RIR com Nº Procedimento, use «Recuperar dos RIR».'
+                    : null}
                 </td>
               </tr>
             ) : (

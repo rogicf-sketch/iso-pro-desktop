@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  listInventariosPageFromCloud,
+  readInventarioFromCloud,
+  writeInventariosSotOnCloud,
+} from '../../../lib/inventariosTabelas';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { InventarioFormData } from '../types/inventario.types';
@@ -19,7 +24,28 @@ vi.mock('../../../lib/snapshotSliceRead', () => ({
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
+  getSupabase: vi.fn(() => null),
 }));
+
+vi.mock('../../../lib/inventariosTabelas', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/inventariosTabelas')>();
+  return {
+    ...actual,
+    writeInventariosSotOnCloud: vi.fn(async () => ({
+      updatedAt: new Date().toISOString(),
+      missing: false,
+    })),
+    listInventariosPageFromCloud: vi.fn(async () => ({
+      inventarios: [],
+      total: 0,
+      source: 'tables',
+    })),
+    readInventarioFromCloud: vi.fn(async () => ({
+      inventario: null,
+      source: 'tables',
+    })),
+  };
+});
 
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../lib/isoProSnapshot')>();
@@ -84,6 +110,10 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeInventariosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -103,10 +133,14 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue({ inventarios: [] });
+    mockReadForWrite.mockResolvedValue({
+      payload: { inventarios: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito inventario.'));
+    vi.mocked(writeInventariosSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito inventario.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -118,10 +152,6 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
   });
 
   it('em sucesso remoto persiste copia local com status aberto', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: { inventarios: [] },
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
@@ -163,7 +193,7 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
     expect(result.data?.contagemMobileHabilitada).toBe(true);
   });
 
-  it('com nuvem vazia edita inventario local (exemplo) e publica lista completa na nuvem', async () => {
+  it('com nuvem vazia e so seed local nao promove demos ao editar exemplo', async () => {
     mockReadPayload.mockResolvedValue({ inventarios: [] });
     mockReadForWrite.mockResolvedValue({
       payload: { inventarios: [] },
@@ -209,9 +239,61 @@ describe('inventario.service / salvarInventario criacao (Supabase)', () => {
       'inv-1',
     );
 
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/nao encontrado/i);
+    expect(writeInventariosSotOnCloud).not.toHaveBeenCalled();
+  });
+
+  it('com nuvem vazia edita inventario local real (nao seed) e publica na nuvem', async () => {
+    mockReadPayload.mockResolvedValue({ inventarios: [] });
+    mockReadForWrite.mockResolvedValue({
+      payload: { inventarios: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[STORAGE_KEY] = JSON.stringify([
+      {
+        id: 'inv-real-1',
+        codigo: 'INV-REAL-001',
+        descricao: 'Inventario real',
+        responsavel: 'Carlos Lima',
+        dataInventario: '2026-04-01',
+        status: 'aberto',
+        contagemMobileHabilitada: false,
+        observacoes: '',
+        itens: [
+          {
+            id: 'inv-real-item-1',
+            codigoMaterial: 'TB-0001',
+            descricaoMaterial: 'Tubo',
+            unidade: 'UN',
+            saldoSistema: 12,
+            quantidadeContada: 10,
+            localizacaoContada: '',
+          },
+        ],
+      },
+    ]);
+
+    const result = await salvarInventario(
+      {
+        ...minimalInventario({
+          codigo: 'INV-REAL-001',
+          descricao: 'Inventario real',
+          responsavel: 'Carlos Lima',
+          dataInventario: '2026-04-01',
+          contagemMobileHabilitada: true,
+        }),
+      },
+      'inv-real-1',
+    );
+
     expect(result.success).toBe(true);
     expect(result.data?.contagemMobileHabilitada).toBe(true);
-    expect(mockCommitPatch).toHaveBeenCalled();
+    expect(writeInventariosSotOnCloud).toHaveBeenCalled();
   });
 });
 
@@ -242,12 +324,31 @@ function snapshotInventarioAbertoEdicao() {
   };
 }
 
+function mockCloudInventarioFromSnapshot() {
+  const snap = snapshotInventarioAbertoEdicao();
+  const inv = snap.inventarios[0]!;
+  vi.mocked(readInventarioFromCloud).mockResolvedValue({
+    inventario: inv as unknown as Record<string, unknown>,
+    source: 'tables',
+  });
+  vi.mocked(listInventariosPageFromCloud).mockResolvedValue({
+    inventarios: [{ id: inv.id, codigo: inv.codigo }],
+    total: 1,
+    source: 'tables',
+  });
+}
+
 describe('inventario.service / salvarInventario edicao (Supabase)', () => {
   let store: Record<string, string>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeInventariosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    mockCloudInventarioFromSnapshot();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -267,10 +368,14 @@ describe('inventario.service / salvarInventario edicao (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(snapshotInventarioAbertoEdicao());
+    mockReadForWrite.mockResolvedValue({
+      payload: snapshotInventarioAbertoEdicao(),
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito edicao inv.'));
+    vi.mocked(writeInventariosSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito edicao inv.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -297,14 +402,11 @@ describe('inventario.service / salvarInventario edicao (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(isSnapshotConflictResult(result)).toBe(true);
-    expect(store[STORAGE_KEY]).toBe(JSON.stringify([]));
+    const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { id: string; descricao: string }[];
+    expect(local.find((i) => i.id === 'inv-edit')?.descricao).not.toBe('Nova desc');
   });
 
   it('em sucesso remoto atualiza copia local', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: { inventarios: [] },
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
@@ -344,6 +446,11 @@ describe('inventario.service / fecharInventario (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeInventariosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    mockCloudInventarioFromSnapshot();
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -363,10 +470,14 @@ describe('inventario.service / fecharInventario (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(snapshotInventarioAbertoEdicao());
+    mockReadForWrite.mockResolvedValue({
+      payload: snapshotInventarioAbertoEdicao(),
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao fechar.'));
+    vi.mocked(writeInventariosSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao fechar.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -374,14 +485,11 @@ describe('inventario.service / fecharInventario (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(isSnapshotConflictResult(result)).toBe(true);
-    expect(store[STORAGE_KEY]).toBe(JSON.stringify([]));
+    const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { id: string; status: string }[];
+    expect(local.find((i) => i.id === 'inv-edit')?.status).not.toBe('fechado');
   });
 
   it('em sucesso remoto marca fechado na copia local', async () => {
-    mockReadForWrite.mockResolvedValue({
-      payload: { inventarios: [] },
-      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
-    });
     mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
       await fn();
     });
@@ -403,6 +511,20 @@ describe('inventario.service / montarExportacaoInventarioCsv', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeInventariosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(listInventariosPageFromCloud).mockResolvedValue({
+      inventarios: [],
+      total: 0,
+      source: 'tables',
+    });
+    vi.mocked(readInventarioFromCloud).mockImplementation(async (id: string) => {
+      const payload = (await mockReadPayload()) as { inventarios?: Array<Record<string, unknown>> };
+      const found = (payload.inventarios ?? []).find((inv) => String(inv.id) === id) ?? null;
+      return { inventario: found, source: 'tables' };
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',

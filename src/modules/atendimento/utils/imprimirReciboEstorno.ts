@@ -1,9 +1,9 @@
 import {
   cssBarraPreVisualizacaoImpressaoHtml,
+  cssFontesNotoRelatorioInline,
   cssInstitucionalRelatorio,
   escapeHtmlRelatorio,
   htmlBarraPreVisualizacaoImpressao,
-  htmlBlocoLogoInstitucional,
   scriptBarraPreVisualizacaoImpressao,
   segmentoInstituicaoRodapeEletronico,
 } from '../../../lib/htmlRelatorioInstitucional';
@@ -11,7 +11,12 @@ import { imprimirRelatorioProfissional, nomeArquivoRelatorioPdf } from '../../..
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
 import type { DadosReciboEstorno } from '../types/atendimento.types';
-import { cssReciboAtendimentoBase, htmlAssinaturasRecibo } from './imprimirReciboAtendimento';
+import {
+  cssReciboAtendimentoBase,
+  DOC_VERSION_RECIBO,
+  htmlAssinaturasRecibo,
+  htmlCabecalhoReciboV6,
+} from './imprimirReciboAtendimento';
 
 function totalQuantidadeEstorno(dados: DadosReciboEstorno): number {
   return dados.itensEstorno.reduce((acc, it) => acc + (Number(it.quantidadeAtendida) || 0), 0);
@@ -51,7 +56,6 @@ function cssReciboEstornoExtra(): string {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-      /* Estorno compacto: cabe em 1 folha para lotes pequenos. */
       .recibo-estorno-motivo {
         margin: 0 0 6px !important;
         padding: 6px 10px !important;
@@ -67,7 +71,7 @@ function cssReciboEstornoExtra(): string {
   `;
 }
 
-export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
+export async function montarHtmlReciboEstorno(dados: DadosReciboEstorno): Promise<string> {
   const at = dados.atendimento;
   const logoUrl = resolverUrlLogoInstitucionalParaHtmlImpresso(dados.logoUrl);
   const cfgR = readConfiguracoes();
@@ -84,7 +88,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   const docTitulo =
     dados.documentoTitulo?.trim() ||
     (dados.documentoNumero === 'MULTIPLOS'
-      ? 'Varios desenhos (ver coluna Documento)'
+      ? 'Vários desenhos (ver coluna Documento)'
       : `${escapeHtmlRelatorio(dados.documentoNumero)} Rev. ${escapeHtmlRelatorio(dados.documentoRevisao)}`);
 
   const linhasHtml = dados.itensEstorno
@@ -104,9 +108,10 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   const total = totalQuantidadeEstorno(dados);
   const classeDensidade = dados.itensEstorno.length > 6 ? ' recibo-body--denso' : '';
   const avisoParcial =
-    dados.estornoParcial ?
-      `<p class="recibo-estorno-badge" role="note"><strong>Estorno parcial</strong> — apenas os itens abaixo foram devolvidos nesta operacao.</p>`
-    : '';
+    dados.estornoParcial
+      ? `<p class="recibo-estorno-badge" role="note"><strong>Estorno parcial</strong> — apenas os itens abaixo foram devolvidos nesta operação.</p>`
+      : '';
+  const fontesCss = await cssFontesNotoRelatorioInline();
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -115,6 +120,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Estorno ${escapeHtmlRelatorio(at.numero)}</title>
   <style>
+    ${fontesCss}
     ${cssInstitucionalRelatorio()}
     ${cssBarraPreVisualizacaoImpressaoHtml()}
     ${cssReciboAtendimentoBase()}
@@ -124,22 +130,19 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
 <body class="recibo-body${classeDensidade}">
   ${htmlBarraPreVisualizacaoImpressao()}
   <div class="recibo-sheet">
-  <div class="inst-topbar recibo-topbar">
-    <span>Gerado em: ${escapeHtmlRelatorio(geradoEm)}</span>
-    <span>Estorno ${escapeHtmlRelatorio(at.numero)}</span>
-  </div>
-
-  <header class="recibo-header-main recibo-header-main--titulo-centro">
-    <div class="recibo-logo-wrap">${htmlBlocoLogoInstitucional(logoUrl)}</div>
-    <div class="inst-title-col recibo-titulo-centro">
-      <h1>Recibo de estorno de material</h1>
-    </div>
-  </header>
+  ${htmlCabecalhoReciboV6({
+    logoUrl,
+    titulo: 'Recibo de estorno de material',
+    eyebrow: 'Atendimento · Estorno',
+    codigoMeta: at.numero,
+    emitidoEm: geradoEm,
+    metaExtra: `Retirada ${dataAtendFmt}`,
+  })}
 
   <section class="bloco recibo-bloco-info">
     <div class="grid2">
       <p><strong>Documento:</strong> ${docTitulo}</p>
-      <p><strong>Responsavel (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel || '—')}</p>
+      <p><strong>Responsável (documento):</strong> ${escapeHtmlRelatorio(dados.documentoResponsavel || '—')}</p>
       <p><strong>Lote / atendimento:</strong> ${escapeHtmlRelatorio(at.numero)}</p>
       <p><strong>Data da retirada:</strong> ${escapeHtmlRelatorio(dataAtendFmt)}</p>
       <p><strong>Atendente (retirada):</strong> ${escapeHtmlRelatorio(at.atendente)}</p>
@@ -148,7 +151,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
       <p><strong>Quem devolve o material:</strong> ${escapeHtmlRelatorio(dados.nomeQuemDevolve || '—')}</p>
     </div>
     <div class="recibo-doc-desc">
-      <strong>Descricao do documento</strong>
+      <strong>Descrição do documento</strong>
       <p style="margin: 4px 0 0">${escapeHtmlRelatorio(dados.documentoDescricao || '—')}</p>
     </div>
   </section>
@@ -167,8 +170,8 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
         <tr>
           <th class="col-num">#</th>
           <th class="col-doc">Documento</th>
-          <th class="col-codigo">Codigo</th>
-          <th class="col-desc">Descricao do material</th>
+          <th class="col-codigo">Código</th>
+          <th class="col-desc">Descrição do material</th>
           <th class="col-un">UN</th>
           <th class="col-qtd">Qtd</th>
         </tr>
@@ -179,7 +182,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
   </section>
 
   <div class="recibo-fechamento">
-    <div class="recibo-total-linha"><strong>Total de unidades devolvidas (esta operacao):</strong> ${escapeHtmlRelatorio(String(total))}</div>
+    <div class="recibo-total-linha"><strong>Total de unidades devolvidas (esta operação):</strong> ${escapeHtmlRelatorio(String(total))}</div>
 
   <div class="recibo-rodape-fin">
   ${htmlAssinaturasRecibo(
@@ -188,11 +191,11 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
     dados.nomeQuemDevolve.trim() || '—',
     '—',
     {
-      atendente: 'Responsavel pelo estorno (operador)',
+      atendente: 'Responsável pelo estorno (operador)',
       atendido: 'Quem devolveu o material',
     },
   )}
-  <p class="recibo-doc-foot" role="contentinfo">Documento gerado eletronicamente pelo I.S.O PRO${segRodapeInst}. Conteudo para arquivo e auditoria. Referencia: estorno ${escapeHtmlRelatorio(at.numero)}.</p>
+  <p class="recibo-doc-foot" role="contentinfo">I.S.O PRO Desktop${segRodapeInst} · estorno ${escapeHtmlRelatorio(at.numero)} · v${DOC_VERSION_RECIBO}. Conteúdo para arquivo e auditoria.</p>
   </div>
   </div>
   </div>
@@ -203,7 +206,7 @@ export function montarHtmlReciboEstorno(dados: DadosReciboEstorno): string {
 
 export async function imprimirReciboEstorno(dados: DadosReciboEstorno): Promise<boolean> {
   return imprimirRelatorioProfissional({
-    html: montarHtmlReciboEstorno(dados),
+    html: await montarHtmlReciboEstorno(dados),
     fileName: nomeArquivoRelatorioPdf(dados.atendimento.numero, 'estorno'),
     titulo: `Recibo estorno ${dados.atendimento.numero}`,
     tipoNuvem: 'recibo_estorno',

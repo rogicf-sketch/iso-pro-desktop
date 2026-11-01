@@ -1,12 +1,15 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { readRemoteOrLocal, REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
+import { readIsoProSnapshotSlicesForWrite } from '../../../lib/isoProSnapshot';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import {
-  commitIsoProSnapshotPatch,
-  readIsoProSnapshotSlicesForWrite,
-} from '../../../lib/isoProSnapshot';
+  listAllColaboradoresFromCloud,
+  replaceColaboradoresOnCloud,
+  syncColaboradoresFromSnapshotCloud,
+} from '../../../lib/colaboradoresCloud';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
@@ -57,6 +60,17 @@ const seedData: Colaborador[] = [
   },
 ];
 
+const DEMO_COLABORADOR_IDS = new Set(seedData.map((c) => c.id));
+
+function isSomenteSeedDemo(items: Colaborador[]): boolean {
+  return items.length > 0 && items.every((c) => DEMO_COLABORADOR_IDS.has(c.id));
+}
+
+/** Copia local tipica de posto novo (seed Joao/Maria) — nao deve ganhar a corrida SWR. */
+function localColaboradoresPareceSeedOuVazio(items: Colaborador[]): boolean {
+  return items.length === 0 || isSomenteSeedDemo(items);
+}
+
 function normalizeColaborador(item: Partial<Colaborador> & Pick<Colaborador, 'id' | 'nome'>): Colaborador {
   return {
     id: item.id,
@@ -75,6 +89,7 @@ function normalizeColaborador(item: Partial<Colaborador> & Pick<Colaborador, 'id
 function readAll(): Colaborador[] {
   const raw = localStorage.getItem(colaboradoresStorageKey());
   if (!raw) {
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(colaboradoresStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
@@ -86,7 +101,12 @@ function readAll(): Colaborador[] {
       avisarPreservacaoLocalStorageCorrupto('Colaboradores', colaboradoresStorageKey());
       return [];
     }
-    return validated.map(normalizeColaborador);
+    const items = validated.map(normalizeColaborador);
+    if (hasSupabaseConfig() && isSomenteSeedDemo(items)) {
+      localStorage.removeItem(colaboradoresStorageKey());
+      return [];
+    }
+    return items;
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Colaboradores', colaboradoresStorageKey());
     return [];
@@ -144,6 +164,47 @@ type SnapshotPayload = {
 };
 
 async function readSnapshotColaboradores(): Promise<Colaborador[]> {
+  // Preferir tabela SoT; fallback snapshot para ambientes sem migration.
+  const fromTable = await listAllColaboradoresFromCloud();
+  if (!fromTable.missing && !fromTable.error) {
+    if (fromTable.colaboradores.length === 0) {
+      // Tabela vazia: tentar backfill uma vez a partir do snapshot.
+      await syncColaboradoresFromSnapshotCloud().catch(() => undefined);
+      const again = await listAllColaboradoresFromCloud();
+      if (!again.missing && again.colaboradores.length > 0) {
+        return again.colaboradores.map((item, index) =>
+          normalizeColaborador({
+            id: String(item.id ?? `col-${index + 1}`),
+            nome: String(item.nome ?? ''),
+            tipo: item.tipo,
+            matricula: String(item.matricula ?? ''),
+            funcao: String(item.funcao ?? ''),
+            empresa: String(item.empresa ?? ''),
+            documento: String(item.documento ?? ''),
+            telefone: String(item.telefone ?? ''),
+            observacao: String(item.observacao ?? ''),
+            ativo: item.ativo ?? true,
+          }),
+        );
+      }
+    } else {
+      return fromTable.colaboradores.map((item, index) =>
+        normalizeColaborador({
+          id: String(item.id ?? `col-${index + 1}`),
+          nome: String(item.nome ?? ''),
+          tipo: item.tipo,
+          matricula: String(item.matricula ?? ''),
+          funcao: String(item.funcao ?? ''),
+          empresa: String(item.empresa ?? ''),
+          documento: String(item.documento ?? ''),
+          telefone: String(item.telefone ?? ''),
+          observacao: String(item.observacao ?? ''),
+          ativo: item.ativo ?? true,
+        }),
+      );
+    }
+  }
+
   const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['colaboradores']);
   return (payload.colaboradores ?? []).map((item, index) =>
     normalizeColaborador({
@@ -162,36 +223,42 @@ async function readSnapshotColaboradores(): Promise<Colaborador[]> {
 }
 
 async function writeSnapshotColaboradores(items: Colaborador[]): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['colaboradores']);
-    return {
-      baselineUpdatedAt,
-      patch: {
-        colaboradores: items.map((item) => ({
-          id: item.id,
-          nome: item.nome,
-          tipo: item.tipo,
-          matricula: item.matricula,
-          funcao: item.funcao,
-          empresa: item.empresa,
-          documento: item.documento,
-          telefone: item.telefone,
-          observacao: item.observacao,
-          ativo: item.ativo,
-        })),
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
-  });
+  const wire = items.map((item) => ({
+    id: item.id,
+    nome: item.nome,
+    tipo: item.tipo,
+    matricula: item.matricula,
+    funcao: item.funcao,
+    empresa: item.empresa,
+    documento: item.documento,
+    telefone: item.telefone,
+    observacao: item.observacao,
+    ativo: item.ativo,
+  }));
+
+  const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['colaboradores']);
+  const replaced = await replaceColaboradoresOnCloud(wire, baselineUpdatedAt);
+  assertNoSilentSotFallback('colaboradores', replaced.missing);
   registrarAtividadeBackupOracle('cadastro');
 }
 
 export async function listarColaboradores(filtro: ColaboradorFiltro): Promise<ServiceResult<PaginatedResult<Colaborador>>> {
+  const localNow = readAll();
+  // Posto novo: seed local (2) vence SWR em 450ms e a UI fica presa nos demos enquanto a nuvem tem ~487.
+  // Esperar a nuvem (ate timeout) e aquecer o localStorage quando o remoto chegar.
+  const preferMs = localColaboradoresPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotColaboradores(),
+    loadRemote: async () => {
+      const remote = await readSnapshotColaboradores();
+      if (remote.length > 0) {
+        writeAll(remote);
+      }
+      return remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar colaboradores no Supabase.',
+    preferMs,
   });
   const items = aplicarFiltrosListaColaboradores(fallbackResult.data, filtro);
 
@@ -308,6 +375,13 @@ export async function listarColaboradoresAtivos(): Promise<Colaborador[]> {
   return [...items].filter((item) => item.ativo).sort((a, b) => a.nome.localeCompare(b.nome));
 }
 
+/** Cadastro já no aparelho. O recibo não espera a lista da nuvem. */
+export function listarColaboradoresAtivosLocais(): Colaborador[] {
+  return readAll()
+    .filter((item) => item.ativo)
+    .sort((a, b) => a.nome.localeCompare(b.nome));
+}
+
 export async function registrarRetiranteExterno(payload: {
   nome: string;
   empresa: string;
@@ -399,11 +473,18 @@ export type ExportacaoColaboradoresOpcoes = {
 export async function montarExportacaoColaboradoresCsv(
   opcoes?: ExportacaoColaboradoresOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
+  const localNow = readAll();
+  const preferMs = localColaboradoresPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotColaboradores(),
+    loadRemote: async () => {
+      const remote = await readSnapshotColaboradores();
+      if (remote.length > 0) writeAll(remote);
+      return remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar colaboradores no Supabase.',
+    preferMs,
   });
   const filtroLista =
     opcoes?.filtroLista ??
@@ -572,6 +653,7 @@ export async function importarColaboradoresDoArquivoCsv(
       ignorados,
       ignoradosPorDuplicidadeNoArquivo,
       detalhes,
+      mensagem: `Concluido. ${criados} novo(s) e ${atualizados} atualizado(s).`,
     },
   };
 }

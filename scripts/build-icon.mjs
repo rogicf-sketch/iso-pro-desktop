@@ -106,7 +106,19 @@ if (headerRgb.info.channels !== 3) {
 const headerBmp = encodeBmp24(150, 57, headerRgb.data);
 
 fs.mkdirSync(outDir, { recursive: true });
+const iconPng256 = await sharp(svgPath)
+  .resize(256, 256, { fit: 'contain', background: BG })
+  .png()
+  .toBuffer();
+fs.writeFileSync(path.join(outDir, 'icon.png'), iconPng256);
 fs.writeFileSync(outIco, icoBuffer);
 fs.writeFileSync(outHeaderBmp, headerBmp);
+
+/** PNG versionado em public/ — Electron encontra mesmo com `build/` limpo (gitignored). */
+const publicPng = path.join(root, 'public', 'app-icon.png');
+fs.writeFileSync(publicPng, iconPng256);
+
+console.log('build/icon.png');
 console.log('build/icon.ico');
 console.log('build/installerHeader.bmp');
+console.log('public/app-icon.png');

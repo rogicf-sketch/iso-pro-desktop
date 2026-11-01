@@ -92,6 +92,13 @@ Scripts úteis: `supabase/snippets/auditar_multi_tenant_iso_pro.sql`
 
 ---
 
+### 2.5 Criar empresa sem SQL ✅ (2026-07-24)
+
+- Edge `iso_pro_create_tenant` + painel em Configurações → Organizações.
+- Requer segredo `ISO_PRO_ADMIN_USER_SECRET` e actor admin (mesma base que `iso_pro_admin_user`).
+
+---
+
 ## Prioridade 3 — Longo prazo
 
 - [ ] Snapshot menos monolítico — restantes listas (ver 2.2)

@@ -3,6 +3,7 @@ import {
   mapIsoProAuthRpcUser,
   type IsoProAuthRpcUser,
 } from './isoProAuthRpc';
+import { bumpIsoProJwtEpoch, isoProJwtEpoch } from './isoProJwtEpoch';
 import { getActiveTenantId } from './isoProTenant';
 import { getSupabase, resetSupabaseClient } from './supabase';
 
@@ -20,6 +21,8 @@ export type JwtBootstrapOutcome =
   | { kind: 'skipped' }
   | { kind: 'ok' }
   | { kind: 'mfa_required'; factorId: string }
+  /** Admin JWT sem TOTP verificado — obrigar registo do authenticator antes da sessão ISO PRO. */
+  | { kind: 'mfa_enroll_required' }
   | { kind: 'failed'; reason: string };
 
 export type PreferJwtLoginResult =
@@ -32,6 +35,8 @@ export type PreferJwtLoginResult =
   | { ok: false; error: string; rpcMissing?: boolean };
 
 function isJwtAuthFeatureEnabled(): boolean {
+  // Produção / EXE: JWT obrigatório — ignora VITE=false e opt-out em localStorage.
+  if (import.meta.env.PROD) return true;
   const envFlag = String(import.meta.env.VITE_ISO_PRO_JWT_AUTH ?? '').trim().toLowerCase();
   if (envFlag === 'true' || envFlag === '1' || envFlag === 'yes') return true;
   if (envFlag === 'false' || envFlag === '0' || envFlag === 'no') return false;
@@ -48,6 +53,33 @@ export function isIsoProJwtSessionActive(): boolean {
   try {
     return localStorage.getItem(JWT_SESSION_FLAG_KEY) === '1';
   } catch {
+    return false;
+  }
+}
+
+/** Alinha o flag local com a sessão Auth real (evita «Auth session missing» com flag stale). */
+export async function syncIsoProJwtSessionFlagFromAuth(): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) {
+    setJwtSessionActive(false);
+    return false;
+  }
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token ?? '';
+    if (!token) {
+      setJwtSessionActive(false);
+      return false;
+    }
+    const jwtTenant = tenantIdFromAccessToken(token);
+    if (!jwtTenant || jwtTenant !== getActiveTenantId()) {
+      await clearIsoProJwtSession();
+      return false;
+    }
+    setJwtSessionActive(true);
+    return true;
+  } catch {
+    setJwtSessionActive(false);
     return false;
   }
 }
@@ -179,7 +211,35 @@ async function detectMfaRequired(): Promise<{ required: true; factorId: string }
   return { required: true, factorId: totp.id };
 }
 
+/** Admins/TI devem ter authenticator; operadores de campo não são forçados. */
+export function isoProUserRequiresMfaEnroll(user: IsoProAuthRpcUser): boolean {
+  const login = String(user.login ?? '').trim().toLowerCase();
+  if (login === 'admin') return true;
+  const perfilNome = String(user.perfil?.nome ?? '').toLowerCase();
+  if (perfilNome.includes('admin')) return true;
+  // Só «administrar» em Configurações/Usuários (não basta visualizar/editar operacional).
+  return (user.permissoes ?? []).some(
+    (p) =>
+      Boolean(p.permitido) &&
+      p.acao === 'administrar' &&
+      (p.modulo === 'configuracoes' || p.modulo === 'usuarios'),
+  );
+}
+
+async function detectMfaEnrollRequired(user: IsoProAuthRpcUser): Promise<boolean> {
+  if (!isoProUserRequiresMfaEnroll(user)) return false;
+  const supabase = getSupabase();
+  // Sem cliente: nao libertar admin sem MFA (fail-closed).
+  if (!supabase) return true;
+  const factors = await supabase.auth.mfa.listFactors();
+  // Erro ao listar factores: fail-closed para roles que exigem MFA.
+  if (!factors || factors.error) return true;
+  const totp = (factors.data?.totp ?? []).find((f) => f.status === 'verified');
+  return !totp?.id;
+}
+
 async function signInResolvedEmail(email: string, senha: string): Promise<JwtBootstrapOutcome> {
+  bumpIsoProJwtEpoch();
   setJwtSessionActive(true);
   const supabase = getSupabase();
   if (!supabase) {
@@ -199,7 +259,7 @@ async function signInResolvedEmail(email: string, senha: string): Promise<JwtBoo
     } catch {
       /* ignore */
     }
-    console.warn('[I.S.O PRO] JWT bootstrap falhou; modo anon mantido:', error.message);
+    console.warn('[I.S.O PRO] JWT bootstrap falhou (fail-closed):', error.message);
     return { kind: 'failed', reason: error.message };
   }
 
@@ -232,58 +292,97 @@ async function signInResolvedEmail(email: string, senha: string): Promise<JwtBoo
 }
 
 /**
- * Login preferindo JWT: 1 RPC resolver (autentica + email) → signIn; se sem Auth link, sessão app em anon.
- * Nunca revoga o fallback RPC. Sem cutover.
+ * Login preferindo JWT: 1 RPC resolver (autentica + email) → signIn.
+ * Modo enterprise (default): utilizador jwt_ready sem sessão JWT → login recusado (sem rpc_fallback).
+ * Utilizador sem Auth link → login recusado (sem rpc_only silencioso). Opt-out: VITE_ISO_PRO_JWT_AUTH=false.
  */
 export async function authenticateIsoProPreferJwt(
   login: string,
   senha: string,
   options?: { requiredModule?: string },
 ): Promise<PreferJwtLoginResult> {
+  bumpIsoProJwtEpoch();
   if (!isJwtAuthFeatureEnabled()) {
     const rpc = await autenticarUsuarioIsoProRpc(getActiveTenantId(), login, senha, options);
     if (!rpc.ok) return rpc;
     return { ok: true, user: rpc.user, authPath: 'rpc_only', jwt: { kind: 'skipped' } };
   }
 
+  // Troca de empresa no ecrã de login: JWT antigo de outro tenant bloqueava o resolver.
+  const supabasePre = getSupabase();
+  if (supabasePre) {
+    try {
+      const { data: sess } = await supabasePre.auth.getSession();
+      const token = sess.session?.access_token;
+      if (token) {
+        const jwtTenant = tenantIdFromAccessToken(token);
+        if (jwtTenant && jwtTenant !== getActiveTenantId()) {
+          await clearIsoProJwtSession();
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   const resolved = await resolverAuthEmailSessao(login, senha, options);
 
   if (resolved.ok === true && resolved.jwtReady === true) {
-    let user = resolved.user ?? null;
+    const user = resolved.user;
     if (!user) {
-      const rpc = await autenticarUsuarioIsoProRpc(getActiveTenantId(), login, senha, options);
-      if (!rpc.ok) return rpc;
-      user = rpc.user;
+      return {
+        ok: false,
+        error:
+          'Conta Auth ligada, mas sem perfil ISO PRO na resposta. Contacte o administrador (membership / perfil).',
+      };
     }
     const jwt = await signInResolvedEmail(resolved.email, senha);
     if (jwt.kind === 'ok') {
+      if (await detectMfaEnrollRequired(user)) {
+        return { ok: true, user, authPath: 'jwt', jwt: { kind: 'mfa_enroll_required' } };
+      }
       return { ok: true, user, authPath: 'jwt', jwt };
     }
     if (jwt.kind === 'mfa_required') {
       return { ok: true, user, authPath: 'jwt', jwt };
     }
-    return { ok: true, user, authPath: 'rpc_fallback', jwt };
-  }
-
-  if (resolved.ok === true && resolved.jwtReady === false && resolved.user) {
+    if (jwt.kind === 'mfa_enroll_required') {
+      return { ok: true, user, authPath: 'jwt', jwt };
+    }
     return {
-      ok: true,
-      user: resolved.user,
-      authPath: 'rpc_only',
-      jwt: { kind: 'skipped' },
+      ok: false,
+      error:
+        jwt.kind === 'failed'
+          ? `Login JWT falhou: ${jwt.reason}. Com cutover activo nao ha fallback anon. Verifique senha Auth, hook tenant_id e MFA.`
+          : 'Login JWT falhou. Com cutover activo nao ha fallback anon.',
     };
   }
 
-  // Resolver em falta / formato antigo / falha: fallback autenticar directo.
-  const rpc = await autenticarUsuarioIsoProRpc(getActiveTenantId(), login, senha, options);
-  if (!rpc.ok) {
-    if (resolved.ok === false && !/em falta|does not exist|could not find/i.test(resolved.reason)) {
-      return { ok: false, error: resolved.reason || rpc.error, rpcMissing: rpc.rpcMissing };
-    }
-    return rpc;
+  if (resolved.ok === true && resolved.jwtReady === false) {
+    return {
+      ok: false,
+      error:
+        'Utilizador sem ligacao Supabase Auth (JWT). Em Usuarios → editar → Ligar UUID Auth, ou peca ao administrador. Cutover enterprise nao permite sessao anon.',
+    };
   }
 
-  return { ok: true, user: rpc.user, authPath: 'rpc_only', jwt: { kind: 'skipped' } };
+  // Resolver em falta / falha de credenciais
+  if (resolved.ok === false) {
+    const msg = resolved.reason || 'Falha na autenticacao.';
+    if (/em falta|does not exist|could not find/i.test(msg)) {
+      return {
+        ok: false,
+        error: msg,
+        rpcMissing: true,
+      };
+    }
+    return { ok: false, error: msg };
+  }
+
+  return {
+    ok: false,
+    error: 'Nao foi possivel autenticar com JWT. Contacte o administrador.',
+  };
 }
 
 /**
@@ -301,7 +400,9 @@ export async function tryBootstrapJwtSessionAfterLogin(
   return signInResolvedEmail(resolved.email, senha);
 }
 
-export async function clearIsoProJwtSession(): Promise<void> {
+let clearQueue: Promise<void> = Promise.resolve();
+
+async function clearIsoProJwtSessionNow(): Promise<void> {
   const supabase = getSupabase();
   if (supabase) {
     try {
@@ -312,6 +413,18 @@ export async function clearIsoProJwtSession(): Promise<void> {
   }
   setJwtSessionActive(false);
   resetSupabaseClient();
+}
+
+export function clearIsoProJwtSession(scheduledEpoch = isoProJwtEpoch()): Promise<void> {
+  const run = clearQueue.then(async () => {
+    if (scheduledEpoch !== isoProJwtEpoch()) return;
+    await clearIsoProJwtSessionNow();
+  });
+  clearQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 /** Se a sessao Auth estiver desalinhada (RLS a esconder dados), volta a anon. */
@@ -337,6 +450,8 @@ export async function ensureIsoProDataSessionReadable(): Promise<void> {
 }
 
 export function setIsoProJwtAuthOptIn(enabled: boolean): void {
+  // Em produção não se desliga JWT (rpc_only proibido).
+  if (import.meta.env.PROD && !enabled) return;
   try {
     if (enabled) {
       localStorage.setItem('iso-pro-desktop-jwt-auth-opt-in-v1', '1');

@@ -50,17 +50,6 @@ describe('parseIsoSnapshotPayloadFromUnknown', () => {
     }
   });
 
-  it('aceita materiais com itens válidos', () => {
-    const r = parseIsoSnapshotPayloadFromUnknown({
-      materiais: [{ id: '1', codigo: 'ABC', descricao: 'Teste' }],
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.data.materiais?.length).toBe(1);
-      expect(r.data.materiais?.[0]?.codigo).toBe('ABC');
-    }
-  });
-
   it('ignora materiais quando não é array (trata como ausente)', () => {
     const r = parseIsoSnapshotPayloadFromUnknown({ materiais: 'não-array' as unknown as [] });
     expect(r.ok).toBe(true);

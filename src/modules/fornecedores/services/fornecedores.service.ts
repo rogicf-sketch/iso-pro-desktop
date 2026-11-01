@@ -2,10 +2,13 @@ import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, parseCsvToRecords } from '../../../lib/csv';
 import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { writeFornecedoresSotOnCloud } from '../../../lib/cadastrosTabelas';
 import { hasSupabaseConfig } from '../../../lib/supabase';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import {
-  commitIsoProSnapshotPatch,
+  invalidateIsoProSnapshotCache,
+  isIsoProSnapshotConflictError,
   readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
@@ -25,6 +28,21 @@ function fornecedoresStorageKey(): string {
 }
 
 function bloqueioLocalFornecedores(tamanhoListaGravacao: number): string | null {
+  // Limpa seed demo residual antes de contar (o guarda le o localStorage em cru).
+  if (hasSupabaseConfig()) {
+    const raw = localStorage.getItem(fornecedoresStorageKey());
+    if (raw) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const validated = parseFornecedoresPersistidos(parsed);
+        if (validated && isSomenteSeedDemo(validated)) {
+          localStorage.removeItem(fornecedoresStorageKey());
+        }
+      } catch {
+        /* ignora */
+      }
+    }
+  }
   return mensagemSeSubstituirLocalPerderiaCadastros([
     { storageKey: fornecedoresStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'fornecedor(es)' },
   ]);
@@ -51,9 +69,17 @@ const seedData: Fornecedor[] = [
   },
 ];
 
+const DEMO_FORNECEDOR_IDS = new Set(seedData.map((f) => f.id));
+
+function isSomenteSeedDemo(items: Fornecedor[]): boolean {
+  return items.length > 0 && items.every((f) => DEMO_FORNECEDOR_IDS.has(f.id));
+}
+
 function readAll(): Fornecedor[] {
   const raw = localStorage.getItem(fornecedoresStorageKey());
   if (!raw) {
+    // Com Supabase: empresa nova comeca vazia — nao injectar demo (bloqueava o 1.o cadastro).
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(fornecedoresStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
@@ -63,6 +89,10 @@ function readAll(): Fornecedor[] {
     const validated = parseFornecedoresPersistidos(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Fornecedores', fornecedoresStorageKey());
+      return [];
+    }
+    if (hasSupabaseConfig() && isSomenteSeedDemo(validated)) {
+      localStorage.removeItem(fornecedoresStorageKey());
       return [];
     }
     return validated;
@@ -76,8 +106,32 @@ function writeAll(items: Fornecedor[]) {
   localStorage.setItem(fornecedoresStorageKey(), JSON.stringify(items));
 }
 
+function localFornecedoresPareceSeedOuVazio(items: Fornecedor[]): boolean {
+  return items.length === 0 || isSomenteSeedDemo(items);
+}
+
+async function loadFornecedoresFromCloudOrLocal() {
+  const localNow = readAll();
+  // Posto novo / EXE sem espelho: SWR de 450ms serviria lista vazia e a UI ficava dessync da web.
+  const preferMs = localFornecedoresPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
+  const { data } = await withLocalFallback({
+    shouldTryRemote: shouldTryRemoteRead(),
+    loadRemote: async () => {
+      const remote = await readSnapshotFornecedores();
+      if (remote.length > 0 || !localFornecedoresPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar fornecedores no Supabase.',
+    preferMs,
+  });
+  return data;
+}
+
 async function loadFornecedores() {
-  return readRemoteOrLocal({ readRemote: readSnapshotFornecedores, readLocal: readAll });
+  return loadFornecedoresFromCloudOrLocal();
 }
 
 /**
@@ -85,12 +139,7 @@ async function loadFornecedores() {
  * Apenas ativos — para validar recebimentos e importacoes.
  */
 export async function loadFornecedoresAtivosParaValidacaoRecebimento(): Promise<Fornecedor[]> {
-  const { data } = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotFornecedores(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar fornecedores.',
-  });
+  const data = await loadFornecedoresFromCloudOrLocal();
   return data.filter((f) => f.ativo);
 }
 
@@ -143,33 +192,61 @@ async function readSnapshotFornecedores(): Promise<Fornecedor[]> {
   }));
 }
 
+/**
+ * SoT table-first: `iso_pro_write_fornecedores_sot` (tabelas + projecao snapshot).
+ * Sem fallback patch_snapshot (hard-fail sot_require_rpc).
+ */
 async function writeSnapshotFornecedores(items: Fornecedor[]): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['fornecedores']);
-    return {
-      baselineUpdatedAt,
-      patch: {
-        fornecedores: items.map((item) => ({
-          id: item.id,
-          nome: item.nome,
-          cnpj: item.cnpj,
-          telefone: item.telefone,
-          email: item.email,
-          endereco: item.endereco,
-          ativo: item.ativo,
-        })),
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
-  });
+  const fornecedores = items.map((item) => ({
+    id: item.id,
+    nome: item.nome,
+    cnpj: item.cnpj,
+    telefone: item.telefone,
+    email: item.email,
+    endereco: item.endereco,
+    ativo: item.ativo,
+  }));
+  const maxAttempts = 5;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['fornecedores']);
+      const sot = await writeFornecedoresSotOnCloud({
+        baselineUpdatedAt,
+        replaceAll: fornecedores,
+      });
+      assertNoSilentSotFallback('fornecedores', sot.missing);
+      invalidateIsoProSnapshotCache();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar fornecedores na nuvem.');
 }
 
 export async function listarFornecedores(filtro: FornecedorFiltro): Promise<ServiceResult<PaginatedResult<Fornecedor>>> {
+  const localNow = readAll();
+  const preferMs = localFornecedoresPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotFornecedores(),
+    loadRemote: async () => {
+      const remote = await readSnapshotFornecedores();
+      if (remote.length > 0 || !localFornecedoresPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar fornecedores no Supabase.',
+    preferMs,
   });
   const items = aplicarFiltrosListaFornecedores(fallbackResult.data, filtro);
 
@@ -306,12 +383,7 @@ export type ExportacaoFornecedoresOpcoes = {
 export async function montarExportacaoFornecedoresCsv(
   opcoes?: ExportacaoFornecedoresOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const fallbackResult = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotFornecedores(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar fornecedores no Supabase.',
-  });
+  const data = await loadFornecedoresFromCloudOrLocal();
   const filtroLista =
     opcoes?.filtroLista ??
     ({
@@ -320,7 +392,7 @@ export async function montarExportacaoFornecedoresCsv(
       page: 1,
       pageSize: 999999,
     } as FornecedorFiltro);
-  const items = aplicarFiltrosListaFornecedores(fallbackResult.data, filtroLista);
+  const items = aplicarFiltrosListaFornecedores(data, filtroLista);
 
   const header = ['nome', 'cnpj', 'telefone', 'email', 'endereco', 'ativo'];
   const sep = ';';
@@ -336,7 +408,11 @@ export async function montarExportacaoFornecedoresCsv(
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const sufixo = exportacaoFornecedoresUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
   const fileName = `iso-pro-fornecedores-${stamp}${sufixo}.csv`;
-  return { success: true, data: { csv, fileName }, meta: fallbackResult.meta };
+  return {
+    success: true,
+    data: { csv, fileName },
+    meta: { source: shouldTryRemoteRead() ? 'supabase' : 'local' },
+  };
 }
 
 export async function importarFornecedoresDoArquivoCsv(
@@ -458,6 +534,7 @@ export async function importarFornecedoresDoArquivoCsv(
       ignorados,
       ignoradosPorDuplicidadeNoArquivo,
       detalhes,
+      mensagem: `Concluido. ${criados} novo(s) e ${atualizados} atualizado(s).`,
     },
   };
 }

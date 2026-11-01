@@ -31,9 +31,9 @@ function atendimentoBase(): Atendimento {
   };
 }
 
-describe('imprimirReciboEstorno / layout alinhado ao recibo de atendimento', () => {
-  it('usa cabecalho centrado, tabela moderna, assinaturas e CNPJ', () => {
-    const html = montarHtmlReciboEstorno({
+describe('imprimirReciboEstorno / layout v6 alinhado ao recibo', () => {
+  it('usa cabeçalho premium, tabela moderna, assinaturas e CNPJ', async () => {
+    const html = await montarHtmlReciboEstorno({
       atendimento: atendimentoBase(),
       documentoNumero: 'DOC-1',
       documentoRevisao: 'A',
@@ -56,22 +56,24 @@ describe('imprimirReciboEstorno / layout alinhado ao recibo de atendimento', () 
       ],
     });
 
-    expect(html).toContain('recibo-header-main--titulo-centro');
+    expect(html).toContain('recibo-hdr');
     expect(html).toContain('Recibo de estorno de material');
+    expect(html).toContain('Atendimento · Estorno');
     expect(html).toContain('recibo-tabela-itens');
     expect(html).toContain('espaco-assinatura');
     expect(html).toContain('recibo-fechamento');
     expect(html).toContain('CNPJ: 66.234.531/0001-57');
-    expect(html).toContain('Responsavel pelo estorno (operador)');
+    expect(html).toContain('Responsável pelo estorno (operador)');
     expect(html).toContain('Total de unidades devolvidas');
-    expect(html).not.toContain('I.S.O PRO Desktop');
+    expect(html).toContain('I.S.O PRO Desktop');
+    expect(html).toContain('· v6');
   });
 
-  it('exibe titulo multi-doc e coluna Documento por item quando lote MULTIPLOS', () => {
-    const html = montarHtmlReciboEstorno({
+  it('exibe titulo multi-doc e coluna Documento por item quando lote MULTIPLOS', async () => {
+    const html = await montarHtmlReciboEstorno({
       atendimento: { ...atendimentoBase(), documentoNumero: 'MULTIPLOS' },
       documentoNumero: 'MULTIPLOS',
-      documentoTitulo: 'Varios desenhos (ver coluna Documento)',
+      documentoTitulo: 'Vários desenhos (ver coluna Documento)',
       documentoRevisao: '—',
       documentoDescricao: 'DES-A: Obra A · DES-B: Obra B',
       documentoResponsavel: '—',
@@ -88,7 +90,7 @@ describe('imprimirReciboEstorno / layout alinhado ao recibo de atendimento', () 
           codigoMaterial: 'M1',
           descricaoMaterial: 'Parafuso',
           unidade: 'PC',
-          quantidadeAtendida: 2,
+          quantidadeAtendida: 1,
         },
         {
           id: 'i2',
@@ -98,12 +100,13 @@ describe('imprimirReciboEstorno / layout alinhado ao recibo de atendimento', () 
           codigoMaterial: 'M2',
           descricaoMaterial: 'Porca',
           unidade: 'PC',
-          quantidadeAtendida: 1,
+          quantidadeAtendida: 2,
         },
       ],
     });
 
-    expect(html).toContain('Varios desenhos (ver coluna Documento)');
+    expect(html).toContain('Vários desenhos (ver coluna Documento)');
+    expect(html).toContain('<th class="col-doc">Documento</th>');
     expect(html).toContain('DES-A');
     expect(html).toContain('DES-B');
     expect(html).toContain('Estorno parcial');

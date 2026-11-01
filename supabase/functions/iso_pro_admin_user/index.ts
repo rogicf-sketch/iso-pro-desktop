@@ -83,7 +83,8 @@ Deno.serve(async (req) => {
   const corsHeaders: Record<string, string> = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers':
-      'authorization, x-client-info, apikey, content-type, x-iso-pro-admin-user-secret',
+      'authorization, x-client-info, apikey, content-type, x-retry-count, x-supabase-api-version, x-iso-pro-admin-user-secret',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
   };
 
   if (req.method === 'OPTIONS') {
@@ -98,16 +99,25 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const expected = Deno.env.get('ISO_PRO_ADMIN_USER_SECRET') ?? '';
-    const headerSecret = req.headers.get('x-iso-pro-admin-user-secret') ?? '';
-    if (!expected || headerSecret !== expected) {
-      return new Response(JSON.stringify({ ok: false, message: 'Nao autorizado.' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    const expected = (Deno.env.get('ISO_PRO_ADMIN_USER_SECRET') ?? '').trim();
+    const body = (await req.json()) as Record<string, unknown>;
+    const headerSecret = (req.headers.get('x-iso-pro-admin-user-secret') ?? '').trim();
+    const bodySecret = String(body.adminUserSecret ?? body.secret ?? '').trim();
+    const providedSecret = headerSecret || bodySecret;
+    if (!expected || providedSecret !== expected) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          message:
+            'Segredo ISO_PRO_ADMIN_USER_SECRET incorrecto ou em falta. Em Configuracoes > Supabase e nuvem, cole o mesmo valor dos Secrets da Edge Function no Dashboard e grave.',
+        }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
     }
 
-    const body = (await req.json()) as Record<string, unknown>;
     const tenantId = parseTenantUuid('tenantId', String(body.tenantId ?? ''));
     const actorLogin = String(body.actorLogin ?? '').trim();
     const actorSenha = String(body.actorSenha ?? '');
@@ -257,10 +267,72 @@ Deno.serve(async (req) => {
         }
       }
 
-      return new Response(JSON.stringify({ ok: true, message: 'Utilizador criado.', user: created }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      // Sem conta Auth o login enterprise recusa a sessão. Se falhar, desfaz o cadastro.
+      const provisionAuth = body.provisionAuth !== false;
+      let authUserId: string | null = null;
+      if (provisionAuth && senha?.trim()) {
+        const authEmail =
+          String(body.authEmail ?? userObj.authEmail ?? '').trim() ||
+          `${normalizedLogin}@isopro.local`;
+        let authFail = '';
+        try {
+          const { data: authCreated, error: authErr } = await admin.auth.admin.createUser({
+            email: authEmail,
+            password: senha.trim(),
+            email_confirm: true,
+            user_metadata: { iso_pro_login: normalizedLogin, tenant_id: tenantId },
+          });
+          if (authErr || !authCreated.user?.id) {
+            authFail = authErr?.message ?? 'Falha ao criar o acesso na nuvem.';
+          } else {
+            authUserId = authCreated.user.id;
+            const { error: linkErr } = await admin
+              .from('usuarios_sistema')
+              .update({ auth_user_id: authUserId })
+              .eq('id', newId)
+              .eq('tenant_id', tenantId);
+            if (linkErr) {
+              authFail = linkErr.message;
+              authUserId = null;
+            }
+          }
+        } catch (e) {
+          authFail = e instanceof Error ? e.message : 'Falha ao criar o acesso na nuvem.';
+        }
+        if (authFail || !authUserId) {
+          await admin.from('usuario_permissoes').delete().eq('usuario_id', newId).eq('tenant_id', tenantId);
+          await admin.from('usuarios_sistema').delete().eq('id', newId).eq('tenant_id', tenantId);
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              message: `Usuario nao foi gravado: ${authFail || 'ligacao com a nuvem falhou.'}`,
+            }),
+            {
+              status: 400,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          );
+        }
+      }
+
+      const userOut = {
+        ...created,
+        ...(authUserId ? { auth_user_id: authUserId } : {}),
+      };
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          message: authUserId
+            ? 'Utilizador criado e ligado ao Supabase Auth (JWT).'
+            : 'Utilizador criado.',
+          user: userOut,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
     }
 
     const { data: existing, error: exErr } = await admin

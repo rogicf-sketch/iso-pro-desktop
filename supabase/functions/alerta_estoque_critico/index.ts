@@ -229,10 +229,25 @@ Deno.serve(async (req) => {
     const body = (await req.json()) as Record<string, unknown>;
     const cronSecret = Deno.env.get('ISO_PRO_ALERTA_ESTOQUE_CRON_SECRET') ?? '';
     const headerCron = req.headers.get('x-iso-pro-cron-secret') ?? '';
-    const modoCron = body.modo === 'cron' || (cronSecret && headerCron === cronSecret);
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const cronViaServiceRole = (() => {
+      const m = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+      if (!m?.[1]) return false;
+      try {
+        const parts = m[1].split('.');
+        if (parts.length < 2) return false;
+        const json = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+        const payload = JSON.parse(json) as { role?: string };
+        return payload.role === 'service_role';
+      } catch {
+        return false;
+      }
+    })();
+    const cronViaSecret = Boolean(cronSecret) && headerCron === cronSecret;
+    const modoCron = body.modo === 'cron' || cronViaSecret || cronViaServiceRole;
 
     if (modoCron) {
-      if (!cronSecret || headerCron !== cronSecret) {
+      if (!cronViaSecret && !cronViaServiceRole) {
         return new Response(JSON.stringify({ ok: false, message: 'Cron secret invalido.' }), {
           status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },

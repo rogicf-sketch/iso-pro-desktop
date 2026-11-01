@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeEtiquetasSotOnCloud } from '../../../lib/cadastrosTabelas';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { EtiquetaFormData } from '../types/etiqueta.types';
@@ -19,6 +20,13 @@ vi.mock('../../../lib/snapshotSliceRead', () => ({
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
+}));
+
+vi.mock('../../../lib/cadastrosTabelas', () => ({
+  writeEtiquetasSotOnCloud: vi.fn(async () => ({
+    updatedAt: new Date().toISOString(),
+    missing: false,
+  })),
 }));
 
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
@@ -83,6 +91,10 @@ describe('etiquetas.service / salvarEtiqueta (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeEtiquetasSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -102,10 +114,14 @@ describe('etiquetas.service / salvarEtiqueta (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue({ etiquetas: [] });
+    mockReadForWrite.mockResolvedValue({
+      payload: { etiquetas: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito etiquetas.'));
+    vi.mocked(writeEtiquetasSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito etiquetas.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -170,7 +186,7 @@ describe('etiquetas.service / salvarEtiqueta (Supabase)', () => {
     const result = await salvarEtiqueta(etiquetaForm({ titulo: 'Outra' }));
 
     expect(result.success).toBe(true);
-    expect(mockCommitWrite).toHaveBeenCalled();
+    expect(writeEtiquetasSotOnCloud).toHaveBeenCalled();
   });
 });
 
@@ -180,6 +196,10 @@ describe('etiquetas.service / atualizarStatusEtiqueta (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeEtiquetasSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',

@@ -6,9 +6,12 @@ import { compressImageFileToJpeg, EVIDENCIA_FOTO_COMPRESS_OPTS } from '../../../
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { ResourceEditLockBanner } from '../../../components/ui/ResourceEditLockBanner';
 import { Select } from '../../../components/ui/Select';
 import { SnapshotConflictHint } from '../../../components/ui/SnapshotConflictHint';
+import { useResourceEditLock } from '../../../hooks/useResourceEditLock';
 import type { ServiceWriteResult } from '../../../types/common.types';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { colaboradoresElegiveisAssinaturaRir, listarColaboradores } from '../../colaboradores/services/colaboradores.service';
 import { buscarRecebimentoPorId } from '../../recebimentos/services/recebimentos.service';
 import type { Recebimento } from '../../recebimentos/types/recebimento.types';
@@ -62,7 +65,16 @@ export function RncForm({
   onReloadAfterConflict,
   onPreview,
 }: Props) {
+  const { user, canAccessAction } = useAuth();
   const [form, setForm] = useState<RncFormData>(initialValue);
+  const editLock = useResourceEditLock({
+    kind: 'rnc',
+    resourceId: editId,
+    enabled: Boolean(editId?.trim()),
+    holderLogin: user?.login,
+    holderLabel: user?.nome ?? user?.login,
+    canForceRelease: canAccessAction('usuarios', 'administrar'),
+  });
   const [error, setError] = useState('');
   const [snapshotConflict, setSnapshotConflict] = useState(false);
   const guardedCancel = useModalGuardedClose(onCancel);
@@ -246,6 +258,10 @@ export function RncForm({
     event.preventDefault();
     setError('');
     setSnapshotConflict(false);
+    if (!(await editLock.ensureClaim())) {
+      setError(editLock.aviso || 'RNC em uso por outro posto.');
+      return;
+    }
     const result = await onSubmit(form);
     if (!result.success) {
       setError(result.error ?? 'Nao foi possivel salvar a RNC.');
@@ -993,6 +1009,16 @@ export function RncForm({
       </OperationalNotice>
 
       <SnapshotConflictHint show={snapshotConflict} onReload={onReloadAfterConflict} />
+      {editLock.bloqueado || editLock.aviso ? (
+        <ResourceEditLockBanner
+          aviso={editLock.aviso}
+          canForceRelease={canAccessAction('usuarios', 'administrar')}
+          forcing={editLock.forcing}
+          onForceRelease={() => {
+            void editLock.forceRelease();
+          }}
+        />
+      ) : null}
       {error ? <div className="error-box">{error}</div> : null}
       <div className="form-actions">
         <Button onClick={guardedCancel} variant="ghost">
@@ -1001,7 +1027,9 @@ export function RncForm({
         <Button onClick={visualizarRelatorio} type="button" variant="ghost">
           Visualizar
         </Button>
-        <Button type="submit">Salvar RNC</Button>
+        <Button disabled={editLock.bloqueado} type="submit">
+          Salvar RNC
+        </Button>
       </div>
     </form>
   );

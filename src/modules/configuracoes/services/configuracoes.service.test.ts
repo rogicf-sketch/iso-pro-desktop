@@ -53,45 +53,62 @@ function basePayload(overrides: Partial<ConfiguracaoSistema> = {}): Configuracao
     desktopLicencaEmitidaPara: '',
     desktopLicencaExpiraEm: '',
     logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+  logoInstitucionalTamanhoRelatorio: 'auto',
+  logoInstitucionalFormatoQuadro: 'auto',
+  logoInstitucionalAspecto: 0,
+  logoInstitucionalZoomPct: 100,
     ...overrides,
   };
 }
 
 describe('configuracoes.service — isoProAdminUserSecret', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { resetConfigSecretsClientForTests } = await import('../../../lib/configSecrets.client');
+    resetConfigSecretsClientForTests();
     localStorage.removeItem(CONFIG_KEY);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { resetConfigSecretsClientForTests } = await import('../../../lib/configSecrets.client');
+    resetConfigSecretsClientForTests();
     localStorage.removeItem(CONFIG_KEY);
   });
 
-  it('persiste e faz trim de isoProAdminUserSecret', async () => {
+  it('mantém o segredo em memória/sessão e não grava plaintext no localStorage', async () => {
     const payload = basePayload({
       isoProAdminUserSecret: '  segredo-admin-edge  ',
     });
     const saved = await salvarConfiguracoes(payload);
     expect(saved.success).toBe(true);
     expect(readConfiguracoes().isoProAdminUserSecret).toBe('segredo-admin-edge');
+    const raw = localStorage.getItem(CONFIG_KEY) ?? '';
+    expect(raw).not.toContain('segredo-admin-edge');
+    expect(JSON.parse(raw).isoProAdminUserSecret).toBe('');
   });
 });
 
 describe('configuracoes.service — isoProLinkAuthSecret', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { resetConfigSecretsClientForTests } = await import('../../../lib/configSecrets.client');
+    resetConfigSecretsClientForTests();
     localStorage.removeItem(CONFIG_KEY);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { resetConfigSecretsClientForTests } = await import('../../../lib/configSecrets.client');
+    resetConfigSecretsClientForTests();
     localStorage.removeItem(CONFIG_KEY);
   });
 
-  it('persiste e faz trim de isoProLinkAuthSecret', async () => {
+  it('mantém o segredo em memória/sessão e não grava plaintext no localStorage', async () => {
     const payload = basePayload({
       isoProLinkAuthSecret: '  segredo-compartilhado  ',
     });
     const saved = await salvarConfiguracoes(payload);
     expect(saved.success).toBe(true);
     expect(readConfiguracoes().isoProLinkAuthSecret).toBe('segredo-compartilhado');
+    const raw = localStorage.getItem(CONFIG_KEY) ?? '';
+    expect(raw).not.toContain('segredo-compartilhado');
   });
 
   it('retorna info quando sync na nuvem conclui com sucesso', async () => {
@@ -144,6 +161,10 @@ describe('configuracoes.service — isoProLinkAuthSecret', () => {
         desktopLicencaEmitidaPara: '',
         desktopLicencaExpiraEm: '',
         logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+        logoInstitucionalTamanhoRelatorio: 'auto',
+  logoInstitucionalFormatoQuadro: 'auto',
+  logoInstitucionalAspecto: 0,
+  logoInstitucionalZoomPct: 100,
         documentoRodapeNome: '',
         documentoRodapeCnpj: '',
       }),

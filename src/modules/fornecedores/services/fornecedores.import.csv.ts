@@ -29,6 +29,7 @@ export type ResultadoImportacaoFornecedoresCsv = {
   ignorados: number;
   ignoradosPorDuplicidadeNoArquivo: number;
   detalhes: string[];
+  mensagem?: string;
 };
 
 export function fornecedorRowToFormData(row: Record<string, string>): FornecedorFormData {

@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { buscarConferenciaPorId, concluirConferencia, listarConferencias } from '../services/conferencia.service';
@@ -11,7 +12,7 @@ const initialFilters: ConferenciaFiltro = {
   busca: '',
   status: 'todos',
   page: 1,
-  pageSize: 6,
+  pageSize: 15,
 };
 
 function conferenciasListaQueryKey(filters: ConferenciaFiltro, userLogin: string | undefined) {
@@ -28,7 +29,7 @@ export function useConferencia() {
   const [selected, setSelected] = useState<Conferencia | null>(null);
   const [snapshotConflict, setSnapshotConflict] = useState(false);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -42,6 +43,8 @@ export function useConferencia() {
         items: result.data.items,
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
   });
@@ -50,6 +53,17 @@ export function useConferencia() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['conferencia', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -171,6 +185,8 @@ export function useConferencia() {
     success,
     fallbackReason,
     snapshotConflict,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     selected,

@@ -10,6 +10,10 @@ import { preVisualizarRelatorioProfissional, nomeArquivoRelatorioPdf } from '../
 import { compressImageFileToJpeg, EVIDENCIA_FOTO_COMPRESS_OPTS } from '../../../lib/imageCompress';
 import { mediaBlobDelete } from '../../../lib/mediaBlobStore';
 import { useAuth } from '../../auth/hooks/useAuth';
+import {
+  colaboradoresElegiveisAssinaturaRir,
+  listarColaboradores,
+} from '../../colaboradores/services/colaboradores.service';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { sugerirCodigoRirParaRecebimento } from '../../qualidade/services/qualidade.service';
 import { listarRecebimentos } from '../../recebimentos/services/recebimentos.service';
@@ -22,6 +26,7 @@ import {
   estimativaBytesPayloadRelatorioFotografico,
   estimativaBytesTodoLocalStorageAposGravar,
   hydrateRelatorioFotograficoPayload,
+  hydrateRelatorioFotograficoPayloadForPreview,
   mapRecebimentoParaRelatoriosFotograficosSalvos,
   registrarRelatorioFotograficoGerado,
   relatorioFotoBlobKey,
@@ -54,6 +59,16 @@ function mergeObraFromConfig(p: RelatorioFotograficoPayload): RelatorioFotografi
   };
 }
 
+/** Compatível com type=date (ISO) e textos antigos DD/MM/AAAA. */
+function toDateInputValue(raw: string): string {
+  const t = raw.trim();
+  if (!t) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2]!.padStart(2, '0')}-${m[1]!.padStart(2, '0')}`;
+  return '';
+}
+
 export function RelatorioFotograficoPage() {
   const { reportId } = useParams<{ reportId: string }>();
   const navigate = useNavigate();
@@ -76,6 +91,7 @@ export function RelatorioFotograficoPage() {
   const [somenteSemRf, setSomenteSemRf] = useState(true);
   const [nfDropdownOpen, setNfDropdownOpen] = useState(false);
   const [rfCatalogVersion, setRfCatalogVersion] = useState(0);
+  const [colabAssinaturaNomes, setColabAssinaturaNomes] = useState<string[]>([]);
   const somenteSemRfInitRef = useRef<string | null>(null);
 
   const bytesRelatorio = useMemo(() => estimativaBytesPayloadRelatorioFotografico(payload), [payload]);
@@ -111,6 +127,31 @@ export function RelatorioFotograficoPage() {
       if (!res.success || !res.data) return { data: undefined };
       return { data: res.data };
     }).then(setRecebimentos);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const items = await collectAllPages(async (page, pageSize) => {
+          const r = await listarColaboradores({
+            busca: '',
+            tipo: 'todos',
+            status: 'ativos',
+            page,
+            pageSize,
+          });
+          if (!r.success || !r.data) return { data: undefined };
+          return { data: r.data };
+        });
+        if (!cancelled) setColabAssinaturaNomes(colaboradoresElegiveisAssinaturaRir(items));
+      } catch {
+        if (!cancelled) setColabAssinaturaNomes([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -287,6 +328,14 @@ export function RelatorioFotograficoPage() {
     setSaving(true);
     setMsg(null);
     const merged = mergeObraFromConfig(payload);
+    if (!merged.recebimentoId.trim() || !merged.notaFiscal.trim()) {
+      setSaving(false);
+      setMsg({
+        tone: 'err',
+        text: 'Vincule um recebimento (nota fiscal) antes de salvar. Sem NF o relatório não fica oficial.',
+      });
+      return;
+    }
     setPayload(merged);
     const result = await salvarRelatorioFotografico(merged);
     setSaving(false);
@@ -294,19 +343,25 @@ export function RelatorioFotograficoPage() {
       setMsg({ tone: 'err', text: result.error ?? 'Falha ao salvar.' });
       return;
     }
-    setPayload(mergeObraFromConfig(result.data));
-    const src = result.meta?.source === 'supabase' ? 'Nuvem' : 'Este computador';
-    const fr = result.meta?.fallbackReason;
-    setMsg({ tone: 'ok', text: fr ? `Salvo localmente. ${fr}` : `Salvo (${src}).` });
-    setSyncMeta(fr ? `Local — ${fr}` : src === 'Nuvem' ? 'Nuvem (Supabase)' : 'Local');
-    setRfCatalogVersion((v) => v + 1);
+    const salvo = mergeObraFromConfig(result.data);
+    const codigo = salvo.numeroRelatorio.trim() || salvo.titulo.trim() || 'RF';
+    const src = result.meta?.source === 'supabase' ? 'Nuvem' : 'local';
+    // Salvar = finalizar e voltar à lista (padrão documento oficial).
+    navigate('/relatorio-fotografico', {
+      replace: true,
+      state: {
+        rfSalvoOk: true,
+        mensagem: `Relatório ${codigo} salvo (${src}).`,
+      },
+    });
   };
 
   const onPreviewDocumento = async () => {
     setMsg(null);
     try {
-      const ready = await hydrateRelatorioFotograficoPayload(mergeObraFromConfig(payload));
-      const html = montarHtmlRelatorioFotografico(ready);
+      // Mesmo fluxo da web: URLs assinadas + overlay (rápido; fotos carregam).
+      const ready = await hydrateRelatorioFotograficoPayloadForPreview(mergeObraFromConfig(payload));
+      const html = await montarHtmlRelatorioFotografico(ready);
       const codigo = ready.numeroRelatorio || ready.titulo || ready.reportId || 'RF';
       const res = await preVisualizarRelatorioProfissional({
         html,
@@ -339,7 +394,7 @@ export function RelatorioFotograficoPage() {
     const withNum = ensureNumeroRelatorioFotografico(base);
     setPayload(withNum);
     const ready = await hydrateRelatorioFotograficoPayload(withNum);
-    const html = montarHtmlRelatorioFotografico(ready);
+    const html = await montarHtmlRelatorioFotografico(ready);
     const ok = await imprimirRelatorioFotograficoHtml(html);
     if (!ok) {
       setMsg({ tone: 'err', text: 'O navegador bloqueou a janela de impressao.' });
@@ -706,7 +761,7 @@ export function RelatorioFotograficoPage() {
             }
             type="checkbox"
           />
-          <span>Incluir assinaturas / visto digital no PDF</span>
+          <span>Incluir assinaturas no PDF (padrão RIR)</span>
         </label>
 
         {payload.incluirAssinaturasImpressao ? (
@@ -721,51 +776,63 @@ export function RelatorioFotograficoPage() {
             }}
           >
             <p className="panel-copy" style={{ margin: 0 }}>
-              <strong>Assinaturas</strong> — nome e data/hora do visto. Vazio = «Pendente» no PDF.
+              <strong>Assinaturas</strong> — mesmo padrão do RIR (linha + função + nome + data). Escolha
+              colaborador e data; vazio aparece como «—» no PDF. Cliente continua texto livre.
             </p>
+            <datalist id="rf-assinatura-colaboradores">
+              {colabAssinaturaNomes.map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
             <div className="form-columns">
               <Input
+                autoComplete="off"
                 disabled={!allowEdit}
-                label="Recebimento / Almoxarifado — nome"
+                label="Responsável — recebimento"
+                list="rf-assinatura-colaboradores"
                 onChange={(e) => setAssinatura('assinaturaRecebimento', { nome: e.target.value })}
+                title="Sugestões: colaboradores ativos"
                 value={payload.assinaturaRecebimento.nome}
               />
               <Input
                 disabled={!allowEdit}
-                label="Data/hora"
+                label="Data"
                 onChange={(e) => setAssinatura('assinaturaRecebimento', { data: e.target.value })}
-                placeholder="21/07/2026 08:20"
-                value={payload.assinaturaRecebimento.data}
+                type="date"
+                value={toDateInputValue(payload.assinaturaRecebimento.data)}
               />
             </div>
             <div className="form-columns">
               <Input
+                autoComplete="off"
                 disabled={!allowEdit}
-                label="Inspetor de Qualidade — nome"
+                label="Controle de qualidade"
+                list="rf-assinatura-colaboradores"
                 onChange={(e) => setAssinatura('assinaturaQualidade', { nome: e.target.value })}
+                title="Sugestões: colaboradores ativos"
                 value={payload.assinaturaQualidade.nome}
               />
               <Input
                 disabled={!allowEdit}
-                label="Data/hora"
+                label="Data"
                 onChange={(e) => setAssinatura('assinaturaQualidade', { data: e.target.value })}
-                placeholder="21/07/2026 08:35"
-                value={payload.assinaturaQualidade.data}
+                type="date"
+                value={toDateInputValue(payload.assinaturaQualidade.data)}
               />
             </div>
             <div className="form-columns">
               <Input
                 disabled={!allowEdit}
-                label="Fiscalização / Cliente — nome"
+                label="Cliente"
                 onChange={(e) => setAssinatura('assinaturaFiscalizacao', { nome: e.target.value })}
                 value={payload.assinaturaFiscalizacao.nome}
               />
               <Input
                 disabled={!allowEdit}
-                label="Data/hora"
+                label="Data"
                 onChange={(e) => setAssinatura('assinaturaFiscalizacao', { data: e.target.value })}
-                placeholder="Pendente se vazio"
-                value={payload.assinaturaFiscalizacao.data}
+                type="date"
+                value={toDateInputValue(payload.assinaturaFiscalizacao.data)}
               />
             </div>
           </div>

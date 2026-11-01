@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fetchAllPagesFromSupabase } from './fetchAllSupabasePages';
+import { fetchAllPagesFromSupabase, fetchAllPagesFromSupabaseParallel } from './fetchAllSupabasePages';
 
 describe('fetchAllPagesFromSupabase', () => {
   it('devolve uma pagina quando total <= pageSize', async () => {
@@ -19,5 +19,17 @@ describe('fetchAllPagesFromSupabase', () => {
     expect(rows[0]).toBe('m-0');
     expect(rows[999]).toBe('m-999');
     expect(rows[1049]).toBe('m-1049');
+  });
+});
+
+describe('fetchAllPagesFromSupabaseParallel', () => {
+  it('concatena paginas em ondas paralelas', async () => {
+    const all = Array.from({ length: 250 }, (_, i) => i);
+    const rows = await fetchAllPagesFromSupabaseParallel(
+      async (offset, pageSize) => all.slice(offset, offset + pageSize),
+      100,
+      3,
+    );
+    expect(rows).toEqual(all);
   });
 });

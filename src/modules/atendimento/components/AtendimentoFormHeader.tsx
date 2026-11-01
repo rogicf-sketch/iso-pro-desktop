@@ -10,6 +10,8 @@ import type { AtendimentoRecebedorTipo } from '../types/atendimento.types';
 type Props = {
   atendente: string;
   colaboradores: Colaborador[];
+  /** Enquanto a lista ainda não chegou, não mostrar o aviso de cadastro vazio. */
+  colaboradoresCarregados?: boolean;
   recebedorTipo: AtendimentoRecebedorTipo;
   recebedorColaboradorId: string;
   recebedor: string;
@@ -32,6 +34,7 @@ type Props = {
 export function AtendimentoFormHeader({
   atendente,
   colaboradores,
+  colaboradoresCarregados = true,
   recebedorTipo,
   recebedorColaboradorId,
   recebedor,
@@ -68,16 +71,16 @@ export function AtendimentoFormHeader({
   );
 
   return (
-    <div className="form-grid">
+    <div className="form-grid atendimento-form-header">
       <AutocompleteField
         fetchOptions={fetchOpcoesAtendente}
         id="atendimento-atendente"
-        label="Atendente (obrigatorio)"
+        label="Atendente"
         onChange={onAtendenteChange}
-        placeholder="Digite nome ou matricula — ou cole o atendente"
+        placeholder="Nome ou matricula"
         value={atendente}
       />
-      <Select label="Tipo do retirante" onChange={(event) => onRecebedorTipoChange(event.target.value as AtendimentoRecebedorTipo)} value={recebedorTipo}>
+      <Select label="Tipo" onChange={(event) => onRecebedorTipoChange(event.target.value as AtendimentoRecebedorTipo)} value={recebedorTipo}>
         <option value="interno">Colaborador interno</option>
         <option value="externo">Retirante externo</option>
       </Select>
@@ -85,7 +88,7 @@ export function AtendimentoFormHeader({
       {recebedorTipo === 'interno' ? (
         <>
           <SearchableSelect
-            label="Colaborador atendido (quem retirou)"
+            label="Retirante"
             onChange={onRecebedorColaboradorIdChange}
             options={colaboradores
               .filter((item) => item.tipo === 'interno')
@@ -93,21 +96,21 @@ export function AtendimentoFormHeader({
                 value: item.id,
                 label: `${item.nome}${item.matricula ? ` - ${item.matricula}` : ''}`,
               }))}
-            placeholder="Digite nome ou matricula de quem retirou — ou cole o colaborador"
+            placeholder="Nome ou matricula de quem retirou"
             value={recebedorColaboradorId}
           />
-          {!colaboradores.some((item) => item.tipo === 'interno') ? (
-            <OperationalNotice>Nenhum colaborador interno ativo cadastrado. Cadastre em `Colaboradores` antes de atender.</OperationalNotice>
+          {colaboradoresCarregados && !colaboradores.some((item) => item.tipo === 'interno') ? (
+            <OperationalNotice>Nenhum colaborador interno ativo. Cadastre em Colaboradores.</OperationalNotice>
           ) : null}
         </>
       ) : (
         <>
-          <Input label="Nome de quem retirou" onChange={(event) => onRecebedorChange(event.target.value)} value={recebedor} />
+          <Input label="Nome" onChange={(event) => onRecebedorChange(event.target.value)} value={recebedor} />
           <Input label="Empresa" onChange={(event) => onRecebedorEmpresaChange(event.target.value)} value={recebedorEmpresa} />
           <Input label="Documento" onChange={(event) => onRecebedorDocumentoChange(event.target.value)} value={recebedorDocumento} />
           <Input label="Telefone" onChange={(event) => onRecebedorTelefoneChange(event.target.value)} value={recebedorTelefone} />
           <SearchableSelect
-            label="Autorizado por (colaborador interno)"
+            label="Autorizado por"
             onChange={onAutorizadorInternoChange}
             options={colaboradores
               .filter((item) => item.tipo === 'interno')
@@ -115,14 +118,13 @@ export function AtendimentoFormHeader({
                 const rotulo = `${item.nome.trim()}${item.matricula ? ` - ${item.matricula.trim()}` : ''}`;
                 return { value: rotulo, label: rotulo };
               })}
-            placeholder="Digite nome ou matricula do autorizador"
+            placeholder="Nome ou matricula do autorizador"
             value={autorizadorInterno}
           />
-          <label className="field" style={{ gridColumn: '1 / -1' }}>
-            <span>Motivo da retirada</span>
-            <textarea className="input-control text-area" onChange={(event) => onMotivoRetiradaChange(event.target.value)} rows={3} value={motivoRetirada} />
+          <label className="field atendimento-form-header__motivo">
+            <span>Motivo</span>
+            <textarea className="input-control text-area" onChange={(event) => onMotivoRetiradaChange(event.target.value)} rows={2} value={motivoRetirada} />
           </label>
-          <OperationalNotice>O retirante externo e salvo automaticamente em `Colaboradores` para manter historico e rastreabilidade.</OperationalNotice>
         </>
       )}
     </div>

@@ -55,6 +55,14 @@ function archiveOlderInstallers() {
 
 archiveOlderInstallers();
 
+const builderYml = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+if (/updates\.example\.com/i.test(builderYml)) {
+  console.error(
+    'verify-release: electron-builder.yml ainda aponta para updates.example.com — use o feed de producao (ver electron/main/updateFeed.ts).',
+  );
+  process.exit(1);
+}
+
 const entries = fs.readdirSync(releaseDir);
 const exes = entries.filter((f) => f.toLowerCase().endsWith('.exe'));
 
@@ -86,4 +94,19 @@ for (const name of exes.sort()) {
 const outFile = path.join(releaseDir, 'SHA256SUMS.txt');
 fs.writeFileSync(outFile, `${lines.join('\n')}\n`, 'utf8');
 
+/** Pasta que a equipa abre no Explorer: release/installers/atuais */
+const atuaisDir = path.join(releaseDir, 'installers', 'atuais');
+fs.mkdirSync(atuaisDir, { recursive: true });
+const syncNames = [
+  ...exes.filter((f) => isCurrentReleaseArtifact(f)),
+  ...entries.filter((f) => isCurrentReleaseArtifact(f) && f.toLowerCase().endsWith('.blockmap')),
+  'latest.yml',
+  'SHA256SUMS.txt',
+];
+for (const name of [...new Set(syncNames)]) {
+  const from = path.join(releaseDir, name);
+  if (!fs.existsSync(from) || !fs.statSync(from).isFile()) continue;
+  fs.copyFileSync(from, path.join(atuaisDir, name));
+}
 console.log(`verify-release: OK — ${exes.length} .exe (v${currentVersion}), SHA256SUMS.txt gerado.`);
+console.log(`verify-release: installers/atuais actualizado (v${currentVersion}).`);

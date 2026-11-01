@@ -1,22 +1,25 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { collectAllPages } from '../../../lib/collectAllPages';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { setItemComRecuperacaoQuota } from '../../../lib/localStorageQuota';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { MEDIA_REF_PREFIX } from '../../../lib/mediaBlobStore';
 import { STORAGE_REF_PREFIX } from '../../../lib/evidenciasStorage';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
-import { hasSupabaseConfig } from '../../../lib/supabase';
+import { REMOTE_READ_TIMEOUT_MS, readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { hasSupabaseConfig, getSupabase } from '../../../lib/supabase';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
+import { ensureIsoProDataSessionReadable } from '../../../lib/isoProJwtSession';
+import { fetchAllExportRpcPages } from '../../../lib/exportRpcPages';
 import {
   listRirPageFromCloud,
   listRncPageFromCloud,
-  syncRirFromSnapshot,
-  syncRncFromSnapshot,
-  upsertRirEmLotes,
-  upsertRncEmLotes,
+  writeRirSotOnCloud,
+  writeRncSotOnCloud,
 } from '../../../lib/qualidadeTabelas';
-import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import {
-  commitIsoProSnapshotPatch,
+  invalidateIsoProSnapshotCache,
+  isIsoProSnapshotConflictError,
   readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
@@ -440,9 +443,29 @@ type SnapshotPayload = {
   rncRegistros?: Partial<RncRegistro>[];
 };
 
-function readAll<T>(key: string, seed: T[]): T[] {
+const DEMO_RIR_IDS = new Set(['rir-1']);
+const DEMO_RNC_IDS = new Set(['rnc-1']);
+
+function isSomenteSeedRir(items: Array<{ id?: string }>): boolean {
+  return items.length > 0 && items.every((r) => DEMO_RIR_IDS.has(String(r.id ?? '')));
+}
+
+function isSomenteSeedRnc(items: Array<{ id?: string }>): boolean {
+  return items.length > 0 && items.every((r) => DEMO_RNC_IDS.has(String(r.id ?? '')));
+}
+
+function localRirPareceSeedOuVazio(items: Array<{ id?: string }>): boolean {
+  return items.length === 0 || isSomenteSeedRir(items);
+}
+
+function localRncPareceSeedOuVazio(items: Array<{ id?: string }>): boolean {
+  return items.length === 0 || isSomenteSeedRnc(items);
+}
+
+function readAll<T extends { id?: string }>(key: string, seed: T[]): T[] {
   const raw = localStorage.getItem(key);
   if (!raw) {
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(key, JSON.stringify(seed));
     return seed;
   }
@@ -454,7 +477,15 @@ function readAll<T>(key: string, seed: T[]): T[] {
       avisarPreservacaoLocalStorageCorrupto('Qualidade (RIR/RNC local)', key);
       return [];
     }
-    return validated as T[];
+    const items = validated as T[];
+    if (hasSupabaseConfig()) {
+      const isRir = key.includes('rir');
+      if ((isRir && isSomenteSeedRir(items)) || (!isRir && isSomenteSeedRnc(items))) {
+        localStorage.removeItem(key);
+        return [];
+      }
+    }
+    return items;
   } catch {
     avisarPreservacaoLocalStorageCorrupto('Qualidade (RIR/RNC local)', key);
     return [];
@@ -462,7 +493,7 @@ function readAll<T>(key: string, seed: T[]): T[] {
 }
 
 function writeAll<T>(key: string, items: T[]) {
-  localStorage.setItem(key, JSON.stringify(items));
+  setItemComRecuperacaoQuota(localStorage, key, JSON.stringify(items));
 }
 
 async function loadRir() {
@@ -492,34 +523,58 @@ async function writeSnapshotQuality(nextData: { rirRegistros?: RirRegistro[]; rn
   if (nextData.rirRegistros) keys.push('rirRegistros');
   if (nextData.rncRegistros) keys.push('rncRegistros');
 
-  await commitIsoProSnapshotPatch(async () => {
-    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(keys.length ? keys : ['rirRegistros']);
-    const patch: Record<string, unknown> = { dataAtualizacao: new Date().toISOString() };
-    if (nextData.rirRegistros) {
-      patch.rirRegistros = await Promise.all(
-        nextData.rirRegistros.map(async (item) => persistRirRegistroToStorage(normalizeRirRegistro(item))),
-      );
-    }
-    if (nextData.rncRegistros) {
-      patch.rncRegistros = nextData.rncRegistros.map((item) => ({ ...normalizeRncRegistro(item) }));
-    }
-    return { baselineUpdatedAt, patch };
-  });
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(keys.length ? keys : ['rirRegistros']);
 
-  if (nextData.rirRegistros) {
-    await runDualWriteBestEffort('rir', async () => {
-      const sync = await syncRirFromSnapshot();
-      if (sync.ok) return sync;
-      return upsertRirEmLotes(nextData.rirRegistros!);
-    });
+      if (nextData.rirRegistros) {
+        const wire = await Promise.all(
+          nextData.rirRegistros.map(async (item) => persistRirRegistroToStorage(normalizeRirRegistro(item))),
+        );
+        const sot = await writeRirSotOnCloud({
+          baselineUpdatedAt,
+          replaceAll: wire,
+          idempotencyKey:
+            typeof crypto !== 'undefined' && 'randomUUID' in crypto
+              ? `rir-replace-${crypto.randomUUID()}`
+              : `rir-replace-${Date.now()}`,
+        });
+        assertNoSilentSotFallback('rir', sot.missing);
+        invalidateIsoProSnapshotCache();
+        if (!nextData.rncRegistros) return;
+        // continua para RNC no mesmo ciclo (baseline avancou)
+      }
+
+      if (nextData.rncRegistros) {
+        const { baselineUpdatedAt: baselineRnc } = await readIsoProSnapshotSlicesForWrite(['rncRegistros']);
+        const wire = nextData.rncRegistros.map((item) => ({ ...normalizeRncRegistro(item) }));
+        const sot = await writeRncSotOnCloud({
+          baselineUpdatedAt: baselineRnc,
+          replaceAll: wire,
+          idempotencyKey:
+            typeof crypto !== 'undefined' && 'randomUUID' in crypto
+              ? `rnc-replace-${crypto.randomUUID()}`
+              : `rnc-replace-${Date.now()}`,
+        });
+        assertNoSilentSotFallback('rnc', sot.missing);
+        invalidateIsoProSnapshotCache();
+        return;
+      }
+
+      if (nextData.rirRegistros && !nextData.rncRegistros) return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
   }
-  if (nextData.rncRegistros) {
-    await runDualWriteBestEffort('rnc', async () => {
-      const sync = await syncRncFromSnapshot();
-      if (sync.ok) return sync;
-      return upsertRncEmLotes(nextData.rncRegistros!);
-    });
-  }
+
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar qualidade na nuvem.');
 }
 
 async function readSnapshotRir(): Promise<RirRegistro[]> {
@@ -559,6 +614,22 @@ export function rirNaoCanceladosPorRecebimentoId(
     map.set(rid, cur);
   }
   return map;
+}
+
+/** RIR ativo (nao cancelado) ja ligado ao mesmo recebimento/NF — bloqueia novo cadastro. */
+export function encontrarRirAtivoDoRecebimento(
+  registros: RirRegistro[],
+  recebimentoId: string,
+  currentId?: string,
+): RirRegistro | undefined {
+  const rid = recebimentoId.trim();
+  if (!rid) return undefined;
+  return registros.find(
+    (x) =>
+      x.recebimentoId?.trim() === rid &&
+      x.status !== 'cancelado' &&
+      (!currentId || x.id !== currentId),
+  );
 }
 
 function filterRir(items: RirRegistro[], filtro: RirFiltro) {
@@ -883,14 +954,21 @@ async function carregarRirRegistros(): Promise<{
   items: RirRegistro[];
   meta?: ServiceResult<RirRegistro[]>['meta'];
 }> {
+  const localNow = readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r));
+  const preferMs = localRirPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
     loadRemote: async () => {
       const rows = await readSnapshotRir();
-      return Promise.all(rows.map((r) => hydrateRirRegistroFromStorage(normalizeRirRegistro(r))));
+      const hydrated = await Promise.all(rows.map((r) => hydrateRirRegistroFromStorage(normalizeRirRegistro(r))));
+      if (hydrated.length > 0 || localRirPareceSeedOuVazio(localNow)) {
+        writeAll(rirStorageKey(), hydrated);
+      }
+      return hydrated;
     },
     loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
     fallbackMessage: 'Falha ao consultar RIR no Supabase.',
+    preferMs,
   });
   return { items: fallbackResult.data, meta: fallbackResult.meta };
 }
@@ -1056,20 +1134,40 @@ export type ExportacaoRirOpcoes = {
 export async function montarExportacaoRirCsvCompleto(
   opcoes?: ExportacaoRirOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const fallbackResult = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotRir(),
-    loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
-    fallbackMessage: 'Falha ao consultar RIR no Supabase.',
-  });
-
-  const filtroLista: RirFiltro = {
-    busca: opcoes?.filtroLista?.busca ?? '',
-    status: opcoes?.filtroLista?.status ?? 'todos',
-    page: 1,
-    pageSize: 1,
+  type ExportRow = {
+    codigo?: string;
+    data_registro?: string | null;
+    status?: string;
+    laudo?: string;
+    fornecedor?: string;
+    nota_fiscal?: string;
+    romaneio?: string;
+    data_recebimento?: string | null;
+    procedimento?: string;
+    sol_compra?: string;
+    uo?: string;
+    local_obra?: string;
+    contrato?: string;
+    origem?: string;
+    responsavel?: string;
+    descricao?: string;
+    acao_imediata?: string;
+    linha_item?: number;
+    codigo_material?: string;
+    descricao_material?: string;
+    quantidade?: number;
+    unidade?: string;
+    certificado?: string;
+    disciplina?: string;
+    localizacao_item?: string;
+    qtd_conferida?: number;
+    observacoes_qc?: string;
+    observacoes_tratativa?: string;
+    obs_curta?: string;
+    instrumentos?: string;
+    documentos_qc?: string;
+    payload_storage_ref?: string;
   };
-  const registros = filterRir(fallbackResult.data, filtroLista);
 
   const header = [
     'Nº RIR',
@@ -1104,6 +1202,143 @@ export async function montarExportacaoRirCsvCompleto(
     'Instrumentos',
     'Documentos QC',
   ];
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const sufixo = rirExportacaoUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
+  const fileName = `iso-pro-rir-completo-${stamp}${sufixo}.csv`;
+
+  const filtrarRows = (rows: ExportRow[]): ExportRow[] => {
+    const f = opcoes?.filtroLista;
+    if (!f) return rows;
+    let next = rows;
+    if (f.status !== 'todos') {
+      next = next.filter((r) => String(r.status ?? '') === f.status);
+    }
+    if (f.busca.trim()) {
+      const busca = f.busca.trim().toLowerCase();
+      next = next.filter((r) => {
+        const blob = [
+          r.codigo,
+          r.origem,
+          r.responsavel,
+          r.descricao,
+          r.nota_fiscal,
+          r.fornecedor,
+          r.procedimento,
+          r.contrato,
+          r.local_obra,
+          r.uo,
+          r.obs_curta,
+          r.sol_compra,
+          r.codigo_material,
+          r.descricao_material,
+        ]
+          .map((x) => String(x ?? ''))
+          .join(' ')
+          .toLowerCase();
+        return blob.includes(busca);
+      });
+    }
+    return next;
+  };
+
+  const montarCsvDeRows = (rows: ExportRow[]): string => {
+    const linhas: string[] = [header.map(escapeRirCsvCell).join(RIR_CSV_SEP)];
+    for (const r of rows) {
+      const statusRaw = String(r.status ?? '') as RirRegistro['status'];
+      const laudoRaw = String(r.laudo ?? 'aprovado') as RirRegistro['laudo'];
+      const temItem = Boolean(String(r.codigo_material ?? '').trim() || String(r.descricao_material ?? '').trim());
+      linhas.push(
+        [
+          String(r.codigo ?? ''),
+          formatIsoDatePtBrOptional(r.data_registro ?? undefined),
+          statusRirLabelCsv(statusRaw),
+          laudoRirLabelCsv(laudoRaw),
+          String(r.fornecedor ?? ''),
+          String(r.nota_fiscal ?? ''),
+          String(r.romaneio ?? ''),
+          formatIsoDatePtBrOptional(r.data_recebimento ?? undefined),
+          String(r.procedimento ?? ''),
+          String(r.sol_compra ?? ''),
+          String(r.uo ?? ''),
+          String(r.local_obra ?? ''),
+          String(r.contrato ?? ''),
+          String(r.origem ?? ''),
+          String(r.responsavel ?? ''),
+          String(r.descricao ?? ''),
+          String(r.acao_imediata ?? ''),
+          temItem ? String(r.linha_item ?? '') : '',
+          temItem ? String(r.codigo_material ?? '') : '',
+          temItem ? String(r.descricao_material ?? '') : '',
+          temItem ? formatDecimalExcelPtBr(Number(r.quantidade)) : '',
+          temItem ? String(r.unidade ?? '') : '',
+          temItem ? String(r.certificado ?? '') : '',
+          temItem ? String(r.disciplina ?? '') : '',
+          temItem ? String(r.localizacao_item ?? '') : '',
+          temItem && Number(r.qtd_conferida) ? formatDecimalExcelPtBr(Number(r.qtd_conferida)) : '',
+          String(r.observacoes_qc ?? ''),
+          String(r.observacoes_tratativa ?? ''),
+          String(r.obs_curta ?? ''),
+          String(r.instrumentos ?? ''),
+          String(r.documentos_qc ?? ''),
+        ]
+          .map(escapeRirCsvCell)
+          .join(RIR_CSV_SEP),
+      );
+    }
+    return `\uFEFF${linhas.join('\r\n')}\r\n`;
+  };
+
+  if (hasSupabaseConfig()) {
+    try {
+      await ensureIsoProDataSessionReadable();
+      const supabase = getSupabase();
+      if (supabase) {
+        const cloud = await fetchAllExportRpcPages<ExportRow>({
+          supabase,
+          rpcName: 'iso_pro_export_rir_itens_page',
+          tenantId: getActiveTenantId(),
+        });
+        const offloaded = cloud.rows.some(
+          (r) => String(r.payload_storage_ref ?? '').trim() && !String(r.codigo_material ?? '').trim(),
+        );
+        if (!cloud.missingRpc && !cloud.error && !offloaded) {
+          return {
+            success: true,
+            data: { csv: montarCsvDeRows(filtrarRows(cloud.rows)), fileName },
+            meta: { source: 'supabase' },
+          };
+        }
+      }
+    } catch {
+      /* fallback hydrate */
+    }
+  }
+
+  const fallbackResult = await withLocalFallback({
+    shouldTryRemote: shouldTryRemoteRead(),
+    loadRemote: async () => {
+      const remote = await readSnapshotRir();
+      const normalized = await Promise.all(
+        remote.map((r) => hydrateRirRegistroFromStorage(normalizeRirRegistro(r))),
+      );
+      if (normalized.length > 0 || localRirPareceSeedOuVazio(readAll(rirStorageKey(), seedRir))) {
+        writeAll(rirStorageKey(), normalized);
+      }
+      return normalized;
+    },
+    loadLocal: () => readAll(rirStorageKey(), seedRir).map((r) => normalizeRirRegistro(r)),
+    fallbackMessage: 'Falha ao consultar RIR no Supabase.',
+    preferMs: localRirPareceSeedOuVazio(readAll(rirStorageKey(), seedRir)) ? REMOTE_READ_TIMEOUT_MS : undefined,
+  });
+
+  const filtroLista: RirFiltro = {
+    busca: opcoes?.filtroLista?.busca ?? '',
+    status: opcoes?.filtroLista?.status ?? 'todos',
+    page: 1,
+    pageSize: 1,
+  };
+  const registros = filterRir(fallbackResult.data, filtroLista);
 
   const linhas: string[] = [header.map(escapeRirCsvCell).join(RIR_CSV_SEP)];
 
@@ -1184,9 +1419,6 @@ export async function montarExportacaoRirCsvCompleto(
   }
 
   const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const sufixo = rirExportacaoUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
-  const fileName = `iso-pro-rir-completo-${stamp}${sufixo}.csv`;
   return { success: true, data: { csv, fileName }, meta: fallbackResult.meta };
 }
 
@@ -1231,11 +1463,20 @@ export async function listarRnc(filtro: RncFiltro): Promise<ServiceResult<Pagina
     }
   }
 
+  const localNow = await loadRncFromLocalStorage();
+  const preferMs = localRncPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => loadRnc(),
+    loadRemote: async () => {
+      const remote = await loadRnc();
+      if (remote.length > 0 || localRncPareceSeedOuVazio(localNow)) {
+        writeAll(rncStorageKey(), remote);
+      }
+      return remote;
+    },
     loadLocal: () => loadRncFromLocalStorage(),
     fallbackMessage: 'Falha ao consultar RNC no Supabase.',
+    preferMs,
   });
   const items = filterRnc(fallbackResult.data, filtro);
   const start = (filtro.page - 1) * filtro.pageSize;
@@ -1340,6 +1581,17 @@ export async function salvarRir(payload: RirFormData, currentId?: string): Promi
         return { success: false, error: 'Ja existe um RIR com este numero. Ajuste o nº RIR.' };
       }
 
+      if (!currentId) {
+        const dupRecebimento = encontrarRirAtivoDoRecebimento(items, merged.recebimentoId);
+        if (dupRecebimento) {
+          const nf = (merged.recebimentoNotaFiscal || '').trim() || '—';
+          return {
+            success: false,
+            error: `Ja existe RIR ativo para esta NF (${nf}): ${dupRecebimento.codigo}. Abra o existente ou cancele-o antes de criar outro.`,
+          };
+        }
+      }
+
       const normalized: RirFormData = {
         ...merged,
         codigo,
@@ -1393,6 +1645,17 @@ export async function salvarRir(payload: RirFormData, currentId?: string): Promi
     return { success: false, error: 'Ja existe um RIR com este numero. Ajuste o nº RIR.' };
   }
 
+  if (!currentId) {
+    const dupRecebimentoLocal = encontrarRirAtivoDoRecebimento(items, merged.recebimentoId);
+    if (dupRecebimentoLocal) {
+      const nf = (merged.recebimentoNotaFiscal || '').trim() || '—';
+      return {
+        success: false,
+        error: `Ja existe RIR ativo para esta NF (${nf}): ${dupRecebimentoLocal.codigo}. Abra o existente ou cancele-o antes de criar outro.`,
+      };
+    }
+  }
+
   const normalized: RirFormData = {
     ...merged,
     codigo,
@@ -1407,7 +1670,14 @@ export async function salvarRir(payload: RirFormData, currentId?: string): Promi
     items[index] = normalizeRirRegistro({ ...items[index], ...normalized, status: normalized.status ?? items[index].status });
     const blockedRirEdit = whenBusinessWriteBlockedResult<RirRegistro>();
     if (blockedRirEdit) return blockedRirEdit;
-    writeAll(rirStorageKey(), items);
+    try {
+      writeAll(rirStorageKey(), items);
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Falha ao gravar RIR no armazenamento local.',
+      };
+    }
     return { success: true, data: items[index] };
   }
 
@@ -1419,7 +1689,14 @@ export async function salvarRir(payload: RirFormData, currentId?: string): Promi
   items.push(created);
   const blockedRirNovo = whenBusinessWriteBlockedResult<RirRegistro>();
   if (blockedRirNovo) return blockedRirNovo;
-  writeAll(rirStorageKey(), items);
+  try {
+    writeAll(rirStorageKey(), items);
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Falha ao gravar RIR no armazenamento local.',
+    };
+  }
   return { success: true, data: created };
 }
 
@@ -1437,7 +1714,9 @@ export async function excluirRir(id: string): Promise<ServiceResult<{ removedId:
   const next = items.filter((item) => item.id !== trimmed);
 
   if (hasSupabaseConfig()) {
-    const bloqueioRirExcluir = bloqueioLocalRir(next.length);
+    // Guard compara localStorage vs lista CARREGADA (antes do filtro).
+    // Usar next.length bloqueava toda exclusao legitima (N local vs N-1 a gravar).
+    const bloqueioRirExcluir = bloqueioLocalRir(items.length);
     if (bloqueioRirExcluir) return { success: false, error: bloqueioRirExcluir };
     return executeWrite({
       shouldWriteRemote: true,

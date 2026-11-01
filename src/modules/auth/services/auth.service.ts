@@ -19,6 +19,7 @@ import {
 } from '../../../lib/sessionCloudHealth';
 import { parseAuthSessionUser, parseAuthUsersStorageList } from '../schemas/authLocal.zod';
 import type { AppModule, AuthUser, LoginPayload, Permission, PermissionAction } from '../types/auth.types';
+import { setItemComRecuperacaoQuota } from '../../../lib/localStorageQuota';
 import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { appendAuthAuditEvent } from './authAudit.service';
 
@@ -49,6 +50,23 @@ export function isIsoProMfaRequiredError(error: unknown): error is IsoProMfaRequ
   return error instanceof IsoProMfaRequiredError;
 }
 
+/** Admin sem authenticator: obrigar registo TOTP no login (empresas novas / contas Auth sem MFA). */
+export class IsoProMfaEnrollRequiredError extends Error {
+  readonly pendingUser: AuthUser;
+  readonly permanecerLogado: boolean;
+
+  constructor(pendingUser: AuthUser, permanecerLogado: boolean) {
+    super('Configure o authenticator (MFA) para esta empresa antes de continuar.');
+    this.name = 'IsoProMfaEnrollRequiredError';
+    this.pendingUser = pendingUser;
+    this.permanecerLogado = permanecerLogado;
+  }
+}
+
+export function isIsoProMfaEnrollRequiredError(error: unknown): error is IsoProMfaEnrollRequiredError {
+  return error instanceof IsoProMfaEnrollRequiredError;
+}
+
 export function getAuthSessionStorageKey(): string {
   return getScopedIsoProStorageKey(AUTH_SESSION_STORAGE_KEY_BASE);
 }
@@ -72,7 +90,11 @@ function clearAuthLastActivity(): void {
 export function touchAuthSessionActivity(): void {
   const backend = getActiveAuthSessionStorage();
   if (!backend) return;
-  backend.setItem(getAuthLastActivityKey(), String(Date.now()));
+  try {
+    setItemComRecuperacaoQuota(backend, getAuthLastActivityKey(), String(Date.now()));
+  } catch {
+    /* quota extrema — sessao continua em memoria */
+  }
 }
 
 function ensureAuthActivityTimestamp(): void {
@@ -80,7 +102,11 @@ function ensureAuthActivityTimestamp(): void {
   if (!backend) return;
   const key = getAuthLastActivityKey();
   if (!backend.getItem(key)) {
-    backend.setItem(key, String(Date.now()));
+    try {
+      setItemComRecuperacaoQuota(backend, key, String(Date.now()));
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -133,11 +159,16 @@ export function persistAuthSession(user: AuthUser, permanecerLogado: boolean): v
   window.localStorage.removeItem(key);
   window.sessionStorage.removeItem(key);
   const backend = permanecerLogado ? window.localStorage : window.sessionStorage;
-  backend.setItem(key, payload);
+  // Prioridade: gravar sessao. Se quota cheia (caches materiais/docs), limpa e tenta de novo.
+  setItemComRecuperacaoQuota(backend, key, payload);
   try {
-    window.localStorage.setItem(getAuthRememberLoginPreferenceKey(), permanecerLogado ? '1' : '0');
+    setItemComRecuperacaoQuota(
+      window.localStorage,
+      getAuthRememberLoginPreferenceKey(),
+      permanecerLogado ? '1' : '0',
+    );
   } catch {
-    /* quota ou modo privado */
+    /* preferencia e secundaria */
   }
   touchAuthSessionActivity();
 }
@@ -224,6 +255,27 @@ function buildPermissions(allowedModules: AppModule[]): Permission[] {
   ]);
 }
 
+function buildOperacaoPermissions(): Permission[] {
+  const base = buildPermissions([
+    'dashboard',
+    'recebimentos',
+    'conferencia',
+    'etiquetas',
+    'equipamentos',
+    'atendimento',
+    'inventario',
+    'rir',
+    'rnc',
+    'mobile',
+    'configuracoes',
+  ]);
+  return base.map((item) =>
+    item.modulo === 'configuracoes'
+      ? { ...item, permitido: item.acao === 'visualizar' }
+      : item,
+  );
+}
+
 const mockUsers: Record<string, AuthUser & { senha: string }> = {
   admin: {
     id: 'local-admin',
@@ -247,7 +299,7 @@ const mockUsers: Record<string, AuthUser & { senha: string }> = {
     senha: '1234',
     nome: 'Operacao',
     perfil: { id: 'operacao', nome: 'Operacao' },
-    permissoes: buildPermissions(['dashboard', 'recebimentos', 'conferencia', 'etiquetas', 'equipamentos', 'atendimento', 'inventario', 'rir', 'rnc', 'mobile']),
+    permissoes: buildOperacaoPermissions(),
   },
   consulta: {
     id: 'local-consulta',
@@ -291,7 +343,10 @@ function resolveSeedPerfilCodigo(perfilId: string, perfilNome?: string): string 
  */
 function mergePermissoesComDefaultsPerfil(stored: Permission[], perfilId: string, perfilNome?: string): Permission[] {
   const seedCodigo = resolveSeedPerfilCodigo(perfilId, perfilNome);
-  const baseline = buildPermissions(mockPermissionsByProfileId.get(seedCodigo) ?? []);
+  const baseline =
+    seedCodigo === 'operacao'
+      ? buildOperacaoPermissions()
+      : buildPermissions(mockPermissionsByProfileId.get(seedCodigo) ?? []);
   const storedMap = new Map(stored.map((p) => [`${p.modulo}:${p.acao}`, p.permitido]));
   return baseline.map((p) => {
     const key = `${p.modulo}:${p.acao}`;
@@ -427,11 +482,19 @@ async function loginRemote(payload: LoginPayload): Promise<AuthUser> {
       captureOperationalEvent('mfa_challenge', { login, authPath: result.authPath }, 'info');
       throw new IsoProMfaRequiredError(result.jwt.factorId, sessionUser, payload.permanecerLogado);
     }
-    captureOperationalEvent('auth_path', { login, path: result.authPath }, 'info');
+    if (result.jwt.kind === 'mfa_enroll_required') {
+      captureOperationalEvent('mfa_challenge', { login, authPath: result.authPath, enroll: true }, 'info');
+      throw new IsoProMfaEnrollRequiredError(sessionUser, payload.permanecerLogado);
+    }
+    // Pós-cutover JWT: logins `jwt` são o caminho normal — não abrir Issue no Sentry.
+    // Só reporta fallback (rpc_only / rpc_fallback) que ainda merece atenção.
+    if (result.authPath !== 'jwt') {
+      captureOperationalEvent('auth_path', { login, path: result.authPath }, 'warning');
+    }
     appendAuthAuditEvent({
       type: 'login_success',
       actorLogin: sessionUser.login,
-      detail: `Login remoto authPath=${result.authPath} (JWT preferencial; RPC fallback intacto).`,
+      detail: `Login remoto authPath=${result.authPath} (JWT obrigatorio em producao).`,
     });
     persistAuthSession(sessionUser, payload.permanecerLogado);
     markSessionCloudValidationOk();
@@ -461,14 +524,35 @@ export async function completeLoginAfterMfa(
   code: string,
   pendingUser: AuthUser,
   permanecerLogado: boolean,
+  options?: { enroll?: boolean },
 ): Promise<AuthUser> {
-  await verifyIsoProMfaChallenge(factorId, code);
+  const enroll = Boolean(options?.enroll);
+  try {
+    await verifyIsoProMfaChallenge(factorId, code);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Codigo MFA invalido.';
+    appendAuthAuditEvent({
+      type: enroll ? 'mfa_enroll_failure' : 'mfa_challenge_failure',
+      actorLogin: pendingUser.login,
+      detail,
+    });
+    throw error;
+  }
   persistAuthSession(pendingUser, permanecerLogado);
   markSessionCloudValidationOk();
   appendAuthAuditEvent({
+    type: enroll ? 'mfa_enroll_success' : 'mfa_challenge_success',
+    actorLogin: pendingUser.login,
+    detail: enroll
+      ? 'Enroll MFA (TOTP) concluido; sessao JWT aal2.'
+      : 'Login com MFA (JWT aal2) concluido.',
+  });
+  appendAuthAuditEvent({
     type: 'login_success',
     actorLogin: pendingUser.login,
-    detail: 'Login com MFA (JWT aal2) concluido.',
+    detail: enroll
+      ? 'Login apos enroll MFA (JWT aal2) concluido.'
+      : 'Login com MFA (JWT aal2) concluido.',
   });
   return pendingUser;
 }
@@ -501,7 +585,7 @@ export async function login(payload: LoginPayload): Promise<AuthUser> {
     try {
       return await loginRemote(payload);
     } catch (error) {
-      if (isIsoProMfaRequiredError(error)) {
+      if (isIsoProMfaRequiredError(error) || isIsoProMfaEnrollRequiredError(error)) {
         throw error;
       }
       const message = error instanceof Error ? error.message : 'Falha ao autenticar no Supabase.';
@@ -592,7 +676,7 @@ export function getCurrentUser(): AuthUser | null {
   if (JSON.stringify(merged) !== JSON.stringify(user.permissoes)) {
     const next: AuthUser = { ...user, permissoes: merged };
     const backend = getActiveAuthSessionStorage() ?? window.localStorage;
-    backend.setItem(getAuthSessionStorageKey(), JSON.stringify(next));
+    setItemComRecuperacaoQuota(backend, getAuthSessionStorageKey(), JSON.stringify(next));
     return next;
   }
 
@@ -611,7 +695,7 @@ async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
     if (rpc.ok) {
       const sessionUser = mapAuthRpcUserToAuthUser(rpc.user);
       const backend = getActiveAuthSessionStorage() ?? window.localStorage;
-      backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+      setItemComRecuperacaoQuota(backend, getAuthSessionStorageKey(), JSON.stringify(sessionUser));
       touchAuthSessionActivity();
       markSessionCloudValidationOk();
       return sessionUser;
@@ -637,7 +721,7 @@ async function refreshRemoteSession(user: AuthUser): Promise<AuthUser | null> {
   if (refreshRpc.ok) {
     const sessionUser = mapAuthRpcUserToAuthUser(refreshRpc.user);
     const backend = getActiveAuthSessionStorage() ?? window.localStorage;
-    backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    setItemComRecuperacaoQuota(backend, getAuthSessionStorageKey(), JSON.stringify(sessionUser));
     touchAuthSessionActivity();
     markSessionCloudValidationOk();
     return sessionUser;
@@ -681,7 +765,7 @@ function refreshLocalSession(user: AuthUser): AuthUser | null {
 
   const sessionUser = sanitizeUser(localUser);
   const backend = getActiveAuthSessionStorage() ?? window.localStorage;
-  backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+  setItemComRecuperacaoQuota(backend, getAuthSessionStorageKey(), JSON.stringify(sessionUser));
   touchAuthSessionActivity();
   return sessionUser;
 }
@@ -725,7 +809,7 @@ export async function validateCurrentSession(user: AuthUser | null): Promise<Aut
     }
     const sessionUser = sanitizeUser(resolved);
     const backend = getActiveAuthSessionStorage() ?? window.localStorage;
-    backend.setItem(getAuthSessionStorageKey(), JSON.stringify(sessionUser));
+    setItemComRecuperacaoQuota(backend, getAuthSessionStorageKey(), JSON.stringify(sessionUser));
     touchAuthSessionActivity();
     return sessionUser;
   }

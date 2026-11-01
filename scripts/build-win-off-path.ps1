@@ -15,8 +15,17 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy falhou com codigo $LASTEXITCODE" }
 
 Push-Location $BuildRoot
 try {
-  npm install
-  if ($LASTEXITCODE -ne 0) { throw "npm install falhou com codigo $LASTEXITCODE" }
+  # Preferir node_modules da origem (npm install no sandbox/CI costuma falhar com "Exit handler never called").
+  $srcModules = Join-Path $Src 'node_modules'
+  $dstModules = Join-Path $BuildRoot 'node_modules'
+  if (Test-Path -LiteralPath (Join-Path $srcModules 'electron')) {
+    Write-Host "Copiando node_modules da origem (evita npm install) ..."
+    robocopy $srcModules $dstModules /MIR /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy node_modules falhou com codigo $LASTEXITCODE" }
+  } else {
+    npm install
+    if ($LASTEXITCODE -ne 0) { throw "npm install falhou com codigo $LASTEXITCODE" }
+  }
   npm run dist:win
   if ($LASTEXITCODE -ne 0) { throw "npm run dist:win falhou com codigo $LASTEXITCODE" }
   $releaseSrc = Join-Path $BuildRoot 'release'
@@ -34,6 +43,13 @@ try {
   $atuais = Join-Path $releaseDest 'installers\atuais'
   $anteriores = Join-Path $releaseDest 'installers\anteriores'
   New-Item -ItemType Directory -Force -Path $atuais, $anteriores | Out-Null
+
+  # Limpa revisões antigas de atuais (só a corrente deve ficar)
+  Get-ChildItem -LiteralPath $atuais -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -notlike "*$ver*" -and $_.Name -notin @('SHA256SUMS.txt', 'builder-debug.yml', 'latest.yml')
+  } | ForEach-Object {
+    Move-Item -LiteralPath $_.FullName -Destination $anteriores -Force
+  }
 
   Get-ChildItem -LiteralPath $releaseDest -File | Where-Object {
     $_.Name -like 'I.S.O PRO Setup *' -or $_.Name -like 'I.S.O PRO-*-portable.exe' -or $_.Name -like 'I.S.O PRO Setup *.blockmap'

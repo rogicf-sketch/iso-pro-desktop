@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
+import { isPlainFormDirty } from '../../../lib/isPlainFormDirty';
 import { getRuntimeSupabaseConfig, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
@@ -14,7 +15,7 @@ import {
   type DesktopSecurityContext,
 } from '../services/desktopSecurity.service';
 import { parseDesktopLicencaImportFile } from '../schemas/desktopLicencaImportFile.zod';
-import { carregarConfiguracoes, consultarReciboConfigPendenteNuvem, salvarConfiguracoes } from '../services/configuracoes.service';
+import { carregarConfiguracoes, consultarReciboConfigPendenteNuvem, readConfiguracoes, salvarConfiguracoes } from '../services/configuracoes.service';
 import type { ConfiguracaoSistema } from '../types/configuracao.types';
 
 export function useConfiguracoes() {
@@ -25,6 +26,7 @@ export function useConfiguracoes() {
 
   const { canAccessAction, user } = useAuth();
   const [form, setForm] = useState<ConfiguracaoSistema | null>(null);
+  const [baseline, setBaseline] = useState<ConfiguracaoSistema | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
@@ -46,6 +48,7 @@ export function useConfiguracoes() {
       void Promise.all([carregarConfiguracoes(), getDesktopSecurityContext()])
         .then(([data, securityContext]) => {
           setForm(data);
+          setBaseline(data);
           setDesktopSecurity(securityContext);
           if (data.desktopLicencaToken) {
             setDesktopLicenseHealth(getDesktopLicenseHealth(data.desktopLicencaToken));
@@ -95,7 +98,13 @@ export function useConfiguracoes() {
       return;
     }
 
-    const result = await salvarConfiguracoes(form);
+    const latest = readConfiguracoes();
+    const formParaSalvar =
+      !(form.rirProcedimentosCadastro?.length > 0) && (latest.rirProcedimentosCadastro?.length ?? 0) > 0
+        ? { ...form, rirProcedimentosCadastro: latest.rirProcedimentosCadastro }
+        : form;
+
+    const result = await salvarConfiguracoes(formParaSalvar);
     if (!result.success) {
       setError(result.error ?? 'Nao foi possivel salvar configuracoes.');
       return;
@@ -110,6 +119,7 @@ export function useConfiguracoes() {
       });
     }
 
+    setBaseline(form);
     setSuccess('Configuracoes salvas com sucesso.');
     if (result.warning) {
       setWarning(result.warning);
@@ -121,6 +131,11 @@ export function useConfiguracoes() {
       void consultarReciboConfigPendenteNuvem(form).then(setReciboNuvemPendente);
     }
   }
+
+  const isDirty = useMemo(() => {
+    if (!form || !baseline) return false;
+    return isPlainFormDirty(baseline, form);
+  }, [baseline, form]);
 
   async function autorizarInstalacaoAtual() {
     if (!desktopSecurity) {
@@ -340,6 +355,7 @@ export function useConfiguracoes() {
     reciboNuvemPendente,
     success,
     setSuccess,
+    isDirty,
     runtimeSupabase,
     hasCloudConfig,
     cloudMaterialsEnabled,

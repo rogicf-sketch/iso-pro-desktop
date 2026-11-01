@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
@@ -56,9 +57,10 @@ export function useColaboradores() {
   const [selected, setSelected] = useState<Colaborador | null>(null);
   const [importStaging, setImportStaging] = useState<{ fileName: string; text: string; linhaCount: number } | null>(null);
   const [importingColaboradores, setImportingColaboradores] = useState(false);
+  const [importProgress, setImportProgress] = useState('');
   const [importResultado, setImportResultado] = useState<ResultadoImportacaoColaboradoresCsv | null>(null);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -72,6 +74,8 @@ export function useColaboradores() {
         items: result.data.items,
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
   });
@@ -80,6 +84,17 @@ export function useColaboradores() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['colaboradores', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -217,24 +232,41 @@ export function useColaboradores() {
     setError('');
     setSuccess('');
     setImportingColaboradores(true);
+    setImportProgress('A gravar na nuvem…');
     const text = importStaging.text;
 
-    const result = await importarColaboradoresDoArquivoCsv(text);
-    setImportingColaboradores(false);
-    setImportStaging(null);
+    try {
+      const result = await Promise.race([
+        importarColaboradoresDoArquivoCsv(text),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error('Tempo esgotado ao gravar na nuvem.')), 45_000);
+        }),
+      ]);
 
-    if (!result.success) {
-      setError(result.error ?? 'Importacao nao concluida.');
-      return;
-    }
+      if (!result.success) {
+        const base = result.error ?? 'Importacao nao concluida.';
+        setError(
+          base.includes('Atualize a pagina')
+            ? base
+            : `${base} Atualize a pagina e confira o total antes de importar de novo.`,
+        );
+        return;
+      }
 
-    const r = result.data;
-    if (!r) {
-      setError('Resumo da importacao indisponivel.');
-      return;
+      const r = result.data;
+      if (!r) {
+        setError('Resumo da importacao indisponivel.');
+        return;
+      }
+      setImportResultado(r);
+      void invalidateColaboradoresLista();
+    } catch {
+      setError('A importacao nao confirmou o fim. Atualize a pagina e confira o total antes de importar de novo.');
+    } finally {
+      setImportingColaboradores(false);
+      setImportProgress('');
+      setImportStaging(null);
     }
-    await invalidateColaboradoresLista();
-    setImportResultado(r);
   }
 
   async function exportColaboradoresCsv() {
@@ -284,6 +316,8 @@ export function useColaboradores() {
     error: error || listError,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,
@@ -321,6 +355,7 @@ export function useColaboradores() {
     importInputRef,
     importStaging,
     importingColaboradores,
+    importProgress,
     importResultado,
     openImportColaboradoresPicker,
     baixarModeloCsvImportacaoColaboradores,

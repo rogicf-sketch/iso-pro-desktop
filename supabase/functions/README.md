@@ -169,6 +169,85 @@ supabase functions deploy iso_pro_admin_user --no-verify-jwt
 
 No modulo Configuracoes, o campo **Segredo criar utilizador na nuvem** (mesmo valor que `ISO_PRO_ADMIN_USER_SECRET`) activa gravacao via esta funcao; vazio mantem insert/update directo com a chave anon.
 
+O desktop grava o mesmo secret em Configurações (campo admin user) e invoca a função com actor da sessão.
+
+---
+
+## `iso_pro_create_tenant`
+
+Provisiona **nova empresa** no mesmo projeto Supabase: linha em `iso_pro_tenants`, cópia do perfil `admin` do tenant default, permissões, primeiro utilizador e snapshot vazio — equivalente a `snippets/provision_novo_tenant.sql`, sem SQL Editor.
+
+### Segredo
+
+Mesmo que `iso_pro_admin_user`: **`ISO_PRO_ADMIN_USER_SECRET`** no cabeçalho **`x-iso-pro-admin-user-secret`**. O actor (`actorLogin` + `actorSenha`) tem de ser admin no `actorTenantId`.
+
+### Pedido
+
+```json
+{
+  "actorTenantId": "00000000-0000-0000-0000-000000000001",
+  "actorLogin": "admin",
+  "actorSenha": "********",
+  "slug": "obra-norte",
+  "nomeEmpresa": "Obra Norte Lda.",
+  "adminLogin": "admin.obranorte",
+  "adminNome": "Administrador",
+  "adminSenha": "Alterar123!"
+}
+```
+
+### Publicar
+
+```bash
+supabase functions deploy iso_pro_create_tenant --no-verify-jwt
+```
+
+### Desktop
+
+Configurações → Organizações → **Criar nova empresa**.
+
+---
+
+## `iso_pro_desktop_license`
+
+Super-admin da **organização principal**: emitir, listar e revogar licenças desktop para **qualquer** `tenant_id`.
+
+### Segredos
+
+| Secret | Uso |
+|--------|-----|
+| `ISO_PRO_ADMIN_USER_SECRET` | Cabeçalho `x-iso-pro-admin-user-secret` (igual às outras Edges de admin) |
+| `ISO_PRO_DESKTOP_LICENSE_PRIVATE_KEY` | PEM completo da chave privada (`npm run license:keypair`) — só no servidor |
+
+### Actor
+
+Login + senha de um utilizador **activo** no tenant default (`00000000-0000-0000-0000-000000000001`) com:
+
+1. Admin de utilizadores (`iso_pro_usuario_administra_utilizadores`)
+2. Coluna `plataforma_super_admin = true` (migração `20260725220000_iso_pro_plataforma_super_admin.sql` promove admins do default)
+
+### Modes (`mode`)
+
+- `capabilities` — confirma super-admin + se a chave privada está configurada + lista tenants
+- `list` — licenças (opcional `tenantId`)
+- `issue` — assina token + upsert em `desktop_licencas` (`tenantId`, `issuedTo`, `machineFingerprint`, …)
+- `set_status` — `active` / `revoked` para `licenseId` + `tenantId`
+
+### Publicar
+
+```bash
+npx supabase db push
+# Colar o PEM (multilinha) no Dashboard → Edge Functions → Secrets, ou:
+npx supabase secrets set ISO_PRO_DESKTOP_LICENSE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----"
+npx supabase functions deploy iso_pro_desktop_license --no-verify-jwt
+```
+
+### Desktop
+
+Módulo **Licenças desktop** (na org principal, com super-admin): formulário **Emitir licença** + lista com filtro por empresa.
+
 ---
 
 ## Testes de integração HTTP (opcional)

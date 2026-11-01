@@ -1,7 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName, type TableRowState } from '../../../components/tables/tableRowState';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconPencil, IconTrash } from '../../../components/ui/TableActionIcons';
 import type { Equipamento } from '../types/equipamento.types';
 import { diasAteFimContrato, labelSituacaoContrato, situacaoContratoFromDias } from '../utils/equipamentoContrato';
 function statusOperacaoTone(status: Equipamento['statusEquipamento']): 'ok' | 'warning' | 'neutral' {
@@ -99,19 +100,20 @@ export function EquipamentosTable({ items, onEdit, onDelete, canEdit }: Props) {
           render: (item) =>
             canEdit ? (
               <div className="table-actions">
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
+                <TableIconButton label="Editar" onClick={() => onEdit(item)}>
+                  <IconPencil />
+                </TableIconButton>
                 {onDelete ? (
-                  <Button onClick={() => onDelete(item)} variant="ghost">
-                    Excluir
-                  </Button>
+                  <TableIconButton label="Excluir" onClick={() => onDelete(item)} tone="danger">
+                    <IconTrash />
+                  </TableIconButton>
                 ) : null}
               </div>
             ) : null,
         },
       ]}
-      emptyText="Nenhum equipamento encontrado."
+      emptyDescription="Cadastre um equipamento ou limpe o filtro de busca."
+      emptyText="Nenhum equipamento encontrado"
       items={items}
     />
   );

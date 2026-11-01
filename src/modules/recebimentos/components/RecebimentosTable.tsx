@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconEye, IconLockOpen, IconPencil, IconTrash } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { RecebimentoListItem } from '../types/recebimento.types';
 import { textoModoRecebimentoListagem } from '../utils/modoRecebimentoExibicao';
@@ -16,7 +16,7 @@ type Props = {
   onEdit: (item: RecebimentoListItem) => void;
   onCancel: (item: RecebimentoListItem) => void;
   onExcluirDefinitivo?: (item: RecebimentoListItem) => void;
-  /** Destravar recebimento conferido (senha na pagina) — requer administrar. */
+  /** Destravar recebimento conferido (senha na pagina) — editar ou administrar. */
   onDestravar?: (item: RecebimentoListItem) => void;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
@@ -34,9 +34,11 @@ function statusPermiteDestravarRecebimento(status: RecebimentoListItem['status']
 }
 
 function getStatusMeta(status: RecebimentoListItem['status']) {
-  if (status === 'conferido') return createStatusMeta(status, 'ok');
-  if (status === 'cancelado') return createStatusMeta(status, 'neutral');
-  if (status === 'aguardando_conferencia' || status === 'parcialmente_conferido') return createStatusMeta(status, 'warning');
+  if (status === 'conferido') return createStatusMeta('Conferido', 'ok');
+  if (status === 'cancelado') return createStatusMeta('Cancelado', 'neutral');
+  if (status === 'aguardando_conferencia') return createStatusMeta('Aguardando', 'warning');
+  if (status === 'parcialmente_conferido') return createStatusMeta('Parcial', 'warning');
+  if (status === 'divergente') return createStatusMeta('Divergente', 'danger');
   return createStatusMeta(status, 'danger');
 }
 
@@ -132,64 +134,85 @@ export function RecebimentosTable({
         {
           key: 'acoes',
           header: 'Acoes',
-          render: (item) => (
-            <div className="table-actions">
-              <Button onClick={() => void onView(item)} type="button" variant="ghost">
-                Visualizar
-              </Button>
-              {canEdit && item.status === 'aguardando_conferencia' ? (
-                <Button onClick={() => void onEdit(item)} type="button" variant="ghost">
-                  Editar
-                </Button>
-              ) : null}
-              {canAdminister && onDestravar && statusPermiteDestravarRecebimento(item.status) ? (
-                <Button
-                  onClick={() => onDestravar(item)}
-                  title="Volta para aguardando conferencia (com senha), mantendo a conferencia feita, para corrigir itens ou cancelar/excluir."
-                  type="button"
-                  variant="ghost"
-                >
-                  Destravar...
-                </Button>
-              ) : null}
-              {canAdminister ? (
-                <>
-                  <ActionButton
-                    disabled={item.status === 'cancelado' || item.status !== 'aguardando_conferencia'}
-                    disabledLabel={item.status === 'cancelado' ? 'Cancelado' : 'Travado'}
-                    disabledTitle={
+          render: (item) => {
+            const cancelDisabled = item.status === 'cancelado' || item.status !== 'aguardando_conferencia';
+            const excluirDisabled = !statusPermiteExclusaoDefinitivaRecebimento(item.status);
+            return (
+              <div className="table-actions">
+                <TableIconButton label="Visualizar" onClick={() => void onView(item)}>
+                  <IconEye />
+                </TableIconButton>
+                {canEdit && item.status === 'aguardando_conferencia' ? (
+                  <TableIconButton label="Editar" onClick={() => void onEdit(item)}>
+                    <IconPencil />
+                  </TableIconButton>
+                ) : canEdit ? (
+                  <TableIconButton
+                    disabled
+                    label={
                       item.status === 'cancelado'
-                        ? 'Recebimento ja cancelado.'
-                        : item.status !== 'aguardando_conferencia'
-                          ? 'So recebimentos aguardando conferencia podem ser cancelados. Destrave com senha se precisar corrigir.'
-                          : 'Cancelar recebimento'
+                        ? 'Recebimento cancelado — nao e possivel editar.'
+                        : item.status === 'conferido' ||
+                            item.status === 'parcialmente_conferido' ||
+                            item.status === 'divergente'
+                          ? 'Recebimento ja conferido — edicao bloqueada. Use Destravar (cadeado + a sua senha) e depois Editar.'
+                          : 'Edicao disponivel apenas com status aguardando conferencia.'
                     }
-                    enabledLabel="Cancelar"
-                    enabledTitle="Cancelar recebimento"
-                    onClick={() => onCancel(item)}
-                    variant="danger"
-                  />
-                  {onExcluirDefinitivo ? (
-                    <Button
-                      disabled={!statusPermiteExclusaoDefinitivaRecebimento(item.status)}
-                      onClick={() => onExcluirDefinitivo(item)}
-                      title={
-                        statusPermiteExclusaoDefinitivaRecebimento(item.status)
-                          ? 'Remove o recebimento do cadastro (irreversivel). Exige senha.'
-                          : 'So e possivel excluir recebimentos aguardando conferencia, cancelados ou rascunho.'
+                  >
+                    <IconPencil />
+                  </TableIconButton>
+                ) : null}
+                {(canEdit || canAdminister) && onDestravar && statusPermiteDestravarRecebimento(item.status) ? (
+                  <TableIconButton
+                    label={
+                      canAdminister
+                        ? 'Volta para aguardando conferencia (com senha), mantendo a conferencia feita, para corrigir itens ou cancelar/excluir.'
+                        : 'Destravar para correcao (exige a sua senha). Depois pode editar. Cancelar/excluir continua so para administrador.'
+                    }
+                    onClick={() => onDestravar(item)}
+                  >
+                    <IconLockOpen />
+                  </TableIconButton>
+                ) : null}
+                {canAdminister ? (
+                  <>
+                    <TableIconButton
+                      disabled={cancelDisabled}
+                      label={
+                        item.status === 'cancelado'
+                          ? 'Recebimento ja cancelado.'
+                          : item.status !== 'aguardando_conferencia'
+                            ? 'So recebimentos aguardando conferencia podem ser cancelados. Destrave com senha se precisar corrigir.'
+                            : 'Cancelar recebimento'
                       }
-                      type="button"
-                      variant="ghost"
+                      onClick={() => onCancel(item)}
+                      tone="danger"
                     >
-                      Excluir definitivamente
-                    </Button>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-          ),
+                      <IconBan />
+                    </TableIconButton>
+                    {onExcluirDefinitivo ? (
+                      <TableIconButton
+                        disabled={excluirDisabled}
+                        label={
+                          statusPermiteExclusaoDefinitivaRecebimento(item.status)
+                            ? 'Remove o recebimento do cadastro (irreversivel). Exige senha.'
+                            : 'So e possivel excluir recebimentos aguardando conferencia, cancelados ou rascunho.'
+                        }
+                        onClick={() => onExcluirDefinitivo(item)}
+                        tone="danger"
+                      >
+                        <IconTrash />
+                      </TableIconButton>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+            );
+          },
         },
       ]}
+      emptyDescription="Registe um recebimento ou ajuste o filtro de busca/status."
+      emptyText="Nenhum recebimento encontrado"
       items={items}
     />
   );

@@ -14,4 +14,6 @@ interface ImportMetaEnv {
   readonly VITE_ISO_PRO_JWT_AUTH?: string;
   /** Estorno V2 (RPC transacional): true/false (omissão activo com fallback legado) */
   readonly VITE_ISO_PRO_ESTORNO_V2?: string;
+  /** URL absoluta do gateway Confirmar (omissão: same-origin /api/atendimento/comando em prod). */
+  readonly VITE_ATENDIMENTO_GATEWAY_URL?: string;
 }

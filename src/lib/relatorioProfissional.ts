@@ -7,6 +7,7 @@ import { abrirPreVisualizacaoHtmlRelatorio } from './htmlRelatorioInstitucional'
 import { traduzirErroImpressaoIsoPro } from './traduzirErroImpressaoIsoPro';
 import { entregarPdfBytes, gerarHtmlRelatorioPdfBytes, gerarPdfBytesFromHtmlLocal } from './pdfCloud/pdfHybridRouter';
 import type { PdfJobTipo } from './pdfCloud/types';
+import { sairFullscreenDocumentoSeActivo } from './sairFullscreenDocumento';
 
 export type HtmlRelatorioNuvemTipo = PdfJobTipo;
 
@@ -16,6 +17,8 @@ export type RelatorioProfissionalOpts = {
   titulo?: string;
   /** Tipo na fila Supabase + auditoria. Recomendado em todos os relatórios. */
   tipoNuvem?: HtmlRelatorioNuvemTipo;
+  /** EXE: fotos/binários gravados ao lado do HTML na pré-visualização. */
+  previewAssets?: Array<{ name: string; base64: string }>;
 };
 
 export function nomeArquivoRelatorioPdf(codigo: string, prefixo: string): string {
@@ -29,7 +32,10 @@ async function entregarHtmlPdfLocal(
   acao: 'guardar' | 'imprimir' | 'preview',
   titulo?: string,
   tipoNuvem?: HtmlRelatorioNuvemTipo,
+  previewAssets?: Array<{ name: string; base64: string }>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  await sairFullscreenDocumentoSeActivo();
+
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
   const tituloStr = titulo ?? fileName;
 
@@ -64,6 +70,7 @@ async function entregarHtmlPdfLocal(
       tituloCarregamento: tituloStr,
       pdfFileName: fileName,
       pdfTipo: tipoNuvem,
+      previewAssets,
     });
     if (prev.ok) return prev;
     return { ok: false, error: traduzirErroImpressaoIsoPro(prev.error ?? 'Falha na pré-visualização.') };
@@ -113,7 +120,14 @@ export async function guardarRelatorioProfissional(
 export async function preVisualizarRelatorioProfissional(
   opts: RelatorioProfissionalOpts,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  return entregarHtmlPdfLocal(opts.html, opts.fileName, 'preview', opts.titulo ?? opts.fileName, opts.tipoNuvem);
+  return entregarHtmlPdfLocal(
+    opts.html,
+    opts.fileName,
+    'preview',
+    opts.titulo ?? opts.fileName,
+    opts.tipoNuvem,
+    opts.previewAssets,
+  );
 }
 
 /** Gera bytes PDF sem entregar (auditoria / testes). */

@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron';
+import { initAutoUpdater } from './autoUpdater';
 import { initMainProcessCrashReporter, logMainProcessEvent } from './crashReporter';
 import { registerBackupContextHandlers } from './backupContext';
 import { registerConfigSecretsHandlers } from './configSecrets';
@@ -48,6 +49,7 @@ function bootstrap() {
       }
     });
     void initBackupOracleAuto();
+    initAutoUpdater();
     setTimeout(() => {
       preaquecerGeradorPdf();
     }, 2500);

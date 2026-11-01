@@ -3,12 +3,21 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useDocumentos } from './useDocumentos';
 
 const mocks = vi.hoisted(() => ({
   listarDocumentos: vi.fn(),
   diagnosticarPlanejamentoLocalVersusNuvem: vi.fn(() =>
-    Promise.resolve({ noNavegador: 0, noSnapshot: 0 }),
+    Promise.resolve({
+      noNavegador: 0,
+      noSnapshot: 0,
+      comItensNoLocal: 0,
+      totalItensNoLocal: 0,
+      comItensNaNuvem: 0,
+      totalItensNaNuvem: 0,
+      nuvemSemLinhasMaterial: false,
+    }),
   ),
 }));
 
@@ -37,7 +46,9 @@ vi.mock('../../materiais/services/materiais.service', async (importOriginal) => 
     ...mod,
     validarCodigosMateriaisAtivosNoCadastroParaRecebimento: vi.fn(),
     construirIndicePesoPorCodigoMaterial: vi.fn(() => Promise.resolve(new Map<string, number>())),
-    construirIndiceDisciplinaUnidadePorCodigoMaterial: vi.fn(() => Promise.resolve(new Map<string, { disciplina: string; unidade: string }>())),
+    construirIndiceDisciplinaUnidadePorCodigoMaterial: vi.fn(() =>
+      Promise.resolve(new Map<string, { disciplina: string; unidade: string }>()),
+    ),
   };
 });
 
@@ -63,6 +74,7 @@ describe('useDocumentos — lista', () => {
     });
     mocks.listarDocumentos.mockReset();
     mocks.diagnosticarPlanejamentoLocalVersusNuvem.mockClear();
+    vi.mocked(hasSupabaseConfig).mockReturnValue(false);
   });
 
   it('carrega itens e total apos sucesso do servico', async () => {
@@ -100,6 +112,45 @@ describe('useDocumentos — lista', () => {
     expect(result.current.items[0]?.numero).toBe('DOC-1');
     expect(result.current.total).toBe(1);
     expect(mocks.listarDocumentos).toHaveBeenCalled();
-    expect(mocks.diagnosticarPlanejamentoLocalVersusNuvem).toHaveBeenCalled();
+    // Sem Supabase o diagnóstico local×nuvem nao corre (nao bloqueia a lista).
+    expect(mocks.diagnosticarPlanejamentoLocalVersusNuvem).not.toHaveBeenCalled();
+  });
+
+  it('com nuvem, diagnostico corre em paralelo e nao bloqueia a lista', async () => {
+    vi.mocked(hasSupabaseConfig).mockReturnValue(true);
+    mocks.listarDocumentos.mockResolvedValue({
+      success: true,
+      data: {
+        items: [
+          {
+            id: 'doc-1',
+            numero: 'DOC-1',
+            revisao: 'A',
+            descricao: 'Teste',
+            responsavel: 'R',
+            dataDocumento: '2026-04-01',
+            status: 'pendente',
+            totalItens: 1,
+            quantidadePlanejada: 10,
+            quantidadeAtendida: 0,
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 20,
+      },
+      meta: { source: 'supabase' as const },
+    });
+
+    const { result } = renderHook(() => useDocumentos(), { wrapper: TestQueryProvider });
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    expect(result.current.items).toHaveLength(1);
+
+    await waitFor(() => {
+      expect(mocks.diagnosticarPlanejamentoLocalVersusNuvem).toHaveBeenCalled();
+    });
   });
 });

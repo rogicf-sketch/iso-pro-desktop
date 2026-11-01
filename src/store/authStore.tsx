@@ -119,8 +119,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const nextUser = await doLogin(payload);
         setUser(nextUser);
       },
-      completeMfaLogin: async (factorId, code, pendingUser, permanecerLogado) => {
-        const nextUser = await completeLoginAfterMfa(factorId, code, pendingUser, permanecerLogado);
+      completeMfaLogin: async (factorId, code, pendingUser, permanecerLogado, options) => {
+        const nextUser = await completeLoginAfterMfa(factorId, code, pendingUser, permanecerLogado, options);
         setUser(nextUser);
       },
       logout: () => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { getMenuBadgeCounts } from '../services/menuBadgeCounts.service';
 import type { MenuBadgeCounts } from '../utils/pendenciasOperacionais.utils';
 
@@ -13,6 +14,7 @@ const INITIAL: MenuBadgeCounts = {
 };
 
 export function useMenuBadgeCounts() {
+  const { user } = useAuth();
   const [counts, setCounts] = useState<MenuBadgeCounts>(INITIAL);
   const [loading, setLoading] = useState(true);
 
@@ -28,7 +30,7 @@ export function useMenuBadgeCounts() {
       void refresh();
     }, REFRESH_MS);
     return () => window.clearInterval(id);
-  }, [refresh]);
+  }, [refresh, user?.id]);
 
   return { counts, loading, refresh };
 }

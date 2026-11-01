@@ -2,7 +2,7 @@ import { BrowserWindow, ipcMain, app, dialog, type WebContents } from 'electron'
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolvePreloadPath } from './window';
-import { escreverRelatorioHtmlTemp } from './reportHtmlTemp';
+import { escreverRelatorioHtmlTemp, type RelatorioHtmlAsset } from './reportHtmlTemp';
 import { injetarBarraPreviewElectronNoHtml } from './htmlPreviewInject';
 import { lerMetadadosPdfRelatorio, montarOpcoesPrintToPdfRelatorio } from './pdfPrintOptions';
 import {
@@ -81,10 +81,23 @@ export function registerPrintHandlers() {
     return { ok: true as const };
   });
 
-  ipcMain.handle('desktop-preview:html', async (_event, html: unknown) => {
+  ipcMain.handle('desktop-preview:html', async (_event, html: unknown, assets?: unknown) => {
     if (typeof html !== 'string' || !html.trim()) {
       return { ok: false as const, error: 'HTML inválido ou vazio.' };
     }
+
+    const assetsList: RelatorioHtmlAsset[] = Array.isArray(assets)
+      ? assets
+          .map((a) => {
+            if (!a || typeof a !== 'object') return null;
+            const row = a as { name?: unknown; base64?: unknown };
+            const name = String(row.name ?? '').trim();
+            const base64 = String(row.base64 ?? '').trim();
+            if (!name || !base64) return null;
+            return { name, base64 };
+          })
+          .filter((x): x is RelatorioHtmlAsset => Boolean(x))
+      : [];
 
     let bundle: Awaited<ReturnType<typeof escreverRelatorioHtmlTemp>> | null = null;
     const winLoading = htmlPreviewLoadingWindow;
@@ -113,45 +126,51 @@ export function registerPrintHandlers() {
 
     try {
       const htmlPreview = injetarBarraPreviewElectronNoHtml(html);
-      bundle = await escreverRelatorioHtmlTemp(htmlPreview);
+      bundle = await escreverRelatorioHtmlTemp(htmlPreview, assetsList);
       await win.webContents.loadFile(bundle.htmlPath);
       await estabilizarDomAposLoadFile(win.webContents);
-      await aguardarLayoutRelatorioHtmlPreview(win.webContents);
-      await win.webContents
-        .executeJavaScript(
-          `(function () {
-            if (!window.__relatorioUsaPagedJs) return;
-            var pages = document.querySelectorAll('.pagedjs_page');
-            function paginaTemTexto(page) {
-              var box = page.querySelector('.pagedjs_page_content');
-              if (!box) return false;
-              if (box.querySelector('table tbody tr, .rfo-sec, .rfo-capa, .rfo-body, .rfo-indice, .rir-hdr, h1, h2')) return true;
-              var txt = (box.textContent || '').replace(/\\s+/g, ' ').trim();
-              txt = txt.replace(/Folha \\d+ \\/ \\d+/gi, '').trim();
-              return txt.length > 80;
-            }
-            if (!pages.length) {
-              document.body.classList.remove('relatorio-paged-ready');
-              document.body.classList.add('relatorio-paged-falhou');
-              return;
-            }
-            var comConteudo = 0;
-            for (var i = 0; i < pages.length; i++) {
-              if (paginaTemTexto(pages[i])) comConteudo++;
-            }
-            var ok = comConteudo >= Math.max(2, Math.ceil(pages.length * 0.34)) && (pages.length === 1 || paginaTemTexto(pages[1]));
-            if (!ok) {
-              document.body.classList.remove('relatorio-paged-ready');
-              document.body.classList.add('relatorio-paged-falhou');
-            }
-          })()`,
-        )
-        .catch(() => undefined);
+      // Mostrar já — folha de campo / RF não devem esperar Paged.js até 6s com ecrã vazio.
       fecharJanelaCarregamentoHtmlPreview(winLoading);
       if (!win.isDestroyed()) {
         win.show();
         win.focus();
         win.moveTop();
+      }
+      const usaPaged = await win.webContents
+        .executeJavaScript('!!window.__relatorioUsaPagedJs')
+        .catch(() => false);
+      if (usaPaged) {
+        await aguardarLayoutRelatorioHtmlPreview(win.webContents);
+        await win.webContents
+          .executeJavaScript(
+            `(function () {
+              if (!window.__relatorioUsaPagedJs) return;
+              var pages = document.querySelectorAll('.pagedjs_page');
+              function paginaTemTexto(page) {
+                var box = page.querySelector('.pagedjs_page_content');
+                if (!box) return false;
+                if (box.querySelector('table tbody tr, .rfo-sec, .rfo-capa, .rfo-body, .rfo-indice, .rir-hdr, h1, h2')) return true;
+                var txt = (box.textContent || '').replace(/\\s+/g, ' ').trim();
+                txt = txt.replace(/Folha \\d+ \\/ \\d+/gi, '').trim();
+                return txt.length > 80;
+              }
+              if (!pages.length) {
+                document.body.classList.remove('relatorio-paged-ready');
+                document.body.classList.add('relatorio-paged-falhou');
+                return;
+              }
+              var comConteudo = 0;
+              for (var i = 0; i < pages.length; i++) {
+                if (paginaTemTexto(pages[i])) comConteudo++;
+              }
+              var ok = comConteudo >= Math.max(2, Math.ceil(pages.length * 0.34)) && (pages.length === 1 || paginaTemTexto(pages[1]));
+              if (!ok) {
+                document.body.classList.remove('relatorio-paged-ready');
+                document.body.classList.add('relatorio-paged-falhou');
+              }
+            })()`,
+          )
+          .catch(() => undefined);
       }
       void aguardarLayoutRelatorioHtmlCondicional(win.webContents).catch(() => undefined);
       return { ok: true as const };

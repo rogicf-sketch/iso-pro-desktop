@@ -52,7 +52,8 @@ export function detectarModeloCsvImportacao(headers: readonly string[]): IsoProC
     return 'documentos';
   }
 
-  const materiais = has(h, 'estoque_minimo') && has(h, 'codigo_barras');
+  const materiais =
+    (has(h, 'estoque_minimo') || has(h, 'estoque_minimo_percentual')) && has(h, 'codigo_barras');
   if (materiais) {
     return 'materiais';
   }

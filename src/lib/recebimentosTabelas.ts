@@ -1,5 +1,12 @@
+import { IsoProSnapshotConflictError } from './isoProSnapshot';
 import { getActiveTenantId } from './isoProTenant';
-import { getSupabase, hasSupabaseConfig } from './supabase';
+import { invalidateOperacaoContagensBestEffort } from './operacaoContagensCache';
+import { resolveSotUnavailable } from './sotWriteGuard';
+import { getSupabase, hasSupabaseConfig, rpcSemFilaAuth } from './supabase';
+
+function isRpcMissingError(message: string): boolean {
+  return /function .* does not exist|PGRST202|404|could not find the function/i.test(message);
+}
 
 export const RECEBIMENTOS_UPSERT_CHUNK_SIZE = 40;
 
@@ -83,6 +90,22 @@ export async function syncRecebimentosFromSnapshot(): Promise<{
   };
 }
 
+function comTempo<T>(promise: PromiseLike<T>, timeoutMs: number, mensagem: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(mensagem)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(mensagem));
+      },
+    );
+  });
+}
+
 export async function upsertRecebimentosEmLotes(
   recebimentos: RecebimentoWire[],
   options?: { chunkSize?: number; onProgress?: (done: number, total: number) => void },
@@ -98,22 +121,46 @@ export async function upsertRecebimentosEmLotes(
   const chunks = chunkArray(recebimentos, chunkSize);
   let recs = 0;
   let itens = 0;
-  let done = 0;
 
+  let lote = 0;
   for (const chunk of chunks) {
-    const { data, error } = await supabase.rpc('iso_pro_upsert_recebimentos_lote', {
-      p_tenant_id: getActiveTenantId(),
-      p_recebimentos: chunk,
-    });
-    if (error) return { ok: false, recebimentos: recs, itens, error: error.message };
-    const row = (data ?? {}) as { ok?: boolean; recebimentos?: number; itens?: number; error?: string };
-    if (row.ok === false) {
-      return { ok: false, recebimentos: recs, itens, error: row.error ?? 'Falha no upsert.' };
+    lote += 1;
+    options?.onProgress?.(lote, chunks.length);
+    let lastError = 'Falha no upsert.';
+    let saved = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let data: unknown;
+      let error: { message: string } | null = null;
+      try {
+        const chamada = supabase.rpc('iso_pro_upsert_recebimentos_lote', {
+          p_tenant_id: getActiveTenantId(),
+          p_recebimentos: chunk,
+        }) as PromiseLike<{ data: unknown; error: { message: string } | null }>;
+        const res = await comTempo(chamada, 45_000, 'Tempo esgotado ao gravar na nuvem.');
+        data = res.data;
+        error = res.error;
+      } catch (err) {
+        error = { message: err instanceof Error ? err.message : 'Tempo esgotado ao gravar na nuvem.' };
+        data = null;
+      }
+      if (!error) {
+        const row = (data ?? {}) as { ok?: boolean; recebimentos?: number; itens?: number; error?: string };
+        if (row.ok !== false) {
+          recs += Number(row.recebimentos) || 0;
+          itens += Number(row.itens) || 0;
+          saved = true;
+          break;
+        }
+        lastError = row.error ?? lastError;
+      } else {
+        lastError = error.message;
+      }
+      const waitLock = lastError.toLowerCase().includes('lock timeout');
+      const esgotado = lastError.toLowerCase().includes('tempo esgotado');
+      if (esgotado || !waitLock || attempt === 3) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
     }
-    recs += Number(row.recebimentos) || 0;
-    itens += Number(row.itens) || 0;
-    done += chunk.length;
-    options?.onProgress?.(done, recebimentos.length);
+    if (!saved) return { ok: false, recebimentos: recs, itens, error: lastError };
   }
 
   return { ok: true, recebimentos: recs, itens };
@@ -134,12 +181,56 @@ export async function deleteRecebimentosFromTables(ids: string[]): Promise<{ ok:
   return { ok: true };
 }
 
+/**
+ * SoT table-first: grava tabelas + projecao no snapshot (RPC atomica).
+ * Com `sot_require_rpc`: RPC ausente → hard-fail (sem patch snapshot).
+ */
+export async function writeRecebimentosSotOnCloud(opts: {
+  baselineUpdatedAt: string | null;
+  upsert?: unknown[] | null;
+  removeIds?: string[] | null;
+  replaceAll?: unknown[] | null;
+}): Promise<{ updatedAt: string; missing: boolean }> {
+  if (!hasSupabaseConfig()) {
+    return resolveSotUnavailable({ domain: 'recebimentos', reason: 'supabase_unavailable' });
+  }
+  const supabase = getSupabase();
+  if (!supabase) {
+    return resolveSotUnavailable({ domain: 'recebimentos', reason: 'supabase_unavailable' });
+  }
+
+  const { data, error } = await supabase.rpc('iso_pro_write_recebimentos_sot', {
+    p_tenant_id: getActiveTenantId(),
+    p_baseline: opts.baselineUpdatedAt,
+    p_upsert: opts.upsert ?? null,
+    p_remove_ids: opts.removeIds?.length ? opts.removeIds : null,
+    p_replace_all: opts.replaceAll ?? null,
+  });
+
+  if (error) {
+    if (isRpcMissingError(error.message)) {
+      return resolveSotUnavailable({
+        domain: 'recebimentos',
+        reason: 'rpc_missing',
+        detail: error.message,
+      });
+    }
+    if (String(error.message ?? '').includes('ISO_PRO_SNAPSHOT_CONFLICT')) {
+      throw new IsoProSnapshotConflictError(error.message);
+    }
+    throw new Error(error.message);
+  }
+  invalidateOperacaoContagensBestEffort();
+  return { updatedAt: data != null ? String(data) : new Date().toISOString(), missing: false };
+}
+
 export async function listRecebimentosPageFromCloud(options?: {
   busca?: string;
   offset?: number;
   limit?: number;
   status?: string;
   modo?: string;
+  signal?: AbortSignal;
 }): Promise<{
   recebimentos: RecebimentoListWire[];
   total: number;
@@ -149,18 +240,27 @@ export async function listRecebimentosPageFromCloud(options?: {
   if (!hasSupabaseConfig()) {
     return { recebimentos: [], total: 0, source: 'none', error: 'Supabase nao configurado.' };
   }
-  const supabase = getSupabase();
-  if (!supabase) return { recebimentos: [], total: 0, source: 'none', error: 'Supabase indisponivel.' };
 
-  const { data, error } = await supabase.rpc('iso_pro_list_recebimentos_page', {
-    p_tenant_id: getActiveTenantId(),
-    p_busca: options?.busca?.trim() || null,
-    p_offset: options?.offset ?? 0,
-    p_limit: options?.limit ?? 50,
-    p_status: options?.status && options.status !== 'todos' ? options.status : null,
-    p_modo: options?.modo && options.modo !== 'todos' ? options.modo : null,
-  });
-  if (error) return { recebimentos: [], total: 0, source: 'error', error: error.message };
+  // rpcSemFilaAuth: fora da fila Auth + timeout curto (NF não pode esperar 25s).
+  const { data, error } = await rpcSemFilaAuth<{
+    recebimentos?: unknown;
+    total?: number;
+    _source?: string;
+    _error?: string;
+  }>(
+    'iso_pro_list_recebimentos_page',
+    {
+      p_tenant_id: getActiveTenantId(),
+      p_busca: options?.busca?.trim() || null,
+      p_offset: options?.offset ?? 0,
+      p_limit: options?.limit ?? 50,
+      p_status: options?.status && options.status !== 'todos' ? options.status : null,
+      p_modo: options?.modo && options.modo !== 'todos' ? options.modo : null,
+    },
+    8_000,
+    options?.signal,
+  );
+  if (error) return { recebimentos: [], total: 0, source: 'error', error };
   const row = (data ?? {}) as {
     recebimentos?: unknown;
     total?: number;
@@ -211,14 +311,15 @@ export async function readRecebimentoFromCloud(id: string): Promise<{
   if (!hasSupabaseConfig()) {
     return { recebimento: null, source: 'none', error: 'Supabase nao configurado.' };
   }
-  const supabase = getSupabase();
-  if (!supabase) return { recebimento: null, source: 'none', error: 'Supabase indisponivel.' };
-
-  const { data, error } = await supabase.rpc('iso_pro_read_recebimento', {
+  const { data, error } = await rpcSemFilaAuth<{
+    recebimento?: RecebimentoWire | null;
+    _source?: string;
+    _error?: string;
+  }>('iso_pro_read_recebimento', {
     p_tenant_id: getActiveTenantId(),
     p_recebimento_id: id,
   });
-  if (error) return { recebimento: null, source: 'error', error: error.message };
+  if (error) return { recebimento: null, source: 'error', error };
   const row = (data ?? {}) as {
     recebimento?: RecebimentoWire | null;
     _source?: string;

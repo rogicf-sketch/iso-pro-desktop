@@ -46,6 +46,24 @@ export type ConfiguracaoSistema = {
    */
   logoInstitucionalUrl: string;
   /**
+   * Escala do quadro do logo (compacto / média / grande).
+   * `auto` = média (legado).
+   */
+  logoInstitucionalTamanhoRelatorio: 'auto' | 'compacto' | 'padrao' | 'grande';
+  /**
+   * Forma do quadro: auto escolhe horizontal/quadrado/vertical pela proporção do ficheiro.
+   */
+  logoInstitucionalFormatoQuadro: 'auto' | 'horizontal' | 'quadrado' | 'vertical';
+  /**
+   * Proporção largura/altura do logo (após recorte). 0 = desconhecida.
+   * Usada quando o formato do quadro é «auto».
+   */
+  logoInstitucionalAspecto: number;
+  /**
+   * Zoom da imagem dentro do quadro branco (80–280%). Ajuste manual fino por empresa.
+   */
+  logoInstitucionalZoomPct: number;
+  /**
    * Rodape institucional nos documentos HTML (relatorio fotografico, RIR, RNC, recibos).
    * Em geral o nome da empresa que opera no sistema (razao social ou fantasia).
    */

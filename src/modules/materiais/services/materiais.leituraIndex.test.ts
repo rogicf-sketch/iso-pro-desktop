@@ -18,6 +18,10 @@ vi.mock('../../../lib/isoProAmbiente', () => ({
   getScopedIsoProStorageKey: (k: string) => k,
 }));
 
+vi.mock('../../../lib/isoProTenant', () => ({
+  getActiveTenantId: vi.fn(() => '00000000-0000-0000-0000-000000000001'),
+}));
+
 describe('indice O(1) de leitura de materiais', () => {
   beforeEach(() => {
     for (const k of Object.keys(store)) delete store[k];
@@ -92,5 +96,62 @@ describe('indice O(1) de leitura de materiais', () => {
 
     const inativo = await buscarMaterialPorLeituraCodigo('OFF');
     expect(inativo.data).toBeNull();
+  });
+
+  it('com materiais na nuvem: bipe consulta Supabase antes da copia local', async () => {
+    const { shouldUseCloudMaterials, hasSupabaseConfig, getSupabase } = await import('../../../lib/supabase');
+    vi.mocked(shouldUseCloudMaterials).mockReturnValue(true);
+    vi.mocked(hasSupabaseConfig).mockReturnValue(true);
+
+    store['iso-pro-desktop-materiais'] = JSON.stringify([
+      {
+        id: 'local-stale',
+        codigo: 'X1',
+        codigoBarras: '',
+        descricao: 'Stale local',
+        diametro: '',
+        disciplina: '',
+        unidade: 'PC',
+        peso: 0,
+        estoqueMinimo: 0,
+        saldoAtual: 1,
+        ativo: true,
+        observacao: '',
+      },
+    ]);
+
+    // Chain: from().select().eq(tenant).ilike(codigo).limit()
+    const limit = vi.fn(async () => ({
+      data: [
+        {
+          id: 'cloud-1',
+          codigo: 'X1',
+          codigo_barras: null,
+          descricao: 'From cloud',
+          diametro: null,
+          disciplina: null,
+          unidade: 'PC',
+          peso: 0,
+          estoque_minimo: 0,
+          ativo: true,
+        },
+      ],
+      error: null,
+    }));
+    const ilike = vi.fn(() => ({ limit }));
+    const eqTenant = vi.fn(() => ({ ilike, eq: vi.fn(() => ({ limit })), limit }));
+    const select = vi.fn(() => ({ eq: eqTenant }));
+    vi.mocked(getSupabase).mockReturnValue({ from: vi.fn(() => ({ select })) } as never);
+
+    const { buscarMaterialPorLeituraCodigo, invalidateMateriaisBaseCache, aquecerIndiceLeituraMateriais } =
+      await import('./materiais.service');
+    invalidateMateriaisBaseCache();
+    await aquecerIndiceLeituraMateriais(); // cloud on: nao deve indexar local stale
+
+    const r = await buscarMaterialPorLeituraCodigo('X1');
+    expect(r.success).toBe(true);
+    expect(r.data?.descricao).toBe('From cloud');
+    expect(r.data?.id).toBe('cloud-1');
+    expect(select).toHaveBeenCalled();
   });
 });

@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconEye, IconList, IconPencil, IconTrash } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { DocumentoListItem } from '../types/documento.types';
 import { formatarDataDocumentoPtBr } from '../utils/formatarDataDocumento';
@@ -38,6 +38,27 @@ function fmtQty(n: number) {
   return Number.isInteger(n) ? String(n) : n.toLocaleString('pt-BR', { maximumFractionDigits: 4 });
 }
 
+function progressoAtendimento(item: DocumentoListItem): { pct: number; label: string; title: string } {
+  const plan = Math.max(0, Number(item.quantidadePlanejada) || 0);
+  const atd = Math.max(0, Number(item.quantidadeAtendida) || 0);
+  const pct = plan > 0 ? Math.min(100, Math.round((atd / plan) * 100)) : 0;
+  return {
+    pct,
+    label: `${pct}%`,
+    title: `Atendimento: ${fmtQty(atd)} de ${fmtQty(plan)} (${pct}%)`,
+  };
+}
+
+function statusAjuda(status: DocumentoListItem['status']): string {
+  if (status === 'atendido') return 'Todas as linhas foram baixadas neste documento.';
+  if (status === 'recebido')
+    return 'Material já no estoque (recebimento). Qtd. atendida pode ser 0% até baixar no Atendimento.';
+  if (status === 'parcial')
+    return 'Há estoque e/ou baixa parcial. Qtd. atendida 0% ainda pode ser Parcial se já entrou material no estoque.';
+  if (status === 'cancelado') return 'Documento cancelado.';
+  return 'Sem saldo/estoque relevante para cumprir o documento.';
+}
+
 export function DocumentosTable({
   items,
   onEdit,
@@ -65,6 +86,8 @@ export function DocumentosTable({
 
   return (
     <DataTable
+      emptyDescription="Cadastre um desenho ou ajuste o filtro de busca/status."
+      emptyText="Nenhum documento no planejamento"
       getRowKey={(item) => item.id}
       getRowClassName={(item) =>
         getTableRowClassName(
@@ -103,76 +126,92 @@ export function DocumentosTable({
             ]
           : []),
         { key: 'numero', header: 'Documento', render: (item) => `${item.numero} Rev. ${item.revisao}` },
-        { key: 'descricao', header: 'Descricao', render: (item) => item.descricao },
-        { key: 'responsavel', header: 'Responsavel', render: (item) => item.responsavel || '-' },
+        { key: 'descricao', header: 'Descrição', render: (item) => item.descricao },
+        { key: 'responsavel', header: 'Responsável', render: (item) => item.responsavel || '—' },
         { key: 'data', header: 'Data', render: (item) => formatarDataDocumentoPtBr(item.dataDocumento) },
         { key: 'itens', header: 'Itens', render: (item) => item.totalItens },
         {
           key: 'qPrev',
-          header: 'Quantidade do documento',
+          header: 'Qtd. documento',
           render: (item) => fmtQty(item.quantidadePlanejada),
         },
         {
           key: 'qAtd',
-          header: 'Qtd atendida',
-          render: (item) => fmtQty(item.quantidadeAtendida),
+          header: 'Qtd. atendida',
+          render: (item) => {
+            const prog = progressoAtendimento(item);
+            return (
+              <span className="documentos-atend-cell" title={prog.title}>
+                <span className="documentos-atend-qty">{fmtQty(item.quantidadeAtendida)}</span>
+                <span className="documentos-atend-bar" aria-hidden>
+                  <span className="documentos-atend-bar-fill" style={{ width: `${prog.pct}%` }} />
+                </span>
+                <span className="documentos-atend-pct">{prog.label}</span>
+              </span>
+            );
+          },
         },
         {
           key: 'status',
           header: 'Status',
           render: (item) => {
             const meta = getStatusMeta(item.status);
-            return <StatusBadge text={meta.text} tone={meta.tone} />;
+            return (
+              <span title={statusAjuda(item.status)}>
+                <StatusBadge text={meta.text} tone={meta.tone} />
+              </span>
+            );
           },
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
               {onVisualizar ? (
-                <Button
+                <TableIconButton
                   disabled={visualizarBusyId === item.id}
+                  label={visualizarBusyId === item.id ? 'A abrir folha…' : 'Ver folha de campo'}
                   onClick={() => onVisualizar(item)}
-                  type="button"
+                  tone="accent"
                 >
-                  {visualizarBusyId === item.id ? 'A abrir…' : 'Visualizar'}
-                </Button>
+                  <IconEye />
+                </TableIconButton>
               ) : null}
               {onVerItens ? (
-                <Button onClick={() => onVerItens(item)} type="button" variant="ghost">
-                  Ver itens
-                </Button>
+                <TableIconButton label="Ver itens do documento" onClick={() => onVerItens(item)}>
+                  <IconList />
+                </TableIconButton>
               ) : null}
               {canEdit ? (
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
+                <TableIconButton label="Editar documento" onClick={() => onEdit(item)}>
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
               {canAdminister ? (
                 <>
-                  <ActionButton
+                  <TableIconButton
                     disabled={item.status === 'cancelado'}
-                    disabledLabel="Cancelado"
-                    disabledTitle="Documento ja cancelado."
-                    enabledLabel={item.status === 'pendente' ? 'Cancelar' : 'Cancelar (adm.)'}
-                    enabledTitle={
-                      item.status === 'pendente'
-                        ? 'Cancelar documento pendente.'
-                        : 'Cancelamento administrativo: exige justificativa. Nao estorna recebimentos nem atendimentos.'
+                    label={
+                      item.status === 'cancelado'
+                        ? 'Documento já cancelado'
+                        : item.status === 'pendente'
+                          ? 'Cancelar documento pendente'
+                          : 'Cancelar documento (administrativo)'
                     }
                     onClick={() => onCancel(item)}
-                    variant="danger"
-                  />
+                    tone="danger"
+                  >
+                    <IconBan />
+                  </TableIconButton>
                   {onExcluirDefinitivo ? (
-                    <Button
+                    <TableIconButton
+                      label="Excluir documento definitivamente"
                       onClick={() => onExcluirDefinitivo(item)}
-                      title="Remove o documento do planejamento (irreversivel). Exige senha de administrador."
-                      type="button"
-                      variant="ghost"
+                      tone="danger"
                     >
-                      Excluir definitivamente
-                    </Button>
+                      <IconTrash />
+                    </TableIconButton>
                   ) : null}
                 </>
               ) : null}

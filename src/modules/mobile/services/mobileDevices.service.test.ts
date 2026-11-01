@@ -22,6 +22,7 @@ vi.mock('../../../lib/writePolicy', () => ({
 }));
 
 import {
+  deleteMobileDevice,
   getMobileDeviceIndicators,
   listMobileDevices,
   testSupabaseDispositivosMobile,
@@ -102,6 +103,35 @@ describe('mobileDevices.service — tenant na nuvem', () => {
     const ind = await getMobileDeviceIndicators();
     expect(ind.source).toBe('supabase');
     expect(ind.warning).toBeNull();
+  });
+
+  it('deleteMobileDevice apaga na nuvem filtrando id e tenant_id', async () => {
+    mockHasSupabaseConfig.mockReturnValue(true);
+    const select = vi.fn().mockResolvedValue({ data: [{ id: 'd1' }], error: null });
+    const eqTenant = vi.fn().mockReturnValue({ select });
+    const eqId = vi.fn().mockReturnValue({ eq: eqTenant });
+    const del = vi.fn().mockReturnValue({ eq: eqId });
+    const from = vi.fn().mockReturnValue({ delete: del });
+    mockGetSupabase.mockReturnValue({ from });
+
+    await deleteMobileDevice('d1');
+
+    expect(from).toHaveBeenCalledWith('dispositivos_mobile');
+    expect(eqId).toHaveBeenCalledWith('id', 'd1');
+    expect(eqTenant).toHaveBeenCalledWith('tenant_id', TENANT_ID);
+    expect(select).toHaveBeenCalledWith('id');
+  });
+
+  it('deleteMobileDevice falha quando a nuvem nao devolve a linha apagada', async () => {
+    mockHasSupabaseConfig.mockReturnValue(true);
+    const select = vi.fn().mockResolvedValue({ data: [], error: null });
+    const eqTenant = vi.fn().mockReturnValue({ select });
+    const eqId = vi.fn().mockReturnValue({ eq: eqTenant });
+    const del = vi.fn().mockReturnValue({ eq: eqId });
+    const from = vi.fn().mockReturnValue({ delete: del });
+    mockGetSupabase.mockReturnValue({ from });
+
+    await expect(deleteMobileDevice('missing')).rejects.toThrow(/nao encontrado ou sem permissao/i);
   });
 
   it('testSupabaseDispositivosMobile conta com eq tenant_id', async () => {

@@ -1,5 +1,6 @@
 import {
   isIsoProSnapshotConflictError,
+  peekAtendimentoComandoConfirmado,
   SNAPSHOT_CONFLICT_MESSAGE,
   submitAtendimentoComandoToCloud,
   IsoProSnapshotConflictError,
@@ -18,7 +19,10 @@ export type AtendimentoDesktopSyncOutcome = {
   updatedAt: string | null;
 };
 
-const CONFLICT_RETRY_MAX = 6;
+/** Retry so em conflito OCC. Timeout: reconcile por peek, sem 2.o RPC cego. */
+const CONFLICT_RETRY_MAX = 2;
+const RECONCILE_AFTER_TIMEOUT_ROUNDS = 20;
+const RECONCILE_AFTER_TIMEOUT_GAP_MS = 400;
 
 function delayMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -99,6 +103,34 @@ export function buildDesktopAtendimentoIdempotencyKey(input: {
   return `pc-at-${Date.now()}`;
 }
 
+/**
+ * Apos timeout do cliente, a RPC pode ainda ter gravado. Confirma pela chave
+ * de idempotencia (snapshot_updated_at preenchido = sucesso).
+ */
+export async function confirmarComandoAtendimentoPorIdempotencia(
+  idempotencyKey: string,
+): Promise<string | null> {
+  const key = idempotencyKey.trim();
+  if (!key) return null;
+
+  for (let round = 0; round < RECONCILE_AFTER_TIMEOUT_ROUNDS; round += 1) {
+    try {
+      // Peek anon — nao usar SELECT com JWT (claim tenant quebrava o reconcile).
+      const at = await peekAtendimentoComandoConfirmado(key);
+      if (at) {
+        atendimentoCloudBaselineCursor = at;
+        return at;
+      }
+    } catch {
+      /* ignore — tenta de novo */
+    }
+    if (round < RECONCILE_AFTER_TIMEOUT_ROUNDS - 1) {
+      await delayMs(RECONCILE_AFTER_TIMEOUT_GAP_MS);
+    }
+  }
+  return null;
+}
+
 export async function syncAtendimentoComandoDesktop(input: {
   comandoPatch: Record<string, unknown>;
   patch: Record<string, unknown>;
@@ -132,10 +164,14 @@ export async function syncAtendimentoComandoDesktop(input: {
         return { error: null, conflict: false, updatedAt: result.updatedAt };
       }
       // Baixa e estorno: nao cair no patch_snapshot pesado (historico inteiro → 40–60s).
+      const detail =
+        'error' in result && result.error
+          ? result.error
+          : ehEstorno
+            ? 'Nao foi possivel gravar o estorno na nuvem (comando indisponivel). Tente de novo.'
+            : 'Nao foi possivel gravar a retirada na nuvem (comando indisponivel). Recarregue e tente de novo.';
       return {
-        error: ehEstorno
-          ? 'Nao foi possivel gravar o estorno na nuvem (comando indisponivel). Tente de novo.'
-          : 'Nao foi possivel gravar a retirada na nuvem (comando indisponivel). Recarregue e tente de novo.',
+        error: detail,
         conflict: false,
         updatedAt: null,
       };
@@ -147,8 +183,16 @@ export async function syncAtendimentoComandoDesktop(input: {
           updatedAt: null,
         };
       }
+      const msg = err instanceof Error ? err.message : 'Falha ao sincronizar atendimento.';
+      // Timeout do browser: a RPC pode ter concluido no servidor — confirmar pela chave.
+      if (isErroTransienteNuvem(msg)) {
+        const confirmedAt = await confirmarComandoAtendimentoPorIdempotencia(input.idempotencyKey);
+        if (confirmedAt) {
+          return { error: null, conflict: false, updatedAt: confirmedAt };
+        }
+      }
       return {
-        error: err instanceof Error ? err.message : 'Falha ao sincronizar atendimento.',
+        error: msg,
         conflict: false,
         updatedAt: null,
       };
@@ -227,12 +271,14 @@ export async function gravarAtendimentoNaNuvemComComando(input: {
       }
 
       if (isErroTransienteNuvem(outcome.error)) {
-        if (attempt < CONFLICT_RETRY_MAX - 1) {
-          await delayMs(700 + attempt * 500);
-          continue;
+        // Nao repetir o RPC (duplicava 8–20s). Ultima passagem de peek anon pela chave.
+        const confirmedAt = await confirmarComandoAtendimentoPorIdempotencia(idempotencyKey);
+        if (confirmedAt) {
+          setAtendimentoCloudBaselineCursor(confirmedAt);
+          return;
         }
         lastError = new Error(
-          'A nuvem nao confirmou a gravacao (ligacao lenta). Recarregue a pagina e confira o historico antes de tentar de novo.',
+          'A nuvem demorou a responder. Abra Historico e confira se o lote ja apareceu; se nao, clique Confirmar de novo (nao duplica).',
         );
         break;
       }

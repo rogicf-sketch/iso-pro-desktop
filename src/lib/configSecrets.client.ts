@@ -1,6 +1,6 @@
 import type { ConfiguracaoSistema } from '@/modules/configuracoes/types/configuracao.types';
 
-/** Campos sensíveis — no Electron ficam no cofre OS (safeStorage), não em localStorage em texto plano. */
+/** Campos sensíveis — Electron: cofre OS (safeStorage); web: memória + sessionStorage (nunca localStorage). */
 export const CONFIG_SECRET_FIELD_KEYS = [
   'isoProLinkAuthSecret',
   'isoProAdminUserSecret',
@@ -14,6 +14,8 @@ export const CONFIG_SECRET_FIELD_KEYS = [
 
 export type ConfigSecretFieldKey = (typeof CONFIG_SECRET_FIELD_KEYS)[number];
 
+const SESSION_SECRETS_KEY = 'iso-pro-config-secrets-session-v1';
+
 let secretsCache: Partial<Record<ConfigSecretFieldKey, string>> = {};
 let vaultHydrated = false;
 let vaultAvailable = false;
@@ -24,6 +26,18 @@ export function isConfigSecretsVaultAvailable(): boolean {
 
 export function getCachedConfigSecret(key: ConfigSecretFieldKey): string {
   return secretsCache[key] ?? '';
+}
+
+/** Só testes — limpa cache/sessão. */
+export function resetConfigSecretsClientForTests(): void {
+  secretsCache = {};
+  vaultHydrated = false;
+  vaultAvailable = false;
+  try {
+    sessionStorage.removeItem(SESSION_SECRETS_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 function pickSecretsFromConfig(config: ConfiguracaoSistema): Record<ConfigSecretFieldKey, string> {
@@ -42,7 +56,44 @@ function stripSecretsFromConfig(config: ConfiguracaoSistema): ConfiguracaoSistem
   return next;
 }
 
-/** Mescla segredos do cofre (ou cache) sobre a config lida do localStorage. */
+function readSessionSecrets(): Partial<Record<ConfigSecretFieldKey, string>> {
+  if (typeof sessionStorage === 'undefined') return {};
+  try {
+    const raw = sessionStorage.getItem(SESSION_SECRETS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Partial<Record<ConfigSecretFieldKey, string>> = {};
+    const o = parsed as Record<string, unknown>;
+    for (const key of CONFIG_SECRET_FIELD_KEYS) {
+      const v = String(o[key] ?? '').trim();
+      if (v) out[key] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionSecrets(secrets: Partial<Record<ConfigSecretFieldKey, string>>): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    const compact: Partial<Record<ConfigSecretFieldKey, string>> = {};
+    for (const key of CONFIG_SECRET_FIELD_KEYS) {
+      const v = String(secrets[key] ?? '').trim();
+      if (v) compact[key] = v;
+    }
+    if (Object.keys(compact).length === 0) {
+      sessionStorage.removeItem(SESSION_SECRETS_KEY);
+      return;
+    }
+    sessionStorage.setItem(SESSION_SECRETS_KEY, JSON.stringify(compact));
+  } catch {
+    /* quota / private mode — memória mantém a sessão actual */
+  }
+}
+
+/** Mescla segredos do cofre/sessão sobre a config lida do localStorage (já sem plaintext). */
 export function mergeConfigSecrets(config: ConfiguracaoSistema): ConfiguracaoSistema {
   if (!vaultHydrated) return config;
   const next = { ...config };
@@ -56,16 +107,27 @@ export function mergeConfigSecrets(config: ConfiguracaoSistema): ConfiguracaoSis
 }
 
 /**
- * Carrega cofre Electron (safeStorage) e migra segredos que ainda estejam em localStorage.
- * No browser/web mantém comportamento anterior (segredos só no localStorage).
+ * Carrega cofre Electron (safeStorage) ou sessão web; migra plaintext legado do localStorage.
  */
 export async function hydrateConfigSecretsVault(
   configFromStorage: ConfiguracaoSistema,
 ): Promise<{ migrated: boolean }> {
   const api = window.isoProDesktop?.loadConfigSecrets;
   if (!api) {
+    secretsCache = { ...readSessionSecrets() };
+    const plainFromStorage = pickSecretsFromConfig(configFromStorage);
+    let migrated = false;
+    for (const key of CONFIG_SECRET_FIELD_KEYS) {
+      const plain = plainFromStorage[key];
+      if (!plain) continue;
+      // Qualquer plaintext no localStorage deve sair (mesmo se a sessão já tiver o valor).
+      migrated = true;
+      if (!secretsCache[key]) secretsCache[key] = plain;
+    }
+    writeSessionSecrets(secretsCache);
     vaultHydrated = true;
-    return { migrated: false };
+    vaultAvailable = false;
+    return { migrated };
   }
 
   const loadResult = await api();
@@ -78,8 +140,20 @@ export async function hydrateConfigSecretsVault(
   secretsCache = { ...(loadResult.secrets as Partial<Record<ConfigSecretFieldKey, string>>) };
 
   if (!loadResult.available) {
+    // Electron sem safeStorage: mesmo modelo web (sessão + strip localStorage).
+    secretsCache = { ...secretsCache, ...readSessionSecrets() };
+    const plainFromStorage = pickSecretsFromConfig(configFromStorage);
+    let migrated = false;
+    for (const key of CONFIG_SECRET_FIELD_KEYS) {
+      const plain = plainFromStorage[key];
+      if (plain && !secretsCache[key]) {
+        secretsCache[key] = plain;
+        migrated = true;
+      }
+    }
+    writeSessionSecrets(secretsCache);
     vaultHydrated = true;
-    return { migrated: false };
+    return { migrated };
   }
 
   const plainFromStorage = pickSecretsFromConfig(configFromStorage);
@@ -100,10 +174,13 @@ export async function hydrateConfigSecretsVault(
   return { migrated: Object.keys(toMigrate).length > 0 };
 }
 
-/** Persiste segredos no cofre OS e remove do JSON em localStorage. */
+/**
+ * Persiste segredos no cofre OS (Electron) ou sessionStorage (web) e remove do JSON em localStorage.
+ */
 export async function persistConfigSecretsVault(config: ConfiguracaoSistema): Promise<ConfiguracaoSistema> {
   const secrets = pickSecretsFromConfig(config);
   secretsCache = { ...secrets };
+  vaultHydrated = true;
 
   const saveApi = window.isoProDesktop?.saveConfigSecrets;
   if (saveApi && vaultAvailable) {
@@ -111,5 +188,6 @@ export async function persistConfigSecretsVault(config: ConfiguracaoSistema): Pr
     return stripSecretsFromConfig(config);
   }
 
-  return config;
+  writeSessionSecrets(secrets);
+  return stripSecretsFromConfig(config);
 }

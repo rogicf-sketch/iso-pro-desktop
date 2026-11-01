@@ -61,7 +61,7 @@ Abrir dashboard: `npm run ops:verificar-backup`
 | Restauro OK? | **Sim** |
 | Duração | Restore COMPLETED 2026-07-11 22:08 UTC; smoke OK 22:15 UTC |
 | Problemas | Backup 07:35 sem migrations do dia — aplicadas no staging antes do smoke final |
-| Próximo teste agendado | Trimestral; **apagar** `iso-pro-staging-teste` após este teste |
+| Próximo teste agendado | Trimestral (~**2026-10**); staging actual sintético OK até lá — `docs/OPS-MENSAL-CAMPO.md` |
 
 Assinatura / data: _________________________
 

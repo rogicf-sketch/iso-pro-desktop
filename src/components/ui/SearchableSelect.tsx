@@ -17,6 +17,8 @@ type Props = {
   resolveTypedValue?: (query: string) => Promise<SearchableSelectOption | null | undefined>;
   placeholder?: string;
   disabled?: boolean;
+  /** Texto quando a lista filtrada fica vazia. */
+  emptyOptionsMessage?: string;
   /**
    * Quando `true`, após escolher uma opção o campo mostra apenas o `value` (ex.: código),
    * mas a lista suspensa continua a mostrar o `label` completo (código + descrição) para pesquisa.
@@ -33,6 +35,7 @@ export function SearchableSelect({
   resolveTypedValue,
   placeholder,
   disabled,
+  emptyOptionsMessage = 'Nenhuma opcao. Ajuste o texto ou cole a linha completa.',
   selectedShowsValueOnly = false,
 }: Props) {
   const reactId = useId();
@@ -199,7 +202,7 @@ export function SearchableSelect({
         {open && !disabled ? (
           <ul className="autocomplete-list" id={listId} role="listbox">
             {filtered.length === 0 ? (
-              <li className="autocomplete-muted">Nenhuma opcao. Ajuste o texto ou cole a linha completa.</li>
+              <li className="autocomplete-muted">{emptyOptionsMessage}</li>
             ) : (
               filtered.map((o, i) => (
                 <li key={o.value}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isRirPayloadOffloaded, slimRirForCloudIndex } from './rirPayloadStorage';
+import { isRirPayloadOffloaded, mergeRirIndexWithStorageBody, slimRirForCloudIndex } from './rirPayloadStorage';
 import type { RirRegistro } from '../types/qualidade.types';
 
 const base: RirRegistro = {
@@ -52,5 +52,14 @@ describe('rirPayloadStorage', () => {
     expect(slim.codigo).toBe('RIR-1');
     expect(isRirPayloadOffloaded(slim)).toBe(true);
     expect(isRirPayloadOffloaded(base)).toBe(false);
+  });
+
+  it('mergeRirIndexWithStorageBody preserva status do indice (evita cache Storage antigo)', () => {
+    const index: RirRegistro = { ...base, status: 'tratado', codigo: 'RIR-MEC-01', itensRir: [] };
+    const staleBody: RirRegistro = { ...base, status: 'em_analise', codigo: '2026-2026-0001' };
+    const merged = mergeRirIndexWithStorageBody(index, staleBody);
+    expect(merged.status).toBe('tratado');
+    expect(merged.codigo).toBe('RIR-MEC-01');
+    expect(merged.itensRir).toHaveLength(1);
   });
 });

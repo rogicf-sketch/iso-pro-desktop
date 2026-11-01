@@ -1,24 +1,32 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
-import { readRemoteOrLocal, REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
-import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
-import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  deleteRecebimentosFromTables,
+  readRemoteOrLocal,
+  REMOTE_READ_TIMEOUT_HEAVY_MS,
+  REMOTE_READ_TIMEOUT_MS,
+  shouldTryRemoteRead,
+  withRemoteReadTimeout,
+} from '../../../lib/dataReadPolicy';
+import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
+import { ensureIsoProDataSessionReadable } from '../../../lib/isoProJwtSession';
+import { fetchAllExportRpcPages } from '../../../lib/exportRpcPages';
+import { hasSupabaseConfig, getSupabase } from '../../../lib/supabase';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
+import {
   listRecebimentosIdsFromCloud,
   listRecebimentosPageFromCloud,
   readRecebimentoFromCloud,
-  syncRecebimentosFromSnapshot,
   upsertRecebimentosEmLotes,
+  writeRecebimentosSotOnCloud,
   type RecebimentoListWire,
   type RecebimentoWire,
 } from '../../../lib/recebimentosTabelas';
-import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
 import {
-  commitIsoProSnapshotPatch,
   invalidateIsoProSnapshotCache,
-  readIsoProSnapshotSlicesForWrite,
+  isIsoProSnapshotConflictError,
+  readIsoProSnapshotCursor,
 } from '../../../lib/isoProSnapshot';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { registrarAtividadeBackupOracle } from '../../../lib/backupOracleAuto.client';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
@@ -29,7 +37,6 @@ import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv
 import { coerceRecebimentoQuantidade, roundPesoKg } from '../../../lib/parseDecimal';
 import { normalizarDataFlexivelParaIso } from '../../../lib/normalizeFlexibleDateToIso';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
-import { mergeSnapshotRowsById, removeSnapshotRowsByIds } from '../../../lib/snapshotPatchMerge';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -51,8 +58,8 @@ import {
   validarCodigosMateriaisAtivosNoCadastroParaRecebimento,
 } from '../../materiais/services/materiais.service';
 import {
+  loadFornecedoresAtivosParaValidacaoRecebimento,
   resolverNomeFornecedorCadastradoAtivo,
-  validarNomesFornecedoresCadastradosAtivos,
 } from '../../fornecedores/services/fornecedores.service';
 import {
   construirJsonImportacaoRecebimentosPlanoCsv,
@@ -76,6 +83,21 @@ function recebimentosStorageKey(): string {
 }
 
 function bloqueioLocalRecebimentos(tamanhoListaGravacao: number): string | null {
+  // Limpa seed demo residual antes de contar (o guarda le o localStorage em cru).
+  if (hasSupabaseConfig()) {
+    const raw = localStorage.getItem(recebimentosStorageKey());
+    if (raw) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const validated = parseRecebimentosPersistidos(parsed);
+        if (validated && isSomenteSeedDemoRecebimentos(validated)) {
+          localStorage.removeItem(recebimentosStorageKey());
+        }
+      } catch {
+        /* ignora */
+      }
+    }
+  }
   return mensagemSeSubstituirLocalPerderiaCadastros([
     { storageKey: recebimentosStorageKey(), tamanhoNovaLista: tamanhoListaGravacao, nomeCurto: 'recebimento(s)' },
   ]);
@@ -137,6 +159,12 @@ const seedData: Recebimento[] = [
     ],
   },
 ];
+
+const DEMO_RECEBIMENTO_IDS = new Set(seedData.map((r) => r.id));
+
+function isSomenteSeedDemoRecebimentos(items: Recebimento[]): boolean {
+  return items.length > 0 && items.every((r) => DEMO_RECEBIMENTO_IDS.has(r.id));
+}
 
 function deriveStatus(form: RecebimentoFormData): Recebimento['status'] {
   return form.modoRecebimento === 'direto' ? 'conferido' : 'aguardando_conferencia';
@@ -222,6 +250,29 @@ function validateRecebimentoPayload(payload: RecebimentoFormData, items: Recebim
   return null;
 }
 
+/** Duplicata nas tabelas SoT — sem baixar o catalogo completo. */
+async function existeRecebimentoDuplicadoNasTabelas(
+  payload: RecebimentoFormData,
+  currentId?: string,
+): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  const tenantId = getActiveTenantId();
+  let q = supabase
+    .from('iso_pro_recebimentos')
+    .select('id')
+    .eq('tenant_id', tenantId)
+    .ilike('fornecedor', payload.fornecedor.trim())
+    .eq('data_recebimento', payload.dataRecebimento)
+    .ilike('nota_fiscal', payload.notaFiscal.trim())
+    .ilike('romaneio', payload.romaneio.trim())
+    .limit(5);
+  if (currentId) q = q.neq('id', currentId);
+  const { data, error } = await q;
+  if (error) return false;
+  return (data ?? []).length > 0;
+}
+
 function normalizarItemPeso(item: RecebimentoItem): RecebimentoItem {
   const qr = coerceRecebimentoQuantidade(item.quantidadeRecebida ?? 0);
   const qc = coerceRecebimentoQuantidade(item.quantidadeConferida ?? 0);
@@ -299,6 +350,8 @@ function normalizarRecebimentoItensLegado(rec: Recebimento): Recebimento {
 function readAll(): Recebimento[] {
   const raw = localStorage.getItem(recebimentosStorageKey());
   if (!raw) {
+    // Com Supabase: empresa nova comeca vazia — nao injectar demo (bloqueava o 1.o cadastro).
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(recebimentosStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
@@ -308,6 +361,10 @@ function readAll(): Recebimento[] {
     const validated = parseRecebimentosPersistidos(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Recebimentos', recebimentosStorageKey());
+      return [];
+    }
+    if (hasSupabaseConfig() && isSomenteSeedDemoRecebimentos(validated)) {
+      localStorage.removeItem(recebimentosStorageKey());
       return [];
     }
     return validated.map(normalizarRecebimentoItensLegado);
@@ -331,7 +388,7 @@ function mergeRecebimentosLocalComNuvem(local: Recebimento[], remote: Recebiment
 
 let inflightDesktopRecebimentosMerge: Promise<'ok' | 'skip' | 'fail'> | null = null;
 
-/** Desktop: funde cache local com snapshot Supabase (conferências web/mobile). */
+/** Desktop: espelha snapshot Supabase; nuvem e SoT quando tem dados (evita ressuscitar so-PC). */
 async function mesclarRecebimentosDesktopComNuvem(): Promise<'ok' | 'skip' | 'fail'> {
   if (!hasSupabaseConfig() || !isIsoProDesktop()) return 'skip';
   if (inflightDesktopRecebimentosMerge) return inflightDesktopRecebimentosMerge;
@@ -341,7 +398,12 @@ async function mesclarRecebimentosDesktopComNuvem(): Promise<'ok' | 'skip' | 'fa
       invalidateIsoProSnapshotCache();
       const remote = await withRemoteReadTimeout(() => readSnapshotRecebimentos());
       const local = readAll();
-      writeAll(mergeRecebimentosLocalComNuvem(local, remote));
+      if (remote.length > 0) {
+        // Remote vence por id; linhas so-locais so entram se nao colidem por chave de negocio.
+        writeAll(mergeRecebimentosLocalComNuvem([], remote));
+      } else if (local.length > 0) {
+        writeAll(dedupeRecebimentosPorChaveNegocio(local));
+      }
       return 'ok';
     } catch {
       return 'fail';
@@ -394,8 +456,12 @@ async function loadRecebimentos(): Promise<Recebimento[]> {
 }
 
 /** Carrega todos os recebimentos (Supabase com fallback local) — usado no planejamento de documentos. */
-export async function carregarRecebimentosCompletos(): Promise<Recebimento[]> {
+export async function carregarRecebimentosCompletos(opcoes?: {
+  /** Status do desenho só precisa de quantidade/código. Não baixa o cadastro inteiro de materiais. */
+  semCadastroMateriais?: boolean;
+}): Promise<Recebimento[]> {
   const { data } = await carregarRecebimentosBaseParaLeitura();
+  if (opcoes?.semCadastroMateriais) return data;
   return enriquecerRecebimentosComPesoCadastroMateriais(data);
 }
 
@@ -531,69 +597,84 @@ export type SnapshotRecebimentosWrite =
   | { replaceAll: Recebimento[] }
   | { removeIds: string[] };
 
-/** Grava recebimentos no snapshot: merge por `id` (padrão) ou lista completa (importação). */
+/**
+ * SoT table-first: `iso_pro_write_recebimentos_sot` (tabelas + projecao snapshot).
+ * Sem fallback patch_snapshot (hard-fail sot_require_rpc).
+ */
+const RECEBIMENTOS_IMPORT_UPSERT_CHUNK = 40;
+
 async function writeSnapshotRecebimentos(write: SnapshotRecebimentosWrite): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['recebimentos']);
-    const current = (currentPayload.recebimentos ?? []) as SnapshotRecebimentoRecord[];
-
-    let recebimentos: SnapshotRecebimentoRecord[];
-    if ('removeIds' in write) {
-      recebimentos = removeSnapshotRowsByIds(current, write.removeIds);
-    } else if ('replaceAll' in write) {
-      recebimentos = write.replaceAll.map(recebimentoToSnapshotRecord);
-    } else {
-      recebimentos = mergeSnapshotRowsById(current, write.upsert.map(recebimentoToSnapshotRecord));
+  if ('upsert' in write && write.upsert.length > RECEBIMENTOS_IMPORT_UPSERT_CHUNK) {
+    const codigos = write.upsert.flatMap((r) => r.itens.map((it) => it.codigoMaterial));
+    for (let i = 0; i < write.upsert.length; i += RECEBIMENTOS_IMPORT_UPSERT_CHUNK) {
+      await writeSnapshotRecebimentosChunk({
+        upsert: write.upsert.slice(i, i + RECEBIMENTOS_IMPORT_UPSERT_CHUNK),
+      });
     }
-
-    return {
-      baselineUpdatedAt,
-      patch: {
-        recebimentos,
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
-  });
-  registrarAtividadeBackupOracle('recebimento');
-
-  await runDualWriteBestEffort('recebimentos', async () => {
-    if ('removeIds' in write) {
-      return deleteRecebimentosFromTables(write.removeIds);
-    }
-    if ('replaceAll' in write) {
-      return syncRecebimentosFromSnapshot();
-    }
-    return upsertRecebimentosEmLotes(write.upsert.map(recebimentoToWire));
-  });
+    await alinharPlanejamentoAposNf(codigos);
+    return;
+  }
+  await writeSnapshotRecebimentosChunk(write);
+  if ('upsert' in write) {
+    await alinharPlanejamentoAposNf(write.upsert.flatMap((r) => r.itens.map((it) => it.codigoMaterial)));
+  } else if ('replaceAll' in write) {
+    await alinharPlanejamentoAposNf(write.replaceAll.flatMap((r) => r.itens.map((it) => it.codigoMaterial)));
+  }
 }
 
-function recebimentoToWire(item: Recebimento): RecebimentoWire {
-  return {
-    id: item.id,
-    fornecedor: item.fornecedor,
-    dataRecebimento: item.dataRecebimento,
-    notaFiscal: item.notaFiscal,
-    romaneio: item.romaneio,
-    conferente: item.conferente,
-    modoRecebimento: item.modoRecebimento,
-    status: item.status,
-    observacoes: item.observacoes,
-    dataConferencia: item.dataConferencia,
-    itens: item.itens.map((recItem) => ({
-      id: recItem.id,
-      codigoMaterial: recItem.codigoMaterial,
-      descricaoMaterial: recItem.descricaoMaterial,
-      unidade: recItem.unidade,
-      disciplina: recItem.disciplina,
-      localizacao: recItem.localizacao,
-      quantidadeRecebida: recItem.quantidadeRecebida,
-      quantidadeConferida: recItem.quantidadeConferida,
-      pesoUnitario: recItem.pesoUnitario ?? 0,
-      pesoTotal: recItem.pesoTotal ?? 0,
-      certificado: String(recItem.certificado ?? '').trim(),
-      observacaoItem: String(recItem.observacaoItem ?? '').trim(),
-    })),
-  };
+async function writeSnapshotRecebimentosChunk(write: SnapshotRecebimentosWrite): Promise<void> {
+  const maxAttempts = 5;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      // So OCC cursor — nao baixar a fatia recebimentos[] inteira (todas as NFs + itens).
+      const baselineUpdatedAt = await readIsoProSnapshotCursor();
+      const sot = await writeRecebimentosSotOnCloud({
+        baselineUpdatedAt,
+        upsert: 'upsert' in write ? write.upsert.map(recebimentoToSnapshotRecord) : null,
+        removeIds: 'removeIds' in write ? write.removeIds : null,
+        replaceAll: 'replaceAll' in write ? write.replaceAll.map(recebimentoToSnapshotRecord) : null,
+      });
+      assertNoSilentSotFallback('recebimentos', sot.missing);
+      invalidateIsoProSnapshotCache();
+      registrarAtividadeBackupOracle('recebimento');
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar recebimentos na nuvem.');
+}
+
+/** Depois da NF: cache do Excel e coluna status da lista, no mesmo criterio da linha. */
+async function alinharPlanejamentoAposNf(codigos: string[]): Promise<void> {
+  const unique = [...new Set(codigos.map((c) => c.trim().toLowerCase()).filter(Boolean))];
+  if (!unique.length || !hasSupabaseConfig()) return;
+  const supabase = getSupabase();
+  if (!supabase) return;
+  const tenant = getActiveTenantId();
+  const esperar = <T,>(promise: PromiseLike<T>) =>
+    Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        setTimeout(() => resolve(undefined), 120_000);
+      }),
+    ]);
+  await esperar(supabase.rpc('iso_pro_refresh_qty_recebida_por_codigo', { p_tenant_id: tenant }));
+  await esperar(
+    supabase.rpc('iso_pro_alinhar_status_documentos_por_codigos', {
+      p_tenant_id: tenant,
+      p_codigos: unique,
+    }),
+  );
+  void supabase.rpc('iso_pro_refresh_metricas_planejamento_cache', { p_tenant_id: tenant });
 }
 
 function mapListWireToListItem(row: RecebimentoListWire): RecebimentoListItem {
@@ -703,6 +784,75 @@ function statusPermiteExclusaoDefinitivaRecebimento(status: Recebimento['status'
 
 function statusPermiteDestravarRecebimentoParaCorrecao(status: Recebimento['status']): boolean {
   return status === 'conferido' || status === 'parcialmente_conferido' || status === 'divergente';
+}
+
+function resumoAuditoriaRecebimento(rec: Pick<
+  Recebimento,
+  'id' | 'notaFiscal' | 'romaneio' | 'fornecedor' | 'status' | 'dataRecebimento' | 'modoRecebimento' | 'itens'
+>) {
+  return {
+    id: rec.id,
+    notaFiscal: rec.notaFiscal,
+    romaneio: rec.romaneio,
+    fornecedor: rec.fornecedor,
+    status: rec.status,
+    dataRecebimento: rec.dataRecebimento,
+    modoRecebimento: rec.modoRecebimento,
+    totalItens: rec.itens?.length ?? 0,
+    itens: (rec.itens ?? []).slice(0, 40).map((it) => ({
+      codigoMaterial: it.codigoMaterial,
+      quantidadeRecebida: it.quantidadeRecebida,
+      quantidadeConferida: it.quantidadeConferida,
+    })),
+  };
+}
+
+export type SalvarRecebimentoOpcoes = {
+  /** Login da sessão — obrigatório para auditoria profissional (quem/quando). */
+  actorLogin?: string;
+};
+
+function auditarRecebimentoCriado(rec: Recebimento, opcoes?: SalvarRecebimentoOpcoes) {
+  appendAuthAuditEvent({
+    type: 'recebimento_criado',
+    actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
+    detail: `Recebimento criado ${rec.notaFiscal || '-'} / ${rec.romaneio || '-'} (${rec.fornecedor}) · ${rec.itens.length} item(ns) · status=${rec.status}`,
+    entityType: 'recebimento',
+    entityId: rec.id,
+    after: resumoAuditoriaRecebimento(rec),
+  });
+}
+
+function auditarRecebimentoEditado(
+  before: Recebimento,
+  after: Recebimento,
+  opcoes?: SalvarRecebimentoOpcoes,
+) {
+  appendAuthAuditEvent({
+    type: 'recebimento_editado',
+    actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
+    detail: `Recebimento editado ${after.notaFiscal || '-'} / ${after.romaneio || '-'} (${after.fornecedor})`,
+    entityType: 'recebimento',
+    entityId: after.id,
+    before: resumoAuditoriaRecebimento(before),
+    after: resumoAuditoriaRecebimento(after),
+  });
+}
+
+export type CancelarRecebimentoOpcoes = {
+  actorLogin?: string;
+};
+
+function auditarRecebimentoCancelado(rec: Recebimento, opcoes?: CancelarRecebimentoOpcoes) {
+  appendAuthAuditEvent({
+    type: 'recebimento_cancelado',
+    actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
+    detail: `Recebimento cancelado ${rec.notaFiscal || '-'} / ${rec.romaneio || '-'} (${rec.fornecedor})`,
+    entityType: 'recebimento',
+    entityId: rec.id,
+    before: resumoAuditoriaRecebimento({ ...rec, status: 'aguardando_conferencia' }),
+    after: resumoAuditoriaRecebimento(rec),
+  });
 }
 
 export type DestravarRecebimentoParaCorrecaoOpcoes = {
@@ -880,18 +1030,49 @@ function validateConferenciaPayload(
   return null;
 }
 
+function listarRecebimentosLocalSync(
+  filtro: RecebimentoFiltro,
+): PaginatedResult<RecebimentoListItem> {
+  const items = aplicarFiltrosListaRecebimentos(dedupeRecebimentosPorChaveNegocio(readAll()), filtro);
+  const start = (filtro.page - 1) * filtro.pageSize;
+  return {
+    items: items.slice(start, start + filtro.pageSize).map(toListItem),
+    total: items.length,
+    page: filtro.page,
+    pageSize: filtro.pageSize,
+  };
+}
+
 export async function listarRecebimentos(
   filtro: RecebimentoFiltro,
 ): Promise<ServiceResult<PaginatedResult<RecebimentoListItem>>> {
+  const localPage = listarRecebimentosLocalSync(filtro);
+
+  // Offline / sem tentativa remota: lista local imediata.
+  if (!shouldTryRemoteRead()) {
+    return {
+      success: true,
+      data: localPage,
+      meta: { source: 'local' },
+    };
+  }
+
+  // A lista da nuvem e a fonte. Esperar a pagina (em geral < 2s) em vez de
+  // mostrar o cache local com o rotulo «nuvem».
   if (hasSupabaseConfig()) {
     try {
-      const page = await listRecebimentosPageFromCloud({
-        busca: filtro.busca,
-        offset: (filtro.page - 1) * filtro.pageSize,
-        limit: filtro.pageSize,
-        status: filtro.status,
-        modo: filtro.modo,
-      });
+      const page = await withRemoteReadTimeout(
+        () =>
+          listRecebimentosPageFromCloud({
+            busca: filtro.busca,
+            offset: (filtro.page - 1) * filtro.pageSize,
+            limit: filtro.pageSize,
+            status: filtro.status,
+            modo: filtro.modo,
+          }),
+        // Busca NF/lista: 8s (RPC já tem statement_timeout 8s). Evita «A buscar…» 25s.
+        filtro.busca?.trim() ? 8_000 : 12_000,
+      );
       if (page.source === 'tables' && !page.error) {
         return {
           success: true,
@@ -905,27 +1086,24 @@ export async function listarRecebimentos(
         };
       }
     } catch {
-      /* fallback legado */
+      /* cai no local */
     }
+
+    return {
+      success: true,
+      data: localPage,
+      meta: {
+        source: 'local',
+        staleWhileRevalidate: true,
+        fallbackReason: 'Nao foi possivel actualizar a lista na nuvem.',
+      },
+    };
   }
-
-  const base = await carregarRecebimentosBaseParaLeitura();
-  const enriched = await enriquecerRecebimentosComPesoCadastroMateriais(base.data);
-  const items = aplicarFiltrosListaRecebimentos(enriched, filtro);
-  const { meta } = base;
-
-  const start = (filtro.page - 1) * filtro.pageSize;
-  const end = start + filtro.pageSize;
 
   return {
     success: true,
-    data: {
-      items: items.slice(start, end).map(toListItem),
-      total: items.length,
-      page: filtro.page,
-      pageSize: filtro.pageSize,
-    },
-    meta,
+    data: localPage,
+    meta: { source: 'local' },
   };
 }
 
@@ -973,10 +1151,10 @@ export async function obterResumosRecebimentosParaExclusao(
 export async function salvarRecebimento(
   payload: RecebimentoFormData,
   currentId?: string,
+  opcoes?: SalvarRecebimentoOpcoes,
 ): Promise<ServiceResult<Recebimento>> {
   if (hasSupabaseConfig()) {
     try {
-      const items = await readSnapshotRecebimentos();
       const normalizedBase = normalizeRecebimentoPayload(payload);
       let normalized = {
         ...normalizedBase,
@@ -996,26 +1174,54 @@ export async function salvarRecebimento(
         'salvar',
       );
       if (materialErro) return { success: false, error: materialErro };
-      const validationError = validateRecebimentoPayload(normalized, items, currentId);
+
+      // 100k-safe: validacao sem baixar recebimentos[] completo.
+      const validationError = validateRecebimentoPayload(normalized, [], currentId);
       if (validationError) return { success: false, error: validationError };
 
+      const dup = await existeRecebimentoDuplicadoNasTabelas(normalized, currentId);
+      if (dup) {
+        return {
+          success: false,
+          error: 'Ja existe um recebimento com o mesmo fornecedor, data, nota fiscal e romaneio.',
+        };
+      }
+
+      const localItems = readAll();
+
       if (currentId) {
-        const index = items.findIndex((item) => item.id === currentId);
-        if (index === -1) return { success: false, error: 'Recebimento nao encontrado.' };
-        if (items[index].status === 'cancelado') return { success: false, error: 'Nao e possivel editar um recebimento cancelado.' };
-        if (items[index].status !== 'aguardando_conferencia') {
-          return { success: false, error: 'Recebimentos com conferencia iniciada nao podem ser editados por este fluxo.' };
+        const cloud = await readRecebimentoFromCloud(currentId);
+        const existing =
+          cloud.recebimento != null
+            ? mapWireToRecebimento(cloud.recebimento)
+            : localItems.find((item) => item.id === currentId);
+        if (!existing) return { success: false, error: 'Recebimento nao encontrado.' };
+        if (existing.status === 'cancelado') {
+          return { success: false, error: 'Nao e possivel editar um recebimento cancelado.' };
         }
-        items[index] = montarRecebimentoAposSalvarEdicao(normalized, currentId, items[index]);
-        const bloqueioEdit = bloqueioLocalRecebimentos(items.length);
+        if (existing.status !== 'aguardando_conferencia') {
+          return {
+            success: false,
+            error: 'Recebimentos com conferencia iniciada nao podem ser editados por este fluxo.',
+          };
+        }
+        const beforeEdit = { ...existing, itens: existing.itens.map((it) => ({ ...it })) };
+        const updated = montarRecebimentoAposSalvarEdicao(normalized, currentId, existing);
+        const nextLocal = localItems.some((x) => x.id === currentId)
+          ? localItems.map((x) => (x.id === currentId ? updated : x))
+          : [...localItems, updated];
+        const bloqueioEdit = bloqueioLocalRecebimentos(nextLocal.length);
         if (bloqueioEdit) return { success: false, error: bloqueioEdit };
         const writeEdit = await executeWrite({
           shouldWriteRemote: true,
-          writeRemote: () => writeSnapshotRecebimentos({ upsert: [items[index]] }),
-          writeLocal: () => writeAll(items),
-          successData: items[index],
+          writeRemote: () => writeSnapshotRecebimentos({ upsert: [updated] }),
+          writeLocal: () => writeAll(nextLocal),
+          successData: updated,
           fallbackMessage: 'Falha ao salvar recebimento no Supabase.',
         });
+        if (writeEdit.success && writeEdit.data) {
+          auditarRecebimentoEditado(beforeEdit, writeEdit.data, opcoes);
+        }
         return writeEdit;
       }
 
@@ -1024,16 +1230,19 @@ export async function salvarRecebimento(
         id: crypto.randomUUID(),
         status: deriveStatus(normalized),
       };
-      items.push(created);
-      const bloqueioNovo = bloqueioLocalRecebimentos(items.length);
+      const nextLocal = [...localItems, created];
+      const bloqueioNovo = bloqueioLocalRecebimentos(nextLocal.length);
       if (bloqueioNovo) return { success: false, error: bloqueioNovo };
       const writeNew = await executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotRecebimentos({ upsert: [created] }),
-        writeLocal: () => writeAll(items),
+        writeLocal: () => writeAll(nextLocal),
         successData: created,
         fallbackMessage: 'Falha ao salvar recebimento no Supabase.',
       });
+      if (writeNew.success && writeNew.data) {
+        auditarRecebimentoCriado(writeNew.data, opcoes);
+      }
       return writeNew;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao salvar recebimento no Supabase.' };
@@ -1069,8 +1278,10 @@ export async function salvarRecebimento(
     if (items[index].status !== 'aguardando_conferencia') {
       return { success: false, error: 'Recebimentos com conferencia iniciada nao podem ser editados por este fluxo.' };
     }
+    const beforeEditLocal = { ...items[index], itens: items[index].itens.map((it) => ({ ...it })) };
     items[index] = montarRecebimentoAposSalvarEdicao(normalized, currentId, items[index]);
     writeAll(items);
+    auditarRecebimentoEditado(beforeEditLocal, items[index], opcoes);
     return { success: true, data: items[index] };
   }
 
@@ -1082,10 +1293,14 @@ export async function salvarRecebimento(
 
   items.push(created);
   writeAll(items);
+  auditarRecebimentoCriado(created, opcoes);
   return { success: true, data: created };
 }
 
-export async function cancelarRecebimento(id: string): Promise<ServiceResult<Recebimento>> {
+export async function cancelarRecebimento(
+  id: string,
+  opcoes?: CancelarRecebimentoOpcoes,
+): Promise<ServiceResult<Recebimento>> {
   if (hasSupabaseConfig()) {
     try {
       const items = await readSnapshotRecebimentos();
@@ -1098,13 +1313,17 @@ export async function cancelarRecebimento(id: string): Promise<ServiceResult<Rec
       items[index] = { ...items[index], status: 'cancelado' };
       const bloqueioCancel = bloqueioLocalRecebimentos(items.length);
       if (bloqueioCancel) return { success: false, error: bloqueioCancel };
-      return executeWrite({
+      const writeCancel = await executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotRecebimentos({ upsert: [items[index]] }),
         writeLocal: () => writeAll(items),
         successData: items[index],
         fallbackMessage: 'Falha ao cancelar recebimento no Supabase.',
       });
+      if (writeCancel.success && writeCancel.data) {
+        auditarRecebimentoCancelado(writeCancel.data, opcoes);
+      }
+      return writeCancel;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao cancelar recebimento no Supabase.' };
     }
@@ -1120,6 +1339,7 @@ export async function cancelarRecebimento(id: string): Promise<ServiceResult<Rec
 
   items[index] = { ...items[index], status: 'cancelado' };
   writeAll(items);
+  auditarRecebimentoCancelado(items[index], opcoes);
   return { success: true, data: items[index] };
 }
 
@@ -1232,7 +1452,7 @@ export async function excluirRecebimentosDefinitivamente(
         };
       }
       const next = items.filter((item) => !idSet.has(item.id));
-      const bloqueioExcluir = bloqueioLocalRecebimentos(next.length);
+      const bloqueioExcluir = bloqueioLocalRecebimentos(items.length);
       if (bloqueioExcluir) return { success: false, error: bloqueioExcluir };
       const writeResult = await executeWrite({
         shouldWriteRemote: true,
@@ -1286,17 +1506,28 @@ export async function excluirRecebimentoDefinitivamente(
   return { success: true, data: { removido: true }, meta: r.meta };
 }
 
-export async function buscarRecebimentoPorId(id: string): Promise<ServiceResult<Recebimento>> {
+export async function buscarRecebimentoPorId(
+  id: string,
+  opcoes?: { visualizacao?: boolean },
+): Promise<ServiceResult<Recebimento>> {
   if (hasSupabaseConfig()) {
     try {
       const cloud = await readRecebimentoFromCloud(id);
       if (cloud.source === 'tables' && cloud.recebimento) {
         const mapped = mapWireToRecebimento(cloud.recebimento);
+        if (opcoes?.visualizacao) {
+          return { success: true, data: mapped, meta: { source: 'supabase' } };
+        }
         const [enriched] = await enriquecerRecebimentosComPesoCadastroMateriais([mapped]);
         return { success: true, data: enriched, meta: { source: 'supabase' } };
       }
+      if (opcoes?.visualizacao) {
+        return { success: false, error: cloud.error ?? 'Recebimento nao encontrado.' };
+      }
     } catch {
-      /* fallback */
+      if (opcoes?.visualizacao) {
+        return { success: false, error: 'Nao foi possivel carregar o recebimento.' };
+      }
     }
   }
   const raw = await readRemoteOrLocal({
@@ -1315,11 +1546,11 @@ export async function finalizarConferenciaRecebimento(payload: {
   observacoes: string;
   itens: Array<{ id: string; quantidadeConferida: number }>;
 }): Promise<ServiceResult<Recebimento>> {
-  const items = await loadRecebimentos();
-  const index = items.findIndex((item) => item.id === payload.id);
-  if (index === -1) return { success: false, error: 'Recebimento nao encontrado.' };
-
-  const current = items[index];
+  const found = await buscarRecebimentoPorId(payload.id);
+  if (!found.success || !found.data) {
+    return { success: false, error: found.error ?? 'Recebimento nao encontrado.' };
+  }
+  const current = found.data;
   if (current.modoRecebimento !== 'aguardando_conferencia') {
     return { success: false, error: 'Este recebimento nao esta no fluxo de conferencia.' };
   }
@@ -1353,57 +1584,47 @@ export async function finalizarConferenciaRecebimento(payload: {
     status: deriveConferenciaStatus(nextItens),
   };
 
-  items[index] = updated;
+  const localItems = readAll();
+  const nextLocal = localItems.some((x) => x.id === updated.id)
+    ? localItems.map((x) => (x.id === updated.id ? updated : x))
+    : [...localItems, updated];
 
-  if (hasSupabaseConfig()) {
-    const bloqueioConferencia = bloqueioLocalRecebimentos(items.length);
-    if (bloqueioConferencia) return { success: false, error: bloqueioConferencia };
-    const result = await executeWrite({
-      shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotRecebimentos({ upsert: [updated] }),
-      writeLocal: () => writeAll(items),
-      successData: updated,
-      fallbackMessage: 'Falha ao finalizar conferencia no Supabase.',
-    });
-    if (result.success) {
-      appendAuthAuditEvent({
-        type: 'recebimento_conferencia_finalizada',
-        actorLogin: payload.conferente.trim() || 'desconhecido',
-        detail: `Conferencia finalizada NF ${updated.notaFiscal || '-'} / ${updated.romaneio || '-'} (${updated.fornecedor}) status=${updated.status}.`,
-        entityType: 'recebimento',
-        entityId: updated.id,
-        before: {
-          status: current.status,
-          itens: current.itens.map((i) => ({
-            id: i.id,
-            codigo: i.codigoMaterial,
-            qtdRecebida: i.quantidadeRecebida,
-            qtdConferida: i.quantidadeConferida,
-          })),
-        },
-        after: {
-          status: updated.status,
-          conferente: updated.conferente,
-          itens: updated.itens.map((i) => ({
-            id: i.id,
-            codigo: i.codigoMaterial,
-            qtdRecebida: i.quantidadeRecebida,
-            qtdConferida: i.quantidadeConferida,
-          })),
-        },
-      });
-    }
-    return result;
-  }
-  writeAll(items);
-  appendAuthAuditEvent({
-    type: 'recebimento_conferencia_finalizada',
-    actorLogin: payload.conferente.trim() || 'desconhecido',
-    detail: `Conferencia finalizada NF ${updated.notaFiscal || '-'} / ${updated.romaneio || '-'} (${updated.fornecedor}) status=${updated.status}.`,
-    entityType: 'recebimento',
-    entityId: updated.id,
+  const result = await executeWrite({
+    shouldWriteRemote: hasSupabaseConfig(),
+    writeRemote: () => writeSnapshotRecebimentos({ upsert: [updated] }),
+    writeLocal: () => writeAll(nextLocal),
+    successData: updated,
+    fallbackMessage: 'Falha ao finalizar conferencia no Supabase.',
   });
-  return { success: true, data: updated, meta: { source: 'local' } };
+  if (result.success) {
+    appendAuthAuditEvent({
+      type: 'recebimento_conferencia_finalizada',
+      actorLogin: payload.conferente.trim() || 'desconhecido',
+      detail: `Conferencia finalizada NF ${updated.notaFiscal || '-'} / ${updated.romaneio || '-'} (${updated.fornecedor}) status=${updated.status}.`,
+      entityType: 'recebimento',
+      entityId: updated.id,
+      before: {
+        status: current.status,
+        itens: current.itens.map((i) => ({
+          id: i.id,
+          codigo: i.codigoMaterial,
+          qtdRecebida: i.quantidadeRecebida,
+          qtdConferida: i.quantidadeConferida,
+        })),
+      },
+      after: {
+        status: updated.status,
+        conferente: updated.conferente,
+        itens: updated.itens.map((i) => ({
+          id: i.id,
+          codigo: i.codigoMaterial,
+          qtdRecebida: i.quantidadeRecebida,
+          qtdConferida: i.quantidadeConferida,
+        })),
+      },
+    });
+  }
+  return result;
 }
 
 async function carregarTodosRecebimentosOrdenados(): Promise<ServiceResult<Recebimento[]>> {
@@ -1417,8 +1638,74 @@ async function carregarTodosRecebimentosOrdenados(): Promise<ServiceResult<Receb
   return { success: true, data: items, meta: base.meta };
 }
 
-function chaveNegocioRecebimentoForm(form: RecebimentoFormData): string {
+function chaveNegocioRecebimentoForm(
+  form: Pick<RecebimentoFormData, 'fornecedor' | 'dataRecebimento' | 'notaFiscal' | 'romaneio'>,
+): string {
   return `${normalizeLookupValue(form.fornecedor)}|${form.dataRecebimento.trim()}|${normalizeLookupValue(form.notaFiscal)}|${normalizeLookupValue(form.romaneio)}`;
+}
+
+type RecebimentoIndiceImport = Pick<
+  Recebimento,
+  'id' | 'fornecedor' | 'dataRecebimento' | 'notaFiscal' | 'romaneio' | 'status'
+>;
+
+/** Índice leve via lista paginada (tabelas) — evita baixar o snapshot completo só para importar 1 NF. */
+async function carregarIndiceRecebimentosParaImportacao(): Promise<RecebimentoIndiceImport[]> {
+  if (!hasSupabaseConfig()) {
+    return (await loadRecebimentos()).map((r) => ({
+      id: r.id,
+      fornecedor: r.fornecedor,
+      dataRecebimento: r.dataRecebimento,
+      notaFiscal: r.notaFiscal,
+      romaneio: r.romaneio,
+      status: r.status,
+    }));
+  }
+
+  const out: RecebimentoIndiceImport[] = [];
+  let offset = 0;
+  const limit = 200;
+  while (true) {
+    const page = await withRemoteReadTimeout(
+      () => listRecebimentosPageFromCloud({ offset, limit }),
+      REMOTE_READ_TIMEOUT_HEAVY_MS,
+    );
+    if (page.error) {
+      throw new Error(
+        `Nao foi possivel ler o indice de recebimentos na nuvem — importacao cancelada. Detalhe: ${page.error}`,
+      );
+    }
+    for (const row of page.recebimentos) {
+      out.push({
+        id: String(row.id ?? ''),
+        fornecedor: String(row.fornecedor ?? ''),
+        dataRecebimento: String(row.dataRecebimento ?? ''),
+        notaFiscal: String(row.notaFiscal ?? ''),
+        romaneio: String(row.romaneio ?? ''),
+        status: mapListWireToListItem(row).status,
+      });
+    }
+    if (page.recebimentos.length < limit) break;
+    offset += limit;
+  }
+  return out;
+}
+
+function mesclarDeltaRecebimentosNoLocalStorage(delta: Recebimento[]): void {
+  try {
+    const local = readAll();
+    if (!local.length) {
+      if (!hasSupabaseConfig()) writeAll(delta);
+      return;
+    }
+    const map = new Map(local.map((r) => [chaveNegocioRecebimentoForm(r), r]));
+    for (const r of delta) {
+      map.set(chaveNegocioRecebimentoForm(r), r);
+    }
+    writeAll([...map.values()]);
+  } catch {
+    // A nuvem ja gravou. Falta de espaco no navegador nao pode parecer importacao interrompida.
+  }
 }
 
 function extrairListaRecebimentosDoImport(
@@ -1635,13 +1922,28 @@ export async function montarExportacaoRecebimentosCsvResumo(
 export async function montarExportacaoRecebimentosCsvItens(
   opcoes?: ExportacaoRecebimentosOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const loaded = await carregarTodosRecebimentosOrdenados();
-  if (!loaded.success || !loaded.data) {
-    return { success: false, error: loaded.error ?? 'Nao foi possivel carregar recebimentos para exportar.' };
-  }
-  const recebimentos = opcoes?.filtroLista
-    ? aplicarFiltrosListaRecebimentos(loaded.data, opcoes.filtroLista)
-    : loaded.data;
+  type ExportRow = {
+    recebimento_id?: string;
+    fornecedor?: string;
+    data_recebimento?: string | null;
+    nota_fiscal?: string;
+    romaneio?: string;
+    conferente?: string;
+    modo_recebimento?: string;
+    status?: string;
+    data_conferencia?: string | null;
+    observacoes?: string;
+    codigo_material?: string;
+    descricao_material?: string;
+    unidade?: string;
+    disciplina?: string;
+    localizacao?: string;
+    quantidade_recebida?: number;
+    quantidade_conferida?: number;
+    peso_unitario?: number;
+    peso_total?: number;
+    certificado?: string;
+  };
 
   const header = [
     'recebimento_id',
@@ -1664,6 +1966,108 @@ export async function montarExportacaoRecebimentosCsvItens(
     'peso_total',
     'certificado',
   ];
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const sufixo = exportacaoRecebimentosUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
+  const fileName = `iso-pro-recebimentos-itens-${stamp}${sufixo}.csv`;
+
+  const filtro = opcoes?.filtroLista;
+  const filtrarRows = (rows: ExportRow[]): ExportRow[] => {
+    if (!filtro) return rows;
+    let next = rows;
+    if (filtro.status !== 'todos') {
+      next = next.filter((r) => String(r.status ?? '') === filtro.status);
+    }
+    if (filtro.modo !== 'todos') {
+      next = next.filter((r) => String(r.modo_recebimento ?? '') === filtro.modo);
+    }
+    if (filtro.busca.trim()) {
+      const busca = filtro.busca.trim().toLowerCase();
+      next = next.filter((r) => {
+        const blob = [
+          r.fornecedor,
+          r.nota_fiscal,
+          r.romaneio,
+          r.conferente,
+          r.observacoes,
+          r.codigo_material,
+          r.descricao_material,
+          r.localizacao,
+          r.disciplina,
+          r.certificado,
+        ]
+          .map((x) => String(x ?? ''))
+          .join(' ')
+          .toLowerCase();
+        return blob.includes(busca);
+      });
+    }
+    return next;
+  };
+
+  const montarCsvDeRows = (rows: ExportRow[]): string => {
+    const linhas: string[] = [header.join(CSV_EXCEL_SEP)];
+    for (const r of rows) {
+      linhas.push(
+        [
+          String(r.recebimento_id ?? ''),
+          String(r.fornecedor ?? ''),
+          String(r.data_recebimento ?? ''),
+          String(r.nota_fiscal ?? ''),
+          String(r.romaneio ?? ''),
+          String(r.conferente ?? ''),
+          textoModoRecebimentoListagem(
+            (String(r.modo_recebimento ?? 'direto') as Recebimento['modoRecebimento']),
+            (String(r.status ?? '') as Recebimento['status']),
+            r.data_conferencia ?? undefined,
+          ),
+          String(r.status ?? ''),
+          String(r.observacoes ?? ''),
+          String(r.codigo_material ?? ''),
+          String(r.descricao_material ?? ''),
+          String(r.unidade ?? 'UN'),
+          String(r.disciplina ?? ''),
+          String(r.localizacao ?? ''),
+          formatDecimalExcelPtBr(Number(r.quantidade_recebida)),
+          formatDecimalExcelPtBr(Number(r.quantidade_conferida)),
+          formatDecimalExcelPtBr(Number(r.peso_unitario ?? 0)),
+          formatDecimalExcelPtBr(Number(r.peso_total ?? 0)),
+          String(r.certificado ?? ''),
+        ]
+          .map((c) => escapeCsvCellExcelPt(c))
+          .join(CSV_EXCEL_SEP),
+      );
+    }
+    return `\uFEFF${linhas.join('\r\n')}\r\n`;
+  };
+
+  if (hasSupabaseConfig()) {
+    try {
+      await ensureIsoProDataSessionReadable();
+      const supabase = getSupabase();
+      if (supabase) {
+        const cloud = await fetchAllExportRpcPages<ExportRow>({
+          supabase,
+          rpcName: 'iso_pro_export_recebimentos_itens_page',
+          tenantId: getActiveTenantId(),
+        });
+        if (!cloud.missingRpc && !cloud.error) {
+          const csv = montarCsvDeRows(filtrarRows(cloud.rows));
+          return { success: true, data: { csv, fileName }, meta: { source: 'supabase' } };
+        }
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
+  const loaded = await carregarTodosRecebimentosOrdenados();
+  if (!loaded.success || !loaded.data) {
+    return { success: false, error: loaded.error ?? 'Nao foi possivel carregar recebimentos para exportar.' };
+  }
+  const recebimentos = opcoes?.filtroLista
+    ? aplicarFiltrosListaRecebimentos(loaded.data, opcoes.filtroLista)
+    : loaded.data;
 
   const linhas: string[] = [header.join(CSV_EXCEL_SEP)];
 
@@ -1698,14 +2102,12 @@ export async function montarExportacaoRecebimentosCsvItens(
   }
 
   const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const sufixo = exportacaoRecebimentosUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
-  const fileName = `iso-pro-recebimentos-itens-${stamp}${sufixo}.csv`;
   return { success: true, data: { csv, fileName }, meta: loaded.meta };
 }
 
 export async function importarRecebimentosDoArquivoJson(
   text: string,
+  opcoes?: { onProgress?: (mensagem: string) => void },
 ): Promise<ServiceResult<RecebimentosImportacaoResumo>> {
   let parsed: unknown;
   try {
@@ -1741,26 +2143,71 @@ export async function importarRecebimentosDoArquivoJson(
   }
 
   const nomesFornecedoresArquivo = coletarNomesFornecedoresDaListaImportRecebimentos(lista.list);
-  const fornecedorImportErro = await validarNomesFornecedoresCadastradosAtivos(nomesFornecedoresArquivo);
-  if (fornecedorImportErro) {
-    return { success: false, error: fornecedorImportErro };
-  }
-
-  const mapaFornecedorCanonicoImport = new Map<string, string>();
-  for (const nome of nomesFornecedoresArquivo) {
-    const resolved = await resolverNomeFornecedorCadastradoAtivo(nome);
-    if (resolved) {
-      mapaFornecedorCanonicoImport.set(normalizeLookupValue(nome), resolved);
-    }
-  }
-
   const codigosMateriaisArquivo = coletarCodigosMateriaisDaListaImportRecebimentos(lista.list);
-  const materialImportErro = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
-    codigosMateriaisArquivo,
-    'import',
-  );
-  if (materialImportErro) {
-    return { success: false, error: materialImportErro };
+
+  let indice: Array<
+    Pick<Recebimento, 'id' | 'fornecedor' | 'dataRecebimento' | 'notaFiscal' | 'romaneio' | 'status'>
+  >;
+  let mapaFornecedorCanonicoImport = new Map<string, string>();
+  let pesoPorCodigoImport = new Map<string, number>();
+  let disciplinaUnidadeImport: Map<string, { disciplina: string; unidade: string }> | null = null;
+
+  try {
+    const [ativos, materialImportErro, indiceNuvem, peso, disciplina] = await Promise.all([
+      loadFornecedoresAtivosParaValidacaoRecebimento(),
+      validarCodigosMateriaisAtivosNoCadastroParaRecebimento(codigosMateriaisArquivo, 'import'),
+      carregarIndiceRecebimentosParaImportacao(),
+      construirIndicePesoPorCodigoMaterial(codigosMateriaisArquivo).catch(() => new Map<string, number>()),
+      construirIndiceDisciplinaUnidadePorCodigoMaterial(codigosMateriaisArquivo).catch(() => null),
+    ]);
+    if (materialImportErro) {
+      return { success: false, error: materialImportErro };
+    }
+    const invalidos: string[] = [];
+    for (const nome of nomesFornecedoresArquivo) {
+      const raw = nome.trim();
+      const found = ativos.find(
+        (f) => raw.localeCompare(f.nome.trim(), 'pt-BR', { sensitivity: 'base' }) === 0,
+      );
+      if (!found) invalidos.push(raw);
+      else mapaFornecedorCanonicoImport.set(normalizeLookupValue(raw), found.nome.trim());
+    }
+    if (invalidos.length) {
+      const quoted = [...new Set(invalidos)].map((s) => `"${s}"`).join(', ');
+      return {
+        success: false,
+        error: `Importacao nao concluida. Fornecedor nao cadastrado no sistema: ${quoted}. Cadastre em Fornecedores e tente novamente.`,
+      };
+    }
+    indice = indiceNuvem;
+    pesoPorCodigoImport = peso;
+    disciplinaUnidadeImport = disciplina;
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Falha ao carregar recebimentos antes da importacao.',
+    };
+  }
+
+  const workingValidacao: Recebimento[] = indice.map((r) => ({
+    id: r.id,
+    fornecedor: r.fornecedor,
+    dataRecebimento: r.dataRecebimento,
+    notaFiscal: r.notaFiscal,
+    romaneio: r.romaneio,
+    conferente: '',
+    modoRecebimento: 'direto' as const,
+    status: r.status,
+    observacoes: '',
+    itens: [],
+  }));
+
+  const podeEditarImportRecebimentoPorChave = new Map<string, boolean>();
+  const indicePorChave = new Map<string, (typeof indice)[number]>();
+  for (const r of indice) {
+    const k = chaveNegocioRecebimentoForm(r);
+    podeEditarImportRecebimentoPorChave.set(k, r.status === 'aguardando_conferencia');
+    indicePorChave.set(k, r);
   }
 
   const detalhes: string[] = [];
@@ -1769,42 +2216,12 @@ export async function importarRecebimentosDoArquivoJson(
   let ignorados = 0;
   const seenKeys = new Set<string>();
 
-  let working: Recebimento[];
-  try {
-    working = [...(await loadRecebimentos())];
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Falha ao carregar recebimentos antes da importacao.',
-    };
-  }
-
-  const podeEditarImportRecebimentoPorChave = new Map<string, boolean>();
-  for (const r of working) {
-    podeEditarImportRecebimentoPorChave.set(
-      chaveNegocioRecebimentoForm(r),
-      r.status === 'aguardando_conferencia',
-    );
-  }
-
-  let pesoPorCodigoImport = new Map<string, number>();
-  try {
-    pesoPorCodigoImport = await construirIndicePesoPorCodigoMaterial();
-  } catch {
-    pesoPorCodigoImport = new Map();
-  }
-  let disciplinaUnidadeImport: Map<string, { disciplina: string; unidade: string }> | null = null;
-  try {
-    disciplinaUnidadeImport = await construirIndiceDisciplinaUnidadePorCodigoMaterial();
-  } catch {
-    disciplinaUnidadeImport = null;
-  }
-
   function aplicarCadastroNosItensImport(it: RecebimentoItem): RecebimentoItem {
     return aplicarCadastroMateriaisLinhaRecebimento(it, pesoPorCodigoImport, disciplinaUnidadeImport);
   }
 
   const cooperativeMerge = lista.list.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
+  const deltaPorId = new Map<string, Recebimento>();
 
   for (let i = 0; i < lista.list.length; i++) {
     const norm = normalizarRecebimentoImportacao(lista.list[i], i);
@@ -1842,9 +2259,9 @@ export async function importarRecebimentosDoArquivoJson(
     }
     seenKeys.add(negocioKey);
 
-    const matchedIndex = working.findIndex((item) => chaveNegocioRecebimentoForm(item) === negocioKey);
+    const existente = indicePorChave.get(negocioKey);
 
-    if (matchedIndex !== -1) {
+    if (existente) {
       if (!podeEditarImportRecebimentoPorChave.get(negocioKey)) {
         detalhes.push(
           `${form.fornecedor}: ja existe e nao esta aguardando conferencia (apenas nesse status pode ser atualizado por importacao).`,
@@ -1858,15 +2275,15 @@ export async function importarRecebimentosDoArquivoJson(
         ...normalizedBase,
         itens: normalizedBase.itens.map(aplicarCadastroNosItensImport),
       };
-      const validationError = validateRecebimentoPayload(normalized, working, working[matchedIndex].id);
+      const validationError = validateRecebimentoPayload(normalized, workingValidacao, existente.id);
       if (validationError) {
         detalhes.push(`${form.fornecedor}: ${validationError}`);
         ignorados += 1;
         continue;
       }
 
-      const id = working[matchedIndex].id;
-      working[matchedIndex] = { ...normalized, id, status: deriveStatus(normalized) };
+      const updated: Recebimento = { ...normalized, id: existente.id, status: deriveStatus(normalized) };
+      deltaPorId.set(updated.id, updated);
       atualizados += 1;
       detalhes.push(`${form.fornecedor} (${form.notaFiscal || form.romaneio}): atualizado.`);
     } else {
@@ -1875,15 +2292,18 @@ export async function importarRecebimentosDoArquivoJson(
         ...normalizedBase,
         itens: normalizedBase.itens.map(aplicarCadastroNosItensImport),
       };
-      const validationError = validateRecebimentoPayload(normalized, working, undefined);
+      const validationError = validateRecebimentoPayload(normalized, workingValidacao, undefined);
       if (validationError) {
         detalhes.push(`${form.fornecedor}: ${validationError}`);
         ignorados += 1;
         continue;
       }
 
-      let newId = idSugerido && !working.some((r) => r.id === idSugerido) ? idSugerido : crypto.randomUUID();
-      if (working.some((r) => r.id === newId)) {
+      let newId =
+        idSugerido && !indice.some((r) => r.id === idSugerido) && !deltaPorId.has(idSugerido)
+          ? idSugerido
+          : crypto.randomUUID();
+      if (indice.some((r) => r.id === newId) || deltaPorId.has(newId)) {
         newId = crypto.randomUUID();
       }
 
@@ -1897,7 +2317,16 @@ export async function importarRecebimentosDoArquivoJson(
         status: deriveStatus(normalized),
       };
 
-      working.push(created);
+      deltaPorId.set(created.id, created);
+      workingValidacao.push(created);
+      indicePorChave.set(negocioKey, {
+        id: created.id,
+        fornecedor: created.fornecedor,
+        dataRecebimento: created.dataRecebimento,
+        notaFiscal: created.notaFiscal,
+        romaneio: created.romaneio,
+        status: created.status,
+      });
       criados += 1;
       detalhes.push(`${form.fornecedor} (${form.notaFiscal || form.romaneio}): incluido.`);
     }
@@ -1907,6 +2336,7 @@ export async function importarRecebimentosDoArquivoJson(
     }
   }
 
+  const delta = [...deltaPorId.values()];
   const resumo: RecebimentosImportacaoResumo = {
     criados,
     atualizados,
@@ -1924,33 +2354,53 @@ export async function importarRecebimentosDoArquivoJson(
 
   if (hasSupabaseConfig()) {
     await yieldToMain();
-    const bloqueioImport = bloqueioLocalRecebimentos(working.length);
-    if (bloqueioImport) {
-      return { success: false, error: bloqueioImport, data: resumo };
+    // Tabelas direto, em grupos de 25. Nao passa pelo snapshot (era esse envio
+    // que a nuvem cortava, e a lista ja le as tabelas).
+    const gravado = await upsertRecebimentosEmLotes(
+      delta.map((r) => ({ ...recebimentoToSnapshotRecord(r), id: r.id }) as RecebimentoWire),
+      {
+        chunkSize: 25,
+        onProgress: (lote, total) => opcoes?.onProgress?.(`A gravar lote ${lote} de ${total}…`),
+      },
+    );
+    if (!gravado.ok) {
+      const detalhe = (gravado.error ?? 'Falha ao gravar recebimentos.').replace(/\s+/g, ' ').slice(0, 280);
+      return {
+        success: false,
+        error: `Importacao nao concluida. ${detalhe} Atualize a pagina e confira o total antes de importar de novo.`,
+        data: { ...resumo, detalhes: resumo.detalhes.slice(0, 8) },
+      };
     }
-    const importWrite = await executeWrite({
-      shouldWriteRemote: true,
-      writeRemote: () => writeSnapshotRecebimentos({ replaceAll: working }),
-      writeLocal: () => writeAll(working),
-      successData: resumo,
-      fallbackMessage: 'Falha ao importar recebimentos no Supabase.',
-    });
-    return importWrite;
+    mesclarDeltaRecebimentosNoLocalStorage(delta);
+    invalidateIsoProSnapshotCache();
+    opcoes?.onProgress?.('A alinhar o planejamento…');
+    await alinharPlanejamentoAposNf(delta.flatMap((r) => r.itens.map((it) => it.codigoMaterial)));
+    return {
+      success: true,
+      data: {
+        ...resumo,
+        detalhes: resumo.detalhes.slice(0, 8),
+        mensagem: `Concluido. ${resumo.criados} novo(s) e ${resumo.atualizados} atualizado(s).`,
+      },
+      meta: { source: 'supabase' },
+    };
   }
 
   const blockedImport = whenBusinessWriteBlockedResult<RecebimentosImportacaoResumo>();
   if (blockedImport) return blockedImport;
-  writeAll(working);
+  mesclarDeltaRecebimentosNoLocalStorage(delta);
   return { success: true, data: resumo, meta: { source: 'local' } };
 }
 
 /** Importacao a partir de planilha Excel (CSV): uma linha por item; converte para JSON e reutiliza a mesma regra do import JSON. */
 export async function importarRecebimentosDoArquivoCsv(
   text: string,
+  opcoes?: { onProgress?: (mensagem: string) => void },
 ): Promise<ServiceResult<RecebimentosImportacaoResumo>> {
+  opcoes?.onProgress?.('A preparar as notas…');
   const built = await construirJsonImportacaoRecebimentosPlanoCsv(text);
   if (!built.ok) {
     return { success: false, error: built.error };
   }
-  return importarRecebimentosDoArquivoJson(built.json);
+  return importarRecebimentosDoArquivoJson(built.json, opcoes);
 }

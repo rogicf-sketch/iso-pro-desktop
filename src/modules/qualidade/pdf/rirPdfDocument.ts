@@ -28,12 +28,12 @@ import { incorporarFontesRirPdf } from './rirPdfFonts';
 import { aplicarMetadadosRirPdf, RIR_PDF_VERSION } from './rirPdfMetadata';
 import { RIR_PDF_LAYOUT } from './rirPdfMarkers';
 import {
-  RIR_PDF_LOGO_MAX,
   RIR_PDF_TABLE_LINE_H,
   RIR_PDF_TIPO,
   RIR_PDF_TITLE_BAND_H,
   RIR_PDF_FOLHA_H,
 } from './rirPdfLayout';
+import { dimensoesLogoInstitucionalPdf } from '../../../lib/logoInstitucionalTamanho';
 
 export type RirPdfBranding = {
   logoPng?: Uint8Array;
@@ -209,10 +209,12 @@ function desenharFaixaTituloInstitucionalRir(
   const zone = zonaTituloCentralRir(x0, contentW);
 
   if (logoImage) {
-    const dims = encaixarImagemPdf(logoImage, RIR_PDF_LOGO_MAX.w, RIR_PDF_LOGO_MAX.h);
+    /** Slot «auto» — PDF legado; o RIR oficial (HTML) lê o tamanho em Configurações. */
+    const logoSlot = dimensoesLogoInstitucionalPdf('auto');
+    const dims = encaixarImagemPdf(logoImage, logoSlot.w, logoSlot.h);
     page.drawImage(logoImage, {
       x: x0,
-      y: hdrBottom + (RIR_PDF_LOGO_MAX.h - dims.height) / 2,
+      y: hdrBottom + (logoSlot.h - dims.height) / 2,
       width: dims.width,
       height: dims.height,
     });
@@ -293,7 +295,7 @@ function desenharLogoFallback(
 
 /** Área central do título (entre logo à esquerda e meta/código à direita). */
 function zonaTituloCentralRir(x0: number, contentW: number): { x: number; w: number } {
-  const logoW = RIR_PDF_LOGO_MAX.w + 14;
+  const logoW = dimensoesLogoInstitucionalPdf('auto').w + 14;
   const metaW = 138;
   const zx = x0 + logoW;
   const zw = Math.max(160, contentW - logoW - metaW);
@@ -792,28 +794,34 @@ function desenharRodape(
   for (let i = 0; i < assinaturas.length; i++) {
     const sx = x0 + i * signW;
     const [role, bloco] = assinaturas[i]!;
+    const midX = sx + signW / 2;
     page.drawLine({
       start: { x: sx + signW * 0.08, y: signLineY },
       end: { x: sx + signW * 0.92, y: signLineY },
       thickness: 0.6,
-      color: c(RIR_PDF_COLORS.muted),
+      color: c(RIR_PDF_COLORS.ink),
     });
+    const roleW = fontBold.widthOfTextAtSize(role, 9);
     page.drawText(role, {
-      x: sx + signW * 0.08,
+      x: midX - roleW / 2,
       y: signLineY - 12,
       size: 9,
       font: fontBold,
-      color: c(RIR_PDF_COLORS.blue),
+      color: c(RIR_PDF_COLORS.ink),
     });
-    page.drawText(sanitizarTextoPdf(bloco.nome) || '—', {
-      x: sx + signW * 0.08,
+    const nome = sanitizarTextoPdf(bloco.nome) || '—';
+    const nomeW = fontBold.widthOfTextAtSize(nome, 11);
+    page.drawText(nome, {
+      x: midX - nomeW / 2,
       y: signLineY - 24,
       size: 11,
       font: fontBold,
       color: c(RIR_PDF_COLORS.ink),
     });
-    page.drawText(bloco.data ? formatDatePtPdf(bloco.data) : '—', {
-      x: sx + signW * 0.08,
+    const dataTxt = bloco.data ? formatDatePtPdf(bloco.data) : '—';
+    const dataW = font.widthOfTextAtSize(dataTxt, 9.25);
+    page.drawText(dataTxt, {
+      x: midX - dataW / 2,
       y: signLineY - 34,
       size: 9.25,
       font,

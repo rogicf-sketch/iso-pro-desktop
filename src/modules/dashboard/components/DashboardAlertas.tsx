@@ -15,8 +15,8 @@ export function DashboardAlertas({ items }: Props) {
   if (!items.length) {
     return (
       <div className="dashboard-alert-empty">
-        <strong>Operacao em dia</strong>
-        <p className="panel-copy">Nenhum alerta critico ou pendencia relevante neste momento.</p>
+        <strong>Operação em dia</strong>
+        <p className="panel-copy">Nenhum alerta crítico ou pendência relevante neste momento.</p>
       </div>
     );
   }
@@ -46,9 +46,9 @@ export function DashboardAlertas({ items }: Props) {
           >
             <span className="dashboard-alert__badge">
               {item.severity === 'critical'
-                ? 'Critico'
+                ? 'Crítico'
                 : item.severity === 'warning'
-                  ? 'Atencao'
+                  ? 'Atenção'
                   : item.severity === 'info'
                     ? 'Info'
                     : 'OK'}

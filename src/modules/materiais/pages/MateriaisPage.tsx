@@ -7,7 +7,11 @@ import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
+import { descarregarLogRelatorioImportacao } from '../../../lib/importacaoRelatorioLog';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { MaterialConsultaPanel } from '../components/MaterialConsultaPanel';
 import { MaterialEstoqueCriticoPanel } from '../components/MaterialEstoqueCriticoPanel';
@@ -60,6 +64,8 @@ export function MateriaisPage() {
     success,
     hasCloudConfig,
     cloudMaterialsEnabled,
+    listSource,
+    staleWhileRevalidate,
     filters,
     disciplinas,
     unidades,
@@ -77,6 +83,7 @@ export function MateriaisPage() {
     downloadModeloCsvImportacaoMateriais,
     importStaging,
     importingMateriais,
+    importProgress,
     importResultado,
     stageImportMateriaisFromFile,
     cancelImportMateriaisStaging,
@@ -84,6 +91,7 @@ export function MateriaisPage() {
     closeImportMateriaisResultado,
     exportMateriaisCsv,
     exportMateriaisCsvFiltrado,
+    exportingMateriaisCsv,
     selectedMaterialIds,
     selectedMaterialIdSet,
     toggleSelectMaterialId,
@@ -146,14 +154,32 @@ export function MateriaisPage() {
     void carregarMetricasPlanejamentoPorCodigo().then(setMetricasPlanejamento);
   }, [tab, loading, success]);
 
+  const fonteNuvemOk =
+    cloudMaterialsEnabled &&
+    resolveFonteNuvemOk({
+      listSource,
+      hasCloudConfig,
+      staleWhileRevalidate,
+    });
+
+  const chromeMeta = useMemo(() => {
+    if (loading && total === 0) return 'A carregar…';
+    const n = total.toLocaleString('pt-BR');
+    const fonte = fonteNuvemOk ? 'nuvem' : hasCloudConfig ? 'snapshot / local' : 'local';
+    return `${n} materiais · ${fonte}`;
+  }, [loading, total, fonteNuvemOk, hasCloudConfig]);
+
+  const [criticosChromeMeta, setCriticosChromeMeta] = useState<string | null>(null);
+
+  usePageChrome(
+    { meta: tab === 'criticos' ? (criticosChromeMeta ?? 'A carregar…') : chromeMeta },
+    [tab, criticosChromeMeta, chromeMeta],
+  );
+
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Módulo</p>
-          <h2>Materiais</h2>
-        </div>
-        {tab === 'cadastro' && canEdit ? (
+      {tab === 'cadastro' && canEdit ? (
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Cadastro e listas">
               <span className="panel-toolbar__label">Cadastro</span>
@@ -176,11 +202,21 @@ export function MateriaisPage() {
                 <Button type="button" variant="ghost" onClick={downloadModeloCsvImportacaoMateriais}>
                   Modelo
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => void exportMateriaisCsv()}>
-                  Exportar tudo
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={Boolean(exportingMateriaisCsv)}
+                  onClick={() => void exportMateriaisCsv()}
+                >
+                  {exportingMateriaisCsv === 'tudo' ? 'A exportar…' : 'Exportar tudo'}
                 </Button>
-                <Button type="button" variant="ghost" onClick={() => void exportMateriaisCsvFiltrado()}>
-                  Exportar filtro
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={Boolean(exportingMateriaisCsv)}
+                  onClick={() => void exportMateriaisCsvFiltrado()}
+                >
+                  {exportingMateriaisCsv === 'filtro' ? 'A exportar…' : 'Exportar filtro'}
                 </Button>
               </div>
             </div>
@@ -195,8 +231,8 @@ export function MateriaisPage() {
               type="file"
             />
           </div>
-        ) : null}
       </div>
+      ) : null}
 
       <div className="panel-tabs" role="tablist" aria-label="Secoes de materiais">
         <button
@@ -231,7 +267,7 @@ export function MateriaisPage() {
       {tab === 'consulta' ? (
         <MaterialConsultaPanel autoSearch initialQuery={consultaQuery} />
       ) : tab === 'criticos' ? (
-        <MaterialEstoqueCriticoPanel />
+        <MaterialEstoqueCriticoPanel onChromeMeta={setCriticosChromeMeta} />
       ) : (
         <>
       <ModuleHelp>
@@ -242,23 +278,25 @@ export function MateriaisPage() {
         </p>
       </ModuleHelp>
 
-      <OperationalNotice>
-        {cloudMaterialsEnabled ? (
-          'Fonte dos dados: Supabase (cadastro na nuvem ativo).'
-        ) : cloudStatus === 'partial' ? (
-          'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-        ) : hasCloudConfig ? (
-          <>
-            Fonte atual: <strong>cadastro local neste navegador</strong>. A integracao com Supabase esta activa para
-            planejamento e recebimentos, mas <strong>materiais em nuvem</strong> estao <strong>desactivados</strong> — por
-            isso a lista vem do armazenamento local (em primeiro acesso costuma mostrar 3 itens de exemplo). Para usar o
-            cadastro completo na nuvem, abra <strong>Configuracoes</strong>, active <strong>Materiais em nuvem</strong> e
-            guarde.
-          </>
-        ) : (
-          'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
-        )}
-      </OperationalNotice>
+      <FonteDadosNotice
+        healthy={Boolean(fonteNuvemOk)}
+        fallbackMessage={
+          cloudStatus === 'partial' ? (
+            'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
+          ) : hasCloudConfig && !cloudMaterialsEnabled ? (
+            <>
+              Fonte atual: <strong>cadastro local neste navegador/PC</strong>. A integração com Supabase está activa, mas{' '}
+              <strong>Materiais em nuvem</strong> estão <strong>desactivados</strong> — a lista local (e exemplos){' '}
+              <strong>não é a mesma</strong> do telemóvel nem da tabela na nuvem. Em Configurações, active{' '}
+              <strong>Materiais em nuvem</strong> e guarde para alinhar Web, PC e mobile.
+            </>
+          ) : hasCloudConfig ? (
+            'A confirmar o cadastro na nuvem…'
+          ) : (
+            'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+          )
+        }
+      />
 
       {hasCloudConfig && !cloudMaterialsEnabled && canAccessAction('configuracoes', 'visualizar') ? (
         <OperationalNotice tone="warning">
@@ -276,23 +314,21 @@ export function MateriaisPage() {
       ) : null}
 
       {cloudMaterialsEnabled && canEdit ? (
-        <div className="editor-block" style={{ marginBottom: 12 }}>
-          <ModuleHelp>
-            <p className="panel-copy" style={{ marginBottom: 8 }}>
-              Opcional: guardar neste navegador uma copia do cadastro que esta na nuvem (inclui saldos do movimento no
-              snapshot). Serve para alinhar o armazenamento local <code>iso-pro-desktop-materiais</code> quando algum fluxo
-              ainda ler dados gravados neste PC.
+        <ModuleHelp>
+          <div className="editor-block" style={{ marginBottom: 8 }}>
+            <p className="panel-copy" style={{ marginBottom: 6 }}>
+              <strong>Manutenção (opcional):</strong> copia local do cadastro da nuvem — só se precisar alinhar este PC.
             </p>
-          </ModuleHelp>
-          <Button
-            disabled={syncLocalBusy || loading}
-            onClick={() => void onSyncLocalFromCloud(false)}
-            type="button"
-            variant="ghost"
-          >
-            {syncLocalBusy ? 'A gravar copia local...' : 'Gravar copia local a partir da nuvem'}
-          </Button>
-        </div>
+            <Button
+              disabled={syncLocalBusy || loading}
+              onClick={() => void onSyncLocalFromCloud(false)}
+              type="button"
+              variant="ghost"
+            >
+              {syncLocalBusy ? 'A gravar copia local...' : 'Gravar copia local a partir da nuvem'}
+            </Button>
+          </div>
+        </ModuleHelp>
       ) : null}
 
       <MaterialFilters disciplinas={disciplinas} filters={filters} onChange={setFilters} />
@@ -338,7 +374,14 @@ export function MateriaisPage() {
           {error}
         </div>
       ) : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {exportingMateriaisCsv ? (
+        <OperationalNotice>
+          {exportingMateriaisCsv === 'filtro'
+            ? 'A exportar materiais do filtro atual… Aguarde o download.'
+            : 'A exportar todos os materiais… Aguarde o download.'}
+        </OperationalNotice>
+      ) : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
 
       {loading ? (
         <OperationalNotice>Carregando materiais...</OperationalNotice>
@@ -356,6 +399,7 @@ export function MateriaisPage() {
             selectedIds={canAdminister ? selectedMaterialIdSet : undefined}
           />
           <Pagination
+            itemLabel="materiais"
             onPageChange={(page) => setFilters({ ...filters, page })}
             page={filters.page}
             pageSize={filters.pageSize}
@@ -439,7 +483,9 @@ export function MateriaisPage() {
               <strong>{importStaging.fileName}</strong>?
             </p>
             {importingMateriais ? (
-              <OperationalNotice>Importando materiais...</OperationalNotice>
+              <OperationalNotice>
+                {importProgress || 'A gravar na nuvem…'} A janela fecha sozinha com o resultado.
+              </OperationalNotice>
             ) : null}
             <div className="form-actions" style={{ marginTop: 16 }}>
               <Button disabled={importingMateriais} onClick={cancelImportMateriaisStaging} type="button" variant="ghost">
@@ -607,10 +653,28 @@ export function MateriaisPage() {
         </div>
       </Modal>
 
-      <Modal onClose={closeImportMateriaisResultado} open={Boolean(importResultado)} title="Importacao concluida" wide>
+      <Modal
+        onClose={closeImportMateriaisResultado}
+        open={Boolean(importResultado)}
+        title={
+          importResultado && importResultado.criados === 0 && importResultado.atualizados === 0
+            ? 'Importacao sem alteracoes'
+            : 'Importacao concluida'
+        }
+        wide
+      >
         {importResultado ? (
           <div className="editor-block">
-            <p>
+            {importResultado.mensagem ? (
+              <OperationalNotice
+                tone={
+                  importResultado.criados === 0 && importResultado.atualizados === 0 ? 'warning' : 'neutral'
+                }
+              >
+                {importResultado.mensagem}
+              </OperationalNotice>
+            ) : null}
+            <p style={{ marginTop: importResultado.mensagem ? 12 : 0 }}>
               <strong>{importResultado.criados}</strong> novo(s), <strong>{importResultado.atualizados}</strong>{' '}
               atualizado(s), <strong>{importResultado.ignorados}</strong> ignorado(s).
               {importResultado.ignoradosPorDuplicidadeNoArquivo > 0 ? (
@@ -622,15 +686,43 @@ export function MateriaisPage() {
               ) : null}
             </p>
             {importResultado.detalhes.length ? (
-              <div style={{ marginTop: 12, maxHeight: 240, overflow: 'auto', fontSize: '0.9rem' }}>
-                {importResultado.detalhes.map((linha) => (
-                  <div key={linha}>{linha}</div>
+              <div style={{ marginTop: 12, maxHeight: 280, overflow: 'auto', fontSize: '0.9rem' }}>
+                {importResultado.detalhes.map((linha, idx) => (
+                  <div key={`${idx}-${linha.slice(0, 48)}`}>{linha}</div>
                 ))}
               </div>
             ) : null}
-            <div className="form-actions" style={{ marginTop: 16 }}>
+            <div className="form-actions" style={{ marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
+              {importResultado.detalhes.length ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    descarregarLogRelatorioImportacao(
+                      {
+                        modulo: 'Materiais',
+                        mensagem: importResultado.mensagem,
+                        ficheiroOrigem: importResultado.ficheiroOrigem,
+                        criados: importResultado.criados,
+                        atualizados: importResultado.atualizados,
+                        ignorados: importResultado.ignorados,
+                        detalhes: importResultado.detalhes,
+                        extraLinhas:
+                          importResultado.ignoradosPorDuplicidadeNoArquivo > 0
+                            ? [
+                                `Ignorados por duplicidade no arquivo: ${importResultado.ignoradosPorDuplicidadeNoArquivo}`,
+                              ]
+                            : undefined,
+                      },
+                      'materiais',
+                    )
+                  }
+                >
+                  Descarregar log
+                </Button>
+              ) : null}
               <Button onClick={closeImportMateriaisResultado} type="button">
-                OK
+                Fechar
               </Button>
             </div>
           </div>

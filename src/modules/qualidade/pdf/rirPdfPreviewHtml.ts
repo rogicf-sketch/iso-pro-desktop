@@ -144,7 +144,7 @@ body.rir-preview-body {
 .rir-preview-trace { margin-top: 8px; background: #f1f5f9; border: 1px solid ${c.border}; border-left: 4px solid ${c.blue}; border-radius: 6px; padding: 8px 10px; font-size: 8px; color: ${c.muted}; }
 .rir-preview-signs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; padding-bottom: 8px; border-bottom: 2px solid ${c.blue}; }
 .rir-preview-sign { text-align: center; font-size: 8px; }
-.rir-preview-sign .role { color: ${c.blue}; font-weight: 700; margin: 8px 0 4px; }
+.rir-preview-sign .role { color: ${c.ink}; font-weight: 700; margin: 8px 0 4px; text-transform: uppercase; letter-spacing: 0.06em; }
 .rir-preview-sign .name { font-weight: 700; font-size: 10px; }
 .rir-preview-sign .line { border-top: 1px dashed ${c.muted}; margin: 0 8px 8px; }
 .rir-preview-foot { margin-top: 10px; text-align: center; font-size: 7px; color: ${c.muted}; line-height: 1.4; }

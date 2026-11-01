@@ -1,12 +1,10 @@
 import { OperationalNotice } from './ui/OperationalNotice';
 import { useSessionCloudValidationStale } from '../lib/sessionCloudHealth';
 import { hasSupabaseConfig } from '../lib/supabase';
-import { isIsoProDesktop } from '../lib/pdfCloud/pdfCloudConfig';
 
 export function SessionCloudStaleBanner() {
   const stale = useSessionCloudValidationStale();
-  /** Desktop com snapshot local: aviso de nuvem não bloqueia operação (ex.: PDF RIR local). */
-  if (!hasSupabaseConfig() || !stale || isIsoProDesktop()) {
+  if (!hasSupabaseConfig() || !stale) {
     return null;
   }
   return (

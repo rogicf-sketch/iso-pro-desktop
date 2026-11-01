@@ -212,29 +212,29 @@ export function MaterialConsultaPanel({ initialQuery = '', autoSearch = false }:
               <p className="panel-copy">Nenhuma linha de planejamento com este codigo.</p>
             ) : (
               <div className="table-wrap">
-                <table className="data-table">
+                <table className="data-table materiais-consulta-table">
                   <thead>
                     <tr>
-                      <th>Documento</th>
-                      <th>Rev.</th>
-                      <th>Qtd doc.</th>
-                      <th>Atendida</th>
-                      <th>Pendente</th>
-                      <th>Status</th>
+                      <th className="materiais-consulta-table__doc">Documento</th>
+                      <th className="materiais-consulta-table__rev">Rev.</th>
+                      <th className="materiais-consulta-table__num">Qtd doc.</th>
+                      <th className="materiais-consulta-table__num">Atendida</th>
+                      <th className="materiais-consulta-table__num">Pendente</th>
+                      <th className="materiais-consulta-table__status">Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.documentos.map((linha) => (
                       <tr key={`${linha.documentoId}-${linha.quantidadeProjeto}-${linha.quantidadeAtendida}`}>
-                        <td>
+                        <td className="materiais-consulta-table__doc">
                           <strong>{linha.numero}</strong>
                           <span className="materiais-consulta-table-sub">{linha.descricao}</span>
                         </td>
-                        <td>{linha.revisao}</td>
-                        <td>{formatDecimalExcelPtBr(linha.quantidadeProjeto)}</td>
-                        <td>{formatDecimalExcelPtBr(linha.quantidadeAtendida)}</td>
-                        <td>{formatDecimalExcelPtBr(linha.quantidadePendente)}</td>
-                        <td>
+                        <td className="materiais-consulta-table__rev">{linha.revisao}</td>
+                        <td className="materiais-consulta-table__num">{formatDecimalExcelPtBr(linha.quantidadeProjeto)}</td>
+                        <td className="materiais-consulta-table__num">{formatDecimalExcelPtBr(linha.quantidadeAtendida)}</td>
+                        <td className="materiais-consulta-table__num">{formatDecimalExcelPtBr(linha.quantidadePendente)}</td>
+                        <td className="materiais-consulta-table__status">
                           <StatusBadge text={linha.statusLabel} tone={statusTone(linha.statusLinha)} />
                         </td>
                       </tr>
@@ -259,31 +259,31 @@ export function MaterialConsultaPanel({ initialQuery = '', autoSearch = false }:
               <p className="panel-copy">Nenhum lote registrado com este codigo.</p>
             ) : (
               <div className="table-wrap">
-                <table className="data-table">
+                <table className="data-table materiais-consulta-table">
                   <thead>
                     <tr>
-                      <th>Lote</th>
-                      <th>Data</th>
-                      <th>Documento</th>
-                      <th>Qtd</th>
-                      <th>Retirante</th>
-                      <th>Status</th>
+                      <th className="materiais-consulta-table__lote">Lote</th>
+                      <th className="materiais-consulta-table__data">Data</th>
+                      <th className="materiais-consulta-table__doc">Documento</th>
+                      <th className="materiais-consulta-table__num">Qtd</th>
+                      <th className="materiais-consulta-table__doc">Retirante</th>
+                      <th className="materiais-consulta-table__status">Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.lotes.map((lote) => (
                       <tr key={`${lote.atendimentoId}-${lote.quantidade}`}>
-                        <td>{lote.numero}</td>
-                        <td>{formatDataPt(lote.dataAtendimento)}</td>
-                        <td>{lote.documentoNumero}</td>
-                        <td>
+                        <td className="materiais-consulta-table__lote">{lote.numero}</td>
+                        <td className="materiais-consulta-table__data">{formatDataPt(lote.dataAtendimento)}</td>
+                        <td className="materiais-consulta-table__doc">{lote.documentoNumero}</td>
+                        <td className="materiais-consulta-table__num">
                           {formatDecimalExcelPtBr(lote.quantidade)} {lote.unidade}
                         </td>
-                        <td>
+                        <td className="materiais-consulta-table__doc">
                           {lote.recebedor}
                           <span className="materiais-consulta-table-sub">Atendente: {lote.atendente}</span>
                         </td>
-                        <td>
+                        <td className="materiais-consulta-table__status">
                           <StatusBadge
                             text={lote.status === 'estornado' ? 'Estornado' : 'Concluido'}
                             tone={statusTone(lote.status)}

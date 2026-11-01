@@ -1,4 +1,4 @@
-import { buscarDocumentoPorIdOuNumero } from '../../documentos/services/documentos.service';
+import { lerCabecalhoDocumentoPlanejamento } from '../../../lib/documentosPlanejamentoTabelas';
 import type { Atendimento, AtendimentoItem } from '../types/atendimento.types';
 import { atendimentoTemVariosDocumentos, numerosDocumentosDistintosItens } from './estornoDocumento.utils';
 
@@ -21,10 +21,12 @@ export async function montarMetadadosDocumentoAtendimento(
   if (atendimentoTemVariosDocumentos(at, itens)) {
     const nums = numerosDocumentosDistintosItens(itens);
     const partes: string[] = [];
-    for (const num of nums) {
-      const r = await buscarDocumentoPorIdOuNumero('', num);
-      if (r.success && r.data?.descricao) {
-        partes.push(`${num}: ${r.data.descricao.trim()}`);
+    const cabecalhos = await Promise.all(
+      nums.map(async (num) => ({ num, cab: await lerCabecalhoDocumentoPlanejamento({ numero: num }) })),
+    );
+    for (const { num, cab } of cabecalhos) {
+      if (cab?.descricao) {
+        partes.push(`${num}: ${cab.descricao}`);
       } else {
         partes.push(num);
       }
@@ -37,13 +39,16 @@ export async function montarMetadadosDocumentoAtendimento(
     };
   }
 
-  const docPrincipal = await buscarDocumentoPorIdOuNumero(at.documentoId, at.documentoNumero);
-  const doc = docPrincipal.success && docPrincipal.data ? docPrincipal.data : null;
-  if (doc) {
-    const titulo = `${at.documentoNumero} Rev. ${doc.revisao || '—'}`;
+  const doc = await lerCabecalhoDocumentoPlanejamento({
+    id: at.documentoId,
+    numero: at.documentoId?.trim() ? null : at.documentoNumero,
+  });
+  if (doc && (doc.descricao || doc.revisao || doc.responsavel)) {
+    const numero = at.documentoNumero?.trim() || doc.numero;
+    const titulo = numero && numero !== 'MULTIPLOS' ? `${numero} Rev. ${doc.revisao || '—'}` : '—';
     return {
       documentoTitulo: titulo,
-      documentoDescricao: doc.descricao?.trim() || PLACEHOLDER,
+      documentoDescricao: doc.descricao || PLACEHOLDER,
       documentoRevisao: doc.revisao || '—',
       documentoResponsavel: doc.responsavel || '—',
     };
@@ -51,14 +56,14 @@ export async function montarMetadadosDocumentoAtendimento(
 
   const nums = numerosDocumentosDistintosItens(itens);
   if (nums.length === 1) {
-    const r = await buscarDocumentoPorIdOuNumero('', nums[0]!);
-    if (r.success && r.data) {
-      const titulo = `${nums[0]} Rev. ${r.data.revisao || '—'}`;
+    const r = await lerCabecalhoDocumentoPlanejamento({ numero: nums[0] });
+    if (r && (r.descricao || r.revisao || r.responsavel)) {
+      const titulo = `${nums[0]} Rev. ${r.revisao || '—'}`;
       return {
         documentoTitulo: titulo,
-        documentoDescricao: r.data.descricao?.trim() || PLACEHOLDER,
-        documentoRevisao: r.data.revisao || '—',
-        documentoResponsavel: r.data.responsavel || '—',
+        documentoDescricao: r.descricao || PLACEHOLDER,
+        documentoRevisao: r.revisao || '—',
+        documentoResponsavel: r.responsavel || '—',
       };
     }
   }

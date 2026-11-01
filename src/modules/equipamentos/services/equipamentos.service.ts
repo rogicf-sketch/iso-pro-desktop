@@ -1,10 +1,13 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { writeEquipamentosSotOnCloud } from '../../../lib/cadastrosTabelas';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
-  commitIsoProSnapshotPatch,
+  invalidateIsoProSnapshotCache,
+  isIsoProSnapshotConflictError,
   readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
@@ -86,6 +89,16 @@ const seedData: Equipamento[] = [
   },
 ];
 
+const DEMO_EQUIPAMENTO_IDS = new Set(seedData.map((e) => e.id));
+
+function isSomenteSeedDemo(items: Equipamento[]): boolean {
+  return items.length > 0 && items.every((e) => DEMO_EQUIPAMENTO_IDS.has(e.id));
+}
+
+function localEquipamentosPareceSeedOuVazio(items: Equipamento[]): boolean {
+  return items.length === 0 || isSomenteSeedDemo(items);
+}
+
 function migrateLegacyRow(o: Record<string, unknown>): Equipamento {
   const st = String(o.status ?? 'operacional');
   let statusEquipamento: EquipamentoStatusOperacao = 'operando';
@@ -132,6 +145,7 @@ function parseEquipamentosStorage(raw: unknown): Equipamento[] | null {
 function readAll(): Equipamento[] {
   const raw = localStorage.getItem(equipamentosStorageKey());
   if (!raw) {
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(equipamentosStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
@@ -141,6 +155,10 @@ function readAll(): Equipamento[] {
     const validated = parseEquipamentosStorage(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Equipamentos', equipamentosStorageKey());
+      return [];
+    }
+    if (hasSupabaseConfig() && isSomenteSeedDemo(validated)) {
+      localStorage.removeItem(equipamentosStorageKey());
       return [];
     }
     return validated;
@@ -154,8 +172,27 @@ function writeAll(items: Equipamento[]) {
   localStorage.setItem(equipamentosStorageKey(), JSON.stringify(items));
 }
 
+async function loadEquipamentosFromCloudOrLocal(): Promise<Equipamento[]> {
+  const localNow = readAll();
+  const preferMs = localEquipamentosPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
+  const { data } = await withLocalFallback({
+    shouldTryRemote: shouldTryRemoteRead(),
+    loadRemote: async () => {
+      const remote = await readSnapshotEquipamentos();
+      if (remote.length > 0 || !localEquipamentosPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',
+    preferMs,
+  });
+  return data;
+}
+
 export async function loadEquipamentos(): Promise<Equipamento[]> {
-  return readRemoteOrLocal({ readRemote: readSnapshotEquipamentos, readLocal: readAll });
+  return loadEquipamentosFromCloudOrLocal();
 }
 
 function normalizeLookupValue(value: string) {
@@ -201,17 +238,36 @@ async function readSnapshotEquipamentos(): Promise<Equipamento[]> {
   return (payload.equipamentos ?? []).map((row, index) => mapSnapshotRow(row, index));
 }
 
+/**
+ * SoT table-first: `iso_pro_write_equipamentos_sot` (tabelas + projecao snapshot).
+ * Sem fallback patch_snapshot (hard-fail sot_require_rpc).
+ */
 async function writeSnapshotEquipamentos(items: Equipamento[]): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['equipamentos']);
-    return {
-      baselineUpdatedAt,
-      patch: {
-        equipamentos: items.map((item) => ({ ...item })),
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
-  });
+  const equipamentos = items.map((item) => ({ ...item }));
+  const maxAttempts = 5;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['equipamentos']);
+      const sot = await writeEquipamentosSotOnCloud({
+        baselineUpdatedAt,
+        replaceAll: equipamentos,
+      });
+      assertNoSilentSotFallback('equipamentos', sot.missing);
+      invalidateIsoProSnapshotCache();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar equipamentos na nuvem.');
 }
 
 function filtrarPorSituacaoContrato(items: Equipamento[], filtro: EquipamentoFiltro['situacaoContrato']): Equipamento[] {
@@ -246,11 +302,20 @@ function filtrosEquipamentosEstaoPadrao(f: EquipamentoFiltro): boolean {
 }
 
 export async function listarEquipamentos(filtro: EquipamentoFiltro): Promise<ServiceResult<PaginatedResult<Equipamento>>> {
+  const localNow = readAll();
+  const preferMs = localEquipamentosPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotEquipamentos(),
+    loadRemote: async () => {
+      const remote = await readSnapshotEquipamentos();
+      if (remote.length > 0 || !localEquipamentosPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',
+    preferMs,
   });
   const items = aplicarFiltrosListaEquipamentos(fallbackResult.data, filtro);
 
@@ -270,11 +335,20 @@ export async function listarEquipamentos(filtro: EquipamentoFiltro): Promise<Ser
 }
 
 export async function obterIndicadoresEquipamentos(): Promise<ServiceResult<EquipamentoIndicadores>> {
+  const localNow = readAll();
+  const preferMs = localEquipamentosPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotEquipamentos(),
+    loadRemote: async () => {
+      const remote = await readSnapshotEquipamentos();
+      if (remote.length > 0 || !localEquipamentosPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',
+    preferMs,
   });
   const items = fallbackResult.data;
   let proximos = 0;
@@ -388,7 +462,7 @@ export async function excluirEquipamento(id: string): Promise<ServiceResult<void
   const next = items.filter((item) => item.id !== id);
   if (next.length === items.length) return { success: false, error: 'Equipamento não encontrado.' };
   if (hasSupabaseConfig()) {
-    const bloqueio = bloqueioLocalEquipamentos(next.length);
+    const bloqueio = bloqueioLocalEquipamentos(items.length);
     if (bloqueio) return { success: false, error: bloqueio };
   }
   return executeWrite({
@@ -404,13 +478,8 @@ export { diasAteFimContrato, labelSituacaoContrato, situacaoContratoFromDias };
 export type { SituacaoContrato } from '../utils/equipamentoContrato';
 
 export async function montarExportacaoEquipamentosCsv(filtro: EquipamentoFiltro): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const fallbackResult = await withLocalFallback({
-    shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotEquipamentos(),
-    loadLocal: () => readAll(),
-    fallbackMessage: 'Falha ao consultar equipamentos no Supabase.',
-  });
-  const items = aplicarFiltrosListaEquipamentos(fallbackResult.data, filtro);
+  const data = await loadEquipamentosFromCloudOrLocal();
+  const items = aplicarFiltrosListaEquipamentos(data, filtro);
   const header = [
     'numero_frota',
     'tipo',
@@ -457,5 +526,9 @@ export async function montarExportacaoEquipamentosCsv(filtro: EquipamentoFiltro)
   const fileName = filtrosEquipamentosEstaoPadrao(filtro)
     ? `iso-pro-equipamentos-${stamp}.csv`
     : `iso-pro-equipamentos-filtrado-${stamp}.csv`;
-  return { success: true, data: { csv, fileName }, meta: fallbackResult.meta };
+  return {
+    success: true,
+    data: { csv, fileName },
+    meta: { source: shouldTryRemoteRead() ? 'supabase' : 'local' },
+  };
 }

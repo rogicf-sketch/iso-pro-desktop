@@ -11,7 +11,10 @@ import {
   getSupabaseOperationalStatus,
   hasSupabaseConfig,
 } from '../../../lib/supabase';
-import { listarMateriaisCriticosEstoque } from '../../materiais/services/materiaisEstoqueCritico.service';
+import {
+  listarMateriaisCriticosEstoque,
+  type MaterialEstoqueCritico,
+} from '../../materiais/services/materiaisEstoqueCritico.service';
 import {
   contarRecebimentosDivergentes,
   listarRirReprovadosSemRnc,
@@ -166,11 +169,55 @@ export async function getDashboardIndicators(): Promise<DashboardIndicator[]> {
   ];
 }
 
+const ESTOQUE_CRITICO_PAINEL_TTL_MS = 10 * 60 * 1000;
+let estoqueCriticoPainelCache: { at: number; items: MaterialEstoqueCritico[] } | null = null;
+let estoqueCriticoPainelFlight: Promise<MaterialEstoqueCritico[]> | null = null;
+
+/**
+ * O alerta de estoque percorre o cadastro inteiro (~10 mil materiais).
+ * Não entra na abertura do Painel: os números da operação aparecem primeiro.
+ */
+export function carregarEstoqueCriticoParaPainel(): Promise<MaterialEstoqueCritico[]> {
+  if (estoqueCriticoPainelCache && Date.now() - estoqueCriticoPainelCache.at < ESTOQUE_CRITICO_PAINEL_TTL_MS) {
+    return Promise.resolve(estoqueCriticoPainelCache.items);
+  }
+  if (estoqueCriticoPainelFlight) return estoqueCriticoPainelFlight;
+  estoqueCriticoPainelFlight = listarMateriaisCriticosEstoque()
+    .then((items) => {
+      estoqueCriticoPainelCache = { at: Date.now(), items };
+      return items;
+    })
+    .catch(() => estoqueCriticoPainelCache?.items ?? [])
+    .finally(() => {
+      estoqueCriticoPainelFlight = null;
+    });
+  return estoqueCriticoPainelFlight;
+}
+
+export function incorporarAlertaEstoqueCritico(
+  alerts: DashboardAlert[],
+  estoqueCriticos: MaterialEstoqueCritico[],
+): DashboardAlert[] {
+  const without = alerts.filter((alert) => alert.title !== 'Estoque abaixo do alerta');
+  if (estoqueCriticos.length === 0) return without;
+  const qtdCriticos = estoqueCriticos.filter((item) => item.severidade === 'critical').length;
+  const next = [
+    ...without,
+    {
+      severity: qtdCriticos > 0 ? 'critical' : 'warning',
+      title: 'Estoque abaixo do alerta',
+      detail: `${estoqueCriticos.length} material(is) com saldo abaixo do percentual configurado sobre o planejamento.${qtdCriticos > 0 ? ` ${qtdCriticos} critico(s).` : ''}`,
+      route: '/materiais?tab=criticos',
+    } satisfies DashboardAlert,
+  ];
+  next.sort((a, b) => ALERT_SEVERITY_ORDER[a.severity] - ALERT_SEVERITY_ORDER[b.severity]);
+  return next;
+}
+
 export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
-  const [mobile, desktopLicenses, estoqueCriticos, contagensCloud] = await Promise.all([
+  const [mobile, desktopLicenses, contagensCloud] = await Promise.all([
     getMobileDeviceIndicators(),
     getDesktopLicenseRegistrySummary(),
-    listarMateriaisCriticosEstoque().catch(() => [] as Awaited<ReturnType<typeof listarMateriaisCriticosEstoque>>),
     hasSupabaseConfig() ? fetchOperacaoContagens() : Promise.resolve(null),
   ]);
 
@@ -248,21 +295,12 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
     });
   }
 
-  if (estoqueCriticos.length > 0) {
-    const qtdCriticos = estoqueCriticos.filter((i) => i.severidade === 'critical').length;
-    alerts.push({
-      severity: qtdCriticos > 0 ? 'critical' : 'warning',
-      title: 'Estoque abaixo do alerta',
-      detail: `${estoqueCriticos.length} material(is) com saldo abaixo do percentual configurado sobre o planejamento.${qtdCriticos > 0 ? ` ${qtdCriticos} critico(s).` : ''}`,
-      route: '/materiais?tab=criticos',
-    });
-  }
-
   if (recebimentosPendentes > 0) {
+    // Fila de trabalho, nao crise — so sobe a "atenção" se houver divergência (alerta critico abaixo).
     alerts.push({
-      severity: 'warning',
+      severity: 'info',
       title: 'Recebimentos aguardando conferencia',
-      detail: `${recebimentosPendentes} recebimento(s) no fluxo de conferencia.`,
+      detail: `${recebimentosPendentes} recebimento(s) no fluxo de conferencia (prazo e e-mail em Configuracoes > Alertas).`,
       route: '/recebimentos',
     });
   }
@@ -294,18 +332,26 @@ export async function getDashboardAlerts(): Promise<DashboardAlert[]> {
     });
   }
 
-  if (mobile.pendentes > 0 || mobile.bloqueados > 0) {
+  if (mobile.bloqueados > 0) {
     alerts.push({
       severity: 'warning',
-      title: 'Mobile requer acompanhamento',
-      detail: `${mobile.pendentes} pendente(s) e ${mobile.bloqueados} bloqueado(s) no painel de dispositivos.`,
+      title: 'Mobile com aparelhos bloqueados',
+      detail: `${mobile.bloqueados} aparelho(s) bloqueado(s) — rever no painel de dispositivos.`,
+      route: '/mobile',
+    });
+  } else if (mobile.pendentes > 0) {
+    alerts.push({
+      severity: 'info',
+      title: 'Mobile com autorizacao pendente',
+      detail: `${mobile.pendentes} aparelho(s) aguardando autorizacao.`,
       route: '/mobile',
     });
   }
 
   if (rirAbertos > 0 || rncAbertas > 0) {
+    // Abertas recentes: info (nao polui o chip "atenção"). Critico separado: RIR sem RNC.
     alerts.push({
-      severity: 'warning',
+      severity: 'info',
       title: 'Qualidade com tratativas abertas',
       detail: `${rirAbertos} RIR e ${rncAbertas} RNC ainda exigem acompanhamento.`,
       route: '/rir',

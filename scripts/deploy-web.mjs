@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertDeployTargetsLiveProd } from './iso-pro-project-identity.mjs';
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(scriptsDir, '..');
@@ -34,6 +35,23 @@ function loadDeployEnvFile() {
   }
 }
 
+function loadRootEnvFile() {
+  const envPath = path.join(root, '.env');
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const i = t.indexOf('=');
+    if (i <= 0) continue;
+    const k = t.slice(0, i).trim();
+    let v = t.slice(i + 1).trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.slice(1, -1);
+    }
+    if (process.env[k] === undefined || process.env[k] === '') process.env[k] = v;
+  }
+}
+
 function run(cmd, args, opts = {}) {
   const useShell =
     process.platform === 'win32' &&
@@ -54,6 +72,8 @@ function run(cmd, args, opts = {}) {
 }
 
 loadDeployEnvFile();
+loadRootEnvFile();
+assertDeployTargetsLiveProd(process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '');
 
 const sshKey = String(process.env.DEPLOY_SSH_KEY ?? '').trim();
 const sshTarget = String(process.env.DEPLOY_SSH_TARGET ?? '').trim();
@@ -131,9 +151,10 @@ for (const name of entries) {
 }
 
 console.log(`deploy-web: a publicar em ${remotePath} (sudo rsync) …`);
+// Preservar /updates/ (feed electron-updater) — nao apagar com --delete do site.
 run('ssh', [
   ...sshDest,
-  `sudo rsync -a --delete ${remoteStaging}/ ${remotePath}/ && sudo chown -R nginx:nginx ${remotePath}`,
+  `sudo rsync -a --delete --exclude 'updates/' ${remoteStaging}/ ${remotePath}/ && sudo mkdir -p ${remotePath}/updates/iso-pro-desktop && sudo chown -R nginx:nginx ${remotePath}`,
 ]);
 
 console.log('deploy-web: concluído. Testa https://isoprogestaodemateriais.com.br/#/login (Ctrl+F5).');

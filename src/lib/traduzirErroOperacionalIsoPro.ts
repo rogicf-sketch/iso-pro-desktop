@@ -57,6 +57,19 @@ export function traduzirErroOperacionalIsoPro(message: string): string {
     return 'Acesso negado na nuvem. Verifique URL/chave Supabase em Configuracoes e permissoes da empresa.';
   }
 
+  // Postgres 42501 / PostgREST — tipico apos sessao JWT expirada ou pedido ainda como anon
+  if (
+    lower.includes('permission denied') ||
+    lower.includes('42501') ||
+    lower.includes('not authorized') ||
+    (lower.includes('permission') && lower.includes('function'))
+  ) {
+    return (
+      'Sessao na nuvem expirada ou sem permissao para ler/gravar. ' +
+      'Saia e entre de novo (Ctrl+F5). Se o erro continuar, contacte o administrador.'
+    );
+  }
+
   if (lower.includes('iso_pro_atendimento_sem_progresso')) {
     if (lower.includes('estorno') || lower.includes('diminuicao')) {
       return 'Nao foi possivel estornar: o planejamento nao refletiu a devolucao. Recarregue a pagina e tente de novo.';

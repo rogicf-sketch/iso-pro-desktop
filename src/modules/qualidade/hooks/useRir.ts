@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
 import { collectAllPages } from '../../../lib/collectAllPages';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
 import { useAuth } from '../../auth/hooks/useAuth';
@@ -25,7 +26,7 @@ const initialFilters: RirFiltro = {
   busca: '',
   status: 'todos',
   page: 1,
-  pageSize: 6,
+  pageSize: 15,
 };
 
 const emptyForm: RirFormData = {
@@ -70,6 +71,7 @@ export function useRir() {
   const [filters, setFilters] = useState<RirFiltro>(initialFilters);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [exportingRirCsv, setExportingRirCsv] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<RirRegistro | null>(null);
   /** Incrementa ao abrir o formulario (novo/editar/destravar) — forca remount com `key`. */
@@ -80,7 +82,7 @@ export function useRir() {
   const [rirDestravarSenha, setRirDestravarSenha] = useState('');
   const [rirDestravarBusy, setRirDestravarBusy] = useState(false);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -94,6 +96,8 @@ export function useRir() {
         items: result.data.items,
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
   });
@@ -102,6 +106,17 @@ export function useRir() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['rir', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -170,20 +185,32 @@ export function useRir() {
     };
   }, [selected]);
 
+  const submitInFlightRef = useRef(false);
+
   async function submitRir(data: RirFormData) {
+    if (submitInFlightRef.current) {
+      return { success: false, error: 'Aguarde: gravacao do RIR em curso.' };
+    }
     if (!canAccessAction('rir', 'editar')) {
       return { success: false, error: 'Seu perfil nao possui permissao para editar RIR.' };
     }
     const validationError = validateRir(data);
     if (validationError) return { success: false, error: validationError };
-    const result = await salvarRir(data, selected?.id);
-    if (result.success) {
-      setIsModalOpen(false);
-      setSelected(null);
-      await invalidateRirLista();
-      setSuccess(result.meta?.source === 'local' ? 'RIR salvo localmente.' : 'RIR salvo com sucesso.');
+    submitInFlightRef.current = true;
+    try {
+      const result = await salvarRir(data, selected?.id);
+      if (result.success) {
+        setIsModalOpen(false);
+        setSelected(null);
+        await invalidateRirLista();
+        const base =
+          result.meta?.source === 'local' ? 'RIR salvo localmente.' : 'RIR salvo com sucesso.';
+        setSuccess(result.warning ? `${base} ${result.warning}` : base);
+      }
+      return result;
+    } finally {
+      submitInFlightRef.current = false;
     }
-    return result;
   }
 
   async function removeRir(id: string) {
@@ -208,22 +235,28 @@ export function useRir() {
       setError('Seu perfil nao possui permissao para exportar RIR.');
       return;
     }
+    if (exportingRirCsv) return;
     setError('');
     setSuccess('');
-    const result = await montarExportacaoRirCsvCompleto({
-      filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status },
-    });
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar o CSV.');
-      return;
+    setExportingRirCsv(true);
+    try {
+      const result = await montarExportacaoRirCsvCompleto({
+        filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status },
+      });
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar o CSV.');
+        return;
+      }
+      const url = URL.createObjectURL(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = result.data.fileName;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setSuccess('Exportacao concluida. O ficheiro CSV foi descarregado.');
+    } finally {
+      setExportingRirCsv(false);
     }
-    const url = URL.createObjectURL(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = result.data.fileName;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    setSuccess('Exportacao Excel (CSV) concluida — relatorio completo, uma linha por material.');
   }
 
   return {
@@ -233,6 +266,8 @@ export function useRir() {
     error: error || listError,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     modoNumeracao,
     recebimentoChoices,
@@ -331,6 +366,7 @@ export function useRir() {
     submitRir,
     removeRir,
     exportarRirExcel,
+    exportingRirCsv,
     rirDestravarAlvo,
     rirDestravarSenha,
     rirDestravarBusy,

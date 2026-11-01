@@ -1,0 +1,33 @@
+---
+description: Cadeia recebimento → planejamento → atendimento (saldo seguro)
+alwaysApply: true
+---
+
+# Cadeia operacional (não quebrar)
+
+Recebimento, planejamento e atendimento trabalham juntos. Uma actualização não pode “facilitar” um módulo e inventar estoque noutro.
+
+## Regra de negócio
+
+1. **Recebimento** (NF conferida ou modo direto) cria estoque.
+2. **Planejamento** mostra saldo/status a partir desse estoque:
+   - Pendente = sem saldo/estoque
+   - Recebido = estoque cobre o planejado (QTD ATENDIDA pode ser 0)
+   - Parcial = mistura / estoque não cobre
+   - Atendido = baixa no atendimento concluída na linha
+3. **Atendimento** só pode atender se houver **saldo real** (recebido − já atendido). Sem saldo → «Sem saldo», quantidade 0, confirmar recusado.
+
+## Proibido
+
+- Inventar `saldoDisponivel = quantidadePendente` (fallback “cache frio”).
+- Usar `saldoAtual: 999999` (ou qualquer bypass) no confirmar.
+- Mudar a fórmula de status do planejamento sem alinhar o saldo do atendimento.
+- Tratar documento Pendente (sem estoque) como atendível.
+
+## Onde está a verdade
+
+- Status linha/doc: `documentoPlanejamento.ts` (`resolverStatusLinhaDocumento`).
+- Saldo atendimento: mapa operacional (recebido − atendido), sem inventar.
+- Regressão: `cadeiaRecebimentoPlanejamentoAtendimento.test.ts`.
+
+Se um atalho de performance ameaçar esta cadeia, preferir lentidão correcta a gravação incorrecta.

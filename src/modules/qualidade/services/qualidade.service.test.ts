@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from '../../../lib/logoInstitucional.constants';
+import { writeRirSotOnCloud, writeRncSotOnCloud } from '../../../lib/qualidadeTabelas';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
@@ -10,6 +11,7 @@ import {
   excluirRir,
   normalizeRirRegistro,
   obterRirPorId,
+  encontrarRirAtivoDoRecebimento,
   rirNaoCanceladosPorRecebimentoId,
   salvarRnc,
   salvarRir,
@@ -44,6 +46,10 @@ const configBase: ConfiguracaoSistema = {
   desktopLicencaEmitidaPara: '',
   desktopLicencaExpiraEm: '',
   logoInstitucionalUrl: LOGO_INSTITUCIONAL_PADRAO_FABRICA,
+  logoInstitucionalTamanhoRelatorio: 'auto',
+  logoInstitucionalFormatoQuadro: 'auto',
+  logoInstitucionalAspecto: 0,
+  logoInstitucionalZoomPct: 100,
   documentoRodapeNome: '',
   documentoRodapeCnpj: '',
   relatorioFinalIaHabilitado: false,
@@ -94,6 +100,22 @@ vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
 }));
 
+/** SoT RPC presente (sot_require_rpc on) — testes exercitam fluxo completo via mocks. */
+vi.mock('../../../lib/qualidadeTabelas', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/qualidadeTabelas')>();
+  return {
+    ...actual,
+    writeRirSotOnCloud: vi.fn(async () => ({
+      updatedAt: new Date().toISOString(),
+      missing: false,
+    })),
+    writeRncSotOnCloud: vi.fn(async () => ({
+      updatedAt: new Date().toISOString(),
+      missing: false,
+    })),
+  };
+});
+
 vi.mock('../utils/rirPayloadStorage', () => ({
   persistRirRegistroToStorage: async (reg: RirRegistro) => ({
     ...reg,
@@ -120,8 +142,16 @@ vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
     readIsoProSnapshotPayloadForWrite: mockReadForWrite,
     readIsoProSnapshotSlices: mockReadPayload,
     readIsoProSnapshotSlicesForWrite: vi.fn(async () => {
-      const r = await mockReadForWrite();
-      return { slices: r.payload ?? {}, baselineUpdatedAt: r.baselineUpdatedAt ?? null };
+      const r = mockReadForWrite.getMockImplementation()
+        ? await mockReadForWrite()
+        : { payload: await mockReadPayload(), baselineUpdatedAt: '2026-01-01T00:00:00.000Z' };
+      return {
+        slices: (r && typeof r === 'object' && 'payload' in r ? r.payload : r) ?? {},
+        baselineUpdatedAt:
+          r && typeof r === 'object' && 'baselineUpdatedAt' in r
+            ? (r.baselineUpdatedAt as string | null)
+            : '2026-01-01T00:00:00.000Z',
+      };
     }),
     commitIsoProSnapshotWrite: mockCommitWrite,
     commitIsoProSnapshotPatch: mockCommitPatch,
@@ -256,6 +286,14 @@ describe('qualidade.service / salvarRir (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -319,10 +357,58 @@ describe('qualidade.service / salvarRir (Supabase)', () => {
       ],
       rncRegistros: [],
     });
+    mockReadForWrite.mockResolvedValue({
+      payload: {
+        rirRegistros: [
+          {
+            id: 'rir-edit',
+            codigo: 'RIR-2026-099',
+            dataRegistro: '2026-01-10',
+            recebimentoId: 'rec-test',
+            recebimentoNotaFiscal: '999',
+            recebimentoFornecedor: 'Fornecedor Teste',
+            uo: '',
+            localObra: '',
+            contratoNumero: '',
+            fornecedorNome: 'Fornecedor Teste',
+            inspecaoQuantitativa: true,
+            inspecaoQualitativa: true,
+            inspecaoDimensional: false,
+            procedimentoNumero: 'PE-TUB-003 REV.2',
+            obsCurta: '',
+            itensRir: [
+              {
+                id: 'it-1',
+                codigoMaterial: 'X1',
+                quantidade: 1,
+                unidade: 'UN',
+                descricaoMaterial: 'Item',
+                certificado: 'N/A',
+              },
+            ],
+            instrumentos: '',
+            documentosQc: '',
+            observacoesQc: 'x',
+            laudo: 'aprovado',
+            assinaturaRecebimento: { nome: '', data: '' },
+            assinaturaCq: { nome: 'Ana', data: '' },
+            assinaturaCliente: { nome: '', data: '' },
+            origem: 'Inspecao',
+            responsavel: 'Ana',
+            descricao: 'Antiga',
+            status: 'aberto',
+            acaoImediata: '',
+            observacoes: '',
+          },
+        ],
+        rncRegistros: [],
+      },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito RIR.'));
+    vi.mocked(writeRirSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito RIR.'));
 
     store[RIR_STORAGE_KEY] = JSON.stringify([]);
 
@@ -360,6 +446,14 @@ describe('qualidade.service / salvarRnc (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -396,10 +490,31 @@ describe('qualidade.service / salvarRnc (Supabase)', () => {
         },
       ],
     });
+    mockReadForWrite.mockResolvedValue({
+      payload: {
+        rirRegistros: [],
+        rncRegistros: [
+          {
+            id: 'rnc-edit',
+            codigo: 'RNC-2026-099',
+            dataRegistro: '2026-01-11',
+            setor: 'Qualidade',
+            responsavel: 'Bruno',
+            descricao: 'Antiga',
+            descricaoDetalhada: 'Antiga',
+            status: 'aberto',
+            planoAcao: '',
+            observacoes: '',
+            recebimentoId: 'rec-test',
+          },
+        ],
+      },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito RNC.'));
+    vi.mocked(writeRncSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito RNC.'));
 
     store[RNC_STORAGE_KEY] = JSON.stringify([]);
 
@@ -437,6 +552,14 @@ describe('qualidade.service / salvarRir criacao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -459,7 +582,7 @@ describe('qualidade.service / salvarRir criacao (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao criar RIR.'));
+    vi.mocked(writeRirSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao criar RIR.'));
 
     store[RIR_STORAGE_KEY] = JSON.stringify([]);
 
@@ -496,6 +619,14 @@ describe('qualidade.service / obterRirPorId', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -550,6 +681,14 @@ describe('qualidade.service / sugerirCodigoRirParaRecebimento', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -631,12 +770,40 @@ describe('rirNaoCanceladosPorRecebimentoId', () => {
   });
 });
 
+describe('encontrarRirAtivoDoRecebimento', () => {
+  it('encontra RIR ativo da mesma NF/recebimento e ignora cancelado', () => {
+    const recId = 'rec-dup';
+    const rows = [
+      normalizeRirRegistro({
+        id: 'ativo',
+        ...rirForm({ codigo: 'RIR-INS-03', recebimentoId: recId }),
+        status: 'tratado',
+      }),
+      normalizeRirRegistro({
+        id: 'canc',
+        ...rirForm({ codigo: 'RIR-OLD', recebimentoId: recId }),
+        status: 'cancelado',
+      }),
+    ];
+    expect(encontrarRirAtivoDoRecebimento(rows, recId)?.codigo).toBe('RIR-INS-03');
+    expect(encontrarRirAtivoDoRecebimento(rows, recId, 'ativo')).toBeUndefined();
+  });
+});
+
 describe('qualidade.service / excluirRir (local)', () => {
   let store: Record<string, string>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -704,6 +871,14 @@ describe('qualidade.service / salvarRnc criacao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeRirSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    vi.mocked(writeRncSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -726,7 +901,7 @@ describe('qualidade.service / salvarRnc criacao (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao criar RNC.'));
+    vi.mocked(writeRncSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito ao criar RNC.'));
 
     store[RNC_STORAGE_KEY] = JSON.stringify([]);
 

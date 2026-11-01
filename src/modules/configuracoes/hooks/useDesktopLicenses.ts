@@ -1,12 +1,19 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
+import { getActiveTenantId, ISO_PRO_DEFAULT_TENANT_ID, type IsoProTenantListItem } from '../../../lib/isoProTenant';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
+import { getVolatileSessionPassword } from '../../auth/services/auth.service';
 import { listDesktopLicenseRegistry } from '../services/desktopLicenseRegistry.service';
 import { updateDesktopLicenseRegistryStatus } from '../services/desktopSecurity.service';
+import {
+  fetchSuperAdminLicenseCapabilities,
+  listDesktopLicensesAsSuperAdmin,
+  setDesktopLicenseStatusAsSuperAdmin,
+} from '../services/isoProDesktopLicense.service';
 import type { DesktopLicenseRegistryItem } from '../types/desktop-license-registry.types';
 
 function encodeBase64Url(value: string) {
@@ -22,22 +29,88 @@ export function useDesktopLicenses() {
   const { confirm } = useConfirmDialog();
   const queryClient = useQueryClient();
   const { canAccessAction, user } = useAuth();
-  const listQueryKey = ['desktop-licenses', 'registry', user?.login] as const;
+  const actorSenha = getVolatileSessionPassword() ?? '';
+  const onDefaultTenant = getActiveTenantId() === ISO_PRO_DEFAULT_TENANT_ID;
+
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [statusFilter, setStatusFilter] = useState<'todos' | 'active' | 'revoked'>('todos');
   const [periodFilter, setPeriodFilter] = useState<'todos' | '30d' | '90d' | 'expirando'>('todos');
+  const [tenantFilter, setTenantFilter] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
-  /** Instante fixo de montagem — usado até existir `currentTime` vindo da query. */
   const [bootClock] = useState(() => Date.now());
+  const [superAdmin, setSuperAdmin] = useState(false);
+  const [privateKeyConfigured, setPrivateKeyConfigured] = useState(false);
+  const [tenants, setTenants] = useState<IsoProTenantListItem[]>([]);
+  const [capabilitiesHint, setCapabilitiesHint] = useState('');
 
-  const debouncedSearchTerm = useDebouncedValue(searchTerm, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, listaBuscaDebounceMs(searchTerm));
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCapabilities() {
+      if (!onDefaultTenant || !user?.login || !actorSenha || !canAccessAction('configuracoes', 'administrar')) {
+        if (!cancelled) {
+          setSuperAdmin(false);
+          setPrivateKeyConfigured(false);
+          setTenants([]);
+          setCapabilitiesHint('');
+        }
+        return;
+      }
+      const result = await fetchSuperAdminLicenseCapabilities({
+        actorLogin: user.login,
+        actorSenha,
+      });
+      if (cancelled) return;
+      if (!result.success || !result.data?.superAdmin) {
+        setSuperAdmin(false);
+        setPrivateKeyConfigured(false);
+        setTenants([]);
+        setCapabilitiesHint(result.error ?? '');
+        return;
+      }
+      setSuperAdmin(true);
+      setPrivateKeyConfigured(result.data.privateKeyConfigured);
+      setTenants(result.data.tenants);
+      setCapabilitiesHint('');
+    }
+    void loadCapabilities();
+    return () => {
+      cancelled = true;
+    };
+  }, [actorSenha, canAccessAction, onDefaultTenant, user?.login]);
+
+  const listQueryKey = [
+    'desktop-licenses',
+    'registry',
+    user?.login,
+    superAdmin ? 'super' : 'tenant',
+    tenantFilter,
+  ] as const;
 
   const listQuery = useQuery({
     queryKey: listQueryKey,
     queryFn: async () => {
+      if (superAdmin && user?.login && actorSenha) {
+        const result = await listDesktopLicensesAsSuperAdmin({
+          actorLogin: user.login,
+          actorSenha,
+          tenantId: tenantFilter === 'todos' ? undefined : tenantFilter,
+        });
+        if (!result.success) {
+          throw new Error(result.error ?? 'Nao foi possivel carregar licencas (super-admin).');
+        }
+        return {
+          items: result.data ?? [],
+          currentTime: Date.now(),
+          syncSource: 'supabase' as const,
+          syncWarning: '',
+        };
+      }
+
       const result = await listDesktopLicenseRegistry();
       if (!result.success) {
         throw new Error(result.error ?? 'Nao foi possivel carregar licencas desktop.');
@@ -49,13 +122,12 @@ export function useDesktopLicenses() {
         syncWarning: result.meta?.fallbackReason ?? '',
       };
     },
+    enabled: Boolean(user?.login),
   });
 
   const rawItems = listQuery.data?.items;
   const items = useMemo(() => rawItems ?? [], [rawItems]);
-
   const currentTime = listQuery.data?.currentTime ?? bootClock;
-
   const loading = listQuery.isLoading;
   const syncSource = listQuery.data?.syncSource ?? 'local';
   const syncWarning = listQuery.data?.syncWarning ?? '';
@@ -88,23 +160,37 @@ export function useDesktopLicenses() {
       return;
     }
 
-    const tokenPayload = {
-      licenseId: item.licenseId,
-      issuedTo: item.issuedTo,
-      machineFingerprint: item.machineFingerprint,
-      machineLabel: item.machineLabel || undefined,
-      issuedAt: item.emitidaEm,
-      expiresAt: item.expiraEm || undefined,
-      appVersion: item.appVersion || undefined,
-      status,
-    };
-    const encodedPayload = encodeBase64Url(JSON.stringify(tokenPayload));
-    const fakeToken = `${encodedPayload}.registry-only`;
+    if (superAdmin && item.tenantId && user?.login && actorSenha) {
+      const result = await setDesktopLicenseStatusAsSuperAdmin({
+        actorLogin: user.login,
+        actorSenha,
+        tenantId: item.tenantId,
+        licenseId: item.licenseId,
+        status,
+      });
+      if (!result.success) {
+        setError(result.error ?? 'Nao foi possivel atualizar o status da licenca.');
+        return;
+      }
+    } else {
+      const tokenPayload = {
+        licenseId: item.licenseId,
+        issuedTo: item.issuedTo,
+        machineFingerprint: item.machineFingerprint,
+        machineLabel: item.machineLabel || undefined,
+        issuedAt: item.emitidaEm,
+        expiresAt: item.expiraEm || undefined,
+        appVersion: item.appVersion || undefined,
+        status,
+      };
+      const encodedPayload = encodeBase64Url(JSON.stringify(tokenPayload));
+      const fakeToken = `${encodedPayload}.registry-only`;
 
-    const result = await updateDesktopLicenseRegistryStatus(fakeToken, status);
-    if (!result.success) {
-      setError(result.error ?? 'Nao foi possivel atualizar o status da licenca desktop.');
-      return;
+      const result = await updateDesktopLicenseRegistryStatus(fakeToken, status);
+      if (!result.success) {
+        setError(result.error ?? 'Nao foi possivel atualizar o status da licenca desktop.');
+        return;
+      }
     }
 
     appendAuthAuditEvent({
@@ -113,13 +199,10 @@ export function useDesktopLicenses() {
       targetLogin: item.issuedTo,
       detail:
         status === 'revoked'
-          ? `Licenca ${item.licenseId} revogada centralmente no painel de licencas desktop.`
-          : `Licenca ${item.licenseId} reativada centralmente no painel de licencas desktop.`,
+          ? `Licenca ${item.licenseId} revogada centralmente${item.tenantName ? ` (${item.tenantName})` : ''}.`
+          : `Licenca ${item.licenseId} reativada centralmente${item.tenantName ? ` (${item.tenantName})` : ''}.`,
     });
 
-    queryClient.setQueryData(listQueryKey, (prev) =>
-      prev ? { ...prev, currentTime: Date.now() } : prev,
-    );
     await queryClient.invalidateQueries({ queryKey: ['desktop-licenses'] });
     setSuccess(status === 'revoked' ? 'Licenca desktop revogada com sucesso.' : 'Licenca desktop reativada com sucesso.');
   }
@@ -148,7 +231,16 @@ export function useDesktopLicenses() {
 
       if (!normalizedSearch) return true;
 
-      const haystack = [item.issuedTo, item.licenseId, item.machineLabel, item.machineFingerprint, item.appVersion, item.motivoRevogacao]
+      const haystack = [
+        item.issuedTo,
+        item.licenseId,
+        item.machineLabel,
+        item.machineFingerprint,
+        item.appVersion,
+        item.motivoRevogacao,
+        item.tenantName,
+        item.tenantSlug,
+      ]
         .join(' ')
         .toLocaleLowerCase();
 
@@ -189,9 +281,24 @@ export function useDesktopLicenses() {
   function exportLicenses() {
     const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
     const lines = [
-      ['licenseId', 'issuedTo', 'machineFingerprint', 'machineLabel', 'appVersion', 'status', 'emitidaEm', 'expiraEm', 'revogadaEm', 'motivoRevogacao'].join(','),
+      [
+        'tenantName',
+        'tenantId',
+        'licenseId',
+        'issuedTo',
+        'machineFingerprint',
+        'machineLabel',
+        'appVersion',
+        'status',
+        'emitidaEm',
+        'expiraEm',
+        'revogadaEm',
+        'motivoRevogacao',
+      ].join(','),
       ...filteredItems.map((item) =>
         [
+          escape(item.tenantName ?? ''),
+          escape(item.tenantId ?? ''),
           escape(item.licenseId),
           escape(item.issuedTo),
           escape(item.machineFingerprint),
@@ -227,15 +334,27 @@ export function useDesktopLicenses() {
     riskIndicators,
     statusFilter,
     periodFilter,
+    tenantFilter,
     searchTerm,
     page,
     pageSize,
+    superAdmin,
+    privateKeyConfigured,
+    tenants,
+    capabilitiesHint,
+    actorLogin: user?.login ?? '',
+    actorSenha,
+    onDefaultTenant,
     setStatusFilter: (value: 'todos' | 'active' | 'revoked') => {
       setStatusFilter(value);
       setPage(1);
     },
     setPeriodFilter: (value: 'todos' | '30d' | '90d' | 'expirando') => {
       setPeriodFilter(value);
+      setPage(1);
+    },
+    setTenantFilter: (value: string) => {
+      setTenantFilter(value);
       setPage(1);
     },
     setSearchTerm: (value: string) => {

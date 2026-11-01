@@ -81,6 +81,7 @@ export function cssRelatorioNativoPreview(): string {
         padding: 16px 12px 28px;
       }
       .rir-doc,
+      .rnc-doc,
       .iso-report-sheet,
       .rfo-page {
         max-width: 210mm;

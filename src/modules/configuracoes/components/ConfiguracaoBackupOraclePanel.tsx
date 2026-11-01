@@ -98,6 +98,16 @@ export function ConfiguracaoBackupOraclePanel({ form, canAdminister, onChange }:
 
       {msg ? <OperationalNotice>{msg}</OperationalNotice> : null}
 
+      <div style={{ marginTop: 12 }}>
+        <OperationalNotice tone="warning">
+          <strong>Backup BD Supabase (PHYSICAL):</strong> ultimo ensaio de restauro{' '}
+          <strong>2026-07-11</strong>. Proximo ensaio trimestral alvo:{' '}
+          <strong>2026-10-15</strong>. Rotina: <code>docs/OPS-MENSAL-CAMPO.md</code> + checklist{' '}
+          <code>docs/CHECKLIST-RESTAURO-BACKUP.md</code>. Nunca Restore in-place em producao. Verificar:{' '}
+          <code>npm run ops:verificar-backup</code>. Export Storage + copia fora deste PC: mensal.
+        </OperationalNotice>
+      </div>
+
       <div style={{ marginTop: '0.75rem' }}>
         <Button disabled={busy || !canAdminister} onClick={() => void executarAgora()} type="button" variant="ghost">
           {busy ? 'A enviar backup...' : 'Fazer backup Oracle agora'}

@@ -359,9 +359,9 @@ describe('Simulacao rigorosa / lote MULTIPLOS com 4 desenhos', () => {
     expect(bloqueados[0]?.documentoId).toBe('c');
   });
 
-  it('recibo estorno parcial de 1 desenho lista so itens devolvidos com coluna Documento', () => {
+  it('recibo estorno parcial de 1 desenho lista so itens devolvidos com coluna Documento', async () => {
     const at = loteMulti4();
-    const html = montarHtmlReciboEstorno({
+    const html = await montarHtmlReciboEstorno({
       atendimento: at,
       documentoNumero: 'MULTIPLOS',
       documentoTitulo: 'Varios desenhos (ver coluna Documento)',

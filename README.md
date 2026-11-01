@@ -108,13 +108,13 @@ O comando devolve um JSON com `publicKey` e `privateKey`.
 Emitir uma licenca assinada para uma maquina autorizada:
 
 ```powershell
-npm run license:generate -- --private-key-file "C:\chaves\desktop-private-key.pem" --issued-to "ISO PRO - Cliente" --machine-fingerprint "FINGERPRINT_DA_MAQUINA" --machine-label "PC-ALMOXARIFADO" --expires-at "2026-12-31T23:59:59.000Z" --app-version "0.0.0"
+npm run license:generate -- --private-key-file "..\chaves\desktop-private-key.pem" --issued-to "ISO PRO - Cliente" --machine-fingerprint "FINGERPRINT_DA_MAQUINA" --machine-label "PC-ALMOXARIFADO" --expires-at "2026-12-31T23:59:59.000Z" --app-version "0.0.0"
 ```
 
 Para gerar diretamente um arquivo de licenca importavel no desktop:
 
 ```powershell
-npm run license:generate -- --private-key-file "C:\chaves\desktop-private-key.pem" --issued-to "ISO PRO - Cliente" --machine-fingerprint "FINGERPRINT_DA_MAQUINA" --machine-label "PC-ALMOXARIFADO" --expires-at "2026-12-31T23:59:59.000Z" --app-version "0.0.0" --output-file "C:\licencas\iso-pro-desktop-licenca.json"
+npm run license:generate -- --private-key-file "..\chaves\desktop-private-key.pem" --issued-to "ISO PRO - Cliente" --machine-fingerprint "FINGERPRINT_DA_MAQUINA" --machine-label "PC-ALMOXARIFADO" --expires-at "2026-12-31T23:59:59.000Z" --app-version "0.0.0" --output-file "C:\licencas\iso-pro-desktop-licenca.json"
 ```
 
 O comando devolve um JSON com:
@@ -123,13 +123,18 @@ O comando devolve um JSON com:
 - `payload`: resumo administrativo da licenca emitida
 - `registrationSql`: SQL pronto para registrar/atualizar a licenca na tabela `desktop_licencas`
 
-Fluxo recomendado:
+Fluxo recomendado (CLI):
 
 1. Vincular a maquina autorizada no desktop.
 2. Gerar a licenca assinada com o `machineFingerprint` dessa maquina.
 3. Executar no Supabase o `registrationSql` retornado pelo gerador.
 4. Importar no desktop o arquivo `.json` gerado ou preencher os campos manualmente.
 5. Salvar as configuracoes para ativar a validacao criptografica local.
+
+### Super-admin (UI na organização principal)
+
+Com a migração `plataforma_super_admin`, o secret `ISO_PRO_DESKTOP_LICENSE_PRIVATE_KEY` e a Edge `iso_pro_desktop_license` publicados, o admin da **organização principal** emite licenças no módulo **Licenças desktop** (empresa destino + descarregar JSON), sem CLI. Ver `supabase/functions/README.md`.
+
 
 ## Revogacao central de licenca desktop
 

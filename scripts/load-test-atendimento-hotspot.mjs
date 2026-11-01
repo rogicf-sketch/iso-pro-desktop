@@ -6,6 +6,7 @@
  *   node scripts/load-test-atendimento-hotspot.mjs --operators 10 --rounds 2
  */
 import { createClient } from '@supabase/supabase-js';
+import { assertLoadTestStagingOnly } from './load-test-staging-guard.mjs';
 
 const args = process.argv.slice(2);
 function arg(name, fallback) {
@@ -24,6 +25,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY || !TENANT_ID) {
   console.error('Defina SUPABASE_URL, SUPABASE_ANON_KEY e SUPABASE_TENANT_ID.');
   process.exit(1);
 }
+assertLoadTestStagingOnly(SUPABASE_URL);
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -51,20 +53,13 @@ async function submitHotspot(operatorId, round, baseline) {
       data: new Date().toISOString(),
     },
   ];
-  const documentos = [
-    {
-      id: HOTSPOT_DOC_ID,
-      numero: 'LOAD-HOTSPOT',
-      itens: [{ id: 'hot-item-1', codigo: 'HOT-MAT', quantidade: 100, quantidadeAtendida: operatorId }],
-    },
-  ];
   const t0 = performance.now();
+  // Historico-only (shape mobile): evita ISO_PRO_ATENDIMENTO_SEM_PROGRESSO do patch documentos fake.
   const { data, error } = await supabase.rpc('iso_pro_submit_atendimento_comando', {
     p_tenant_id: TENANT_ID,
     p_idempotency_key: key,
     p_baseline: baseline,
     p_historico_novas: historico,
-    p_documentos: documentos,
   });
   const ms = Math.round(performance.now() - t0);
   if (error) {
@@ -79,15 +74,16 @@ async function submitHotspot(operatorId, round, baseline) {
 }
 
 async function runRound(round) {
-  let baseline = await readBaseline();
   const tasks = [];
   for (let op = 1; op <= OPERATORS; op++) {
     tasks.push(
       (async () => {
+        let baseline = await readBaseline();
         let last = await submitHotspot(op, round, baseline);
         let retries = 0;
-        while (!last.ok && last.conflict && retries < 6) {
+        while (!last.ok && last.conflict && retries < 16) {
           retries += 1;
+          await new Promise((r) => setTimeout(r, 20 + retries * 15 + Math.floor(Math.random() * 40)));
           baseline = await readBaseline();
           last = await submitHotspot(op, round, baseline);
         }

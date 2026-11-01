@@ -7,12 +7,14 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isoProJwtEpoch } from './isoProJwtEpoch';
 import { resetSupabaseClient } from './supabase';
 
 /** Tenant por omissão para bases já existentes (uma organização). */
 export const ISO_PRO_DEFAULT_TENANT_ID = '00000000-0000-0000-0000-000000000001';
 
 export const ISO_PRO_TENANT_CONTEXT_STORAGE_KEY = 'iso-pro-desktop-cloud-tenant-ativo-v1';
+const AUTH_SESSION_STORAGE_KEY_BASE = 'iso-pro-desktop-session';
 
 type TenantEstadoV1 = {
   version: 1;
@@ -21,6 +23,18 @@ type TenantEstadoV1 = {
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function clearAuthSessionKeysForTenant(tenantId: string): void {
+  if (typeof window === 'undefined') return;
+  const keys = [AUTH_SESSION_STORAGE_KEY_BASE];
+  if (tenantId && tenantId !== ISO_PRO_DEFAULT_TENANT_ID) {
+    keys.push(`${AUTH_SESSION_STORAGE_KEY_BASE}::tenant:${tenantId}`);
+  }
+  for (const key of keys) {
+    window.localStorage.removeItem(key);
+    window.sessionStorage.removeItem(key);
+  }
 }
 
 export function getActiveTenantId(): string {
@@ -45,16 +59,21 @@ export function setActiveTenantId(id: string): void {
   localStorage.setItem(ISO_PRO_TENANT_CONTEXT_STORAGE_KEY, JSON.stringify(next));
   resetSupabaseClient();
   if (typeof window !== 'undefined') {
-    void import('./isoProJwtSession').then((m) => m.clearIsoProJwtSession());
+    const scheduledEpoch = isoProJwtEpoch();
+    void import('./isoProJwtSession').then((m) => m.clearIsoProJwtSession(scheduledEpoch));
     void import('./isoProSnapshot').then((m) => m.invalidateIsoProSnapshotCache());
   }
 }
 
-/** Troca empresa na nuvem e recarrega (sessão será revalidada contra o novo tenant). */
+/** Troca empresa na nuvem e força novo login (JWT/MFA são por conta Auth da empresa). */
 export function aplicarTenantAtivoERecarregar(id: string): void {
   if (id === getActiveTenantId()) return;
+  clearAuthSessionKeysForTenant(getActiveTenantId());
   setActiveTenantId(id);
-  window.location.reload();
+  clearAuthSessionKeysForTenant(id);
+  if (typeof window !== 'undefined') {
+    window.location.assign(`${window.location.pathname}${window.location.search}#/login`);
+  }
 }
 
 export type IsoProTenantListItem = {

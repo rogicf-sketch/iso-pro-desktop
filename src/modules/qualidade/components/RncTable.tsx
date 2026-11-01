@@ -1,7 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconEye, IconPencil, IconPrinter } from '../../../components/ui/TableActionIcons';
 import { createStatusMeta } from '../../../components/ui/statusMeta';
 import type { RncRegistro } from '../types/qualidade.types';
 
@@ -25,10 +26,10 @@ export function RncTable({ items, onEdit, onPrint, onVisualizar, canEdit }: Prop
     <DataTable
       getRowClassName={(item) => getTableRowClassName(item.status === 'aberto' ? 'critical' : item.status === 'em_tratativa' ? 'warning' : 'normal')}
       columns={[
-        { key: 'codigo', header: 'Codigo', render: (item) => item.codigo },
+        { key: 'codigo', header: 'Código', render: (item) => item.codigo },
         { key: 'nf', header: 'NF', render: (item) => item.recebimentoNotaFiscal ?? '—' },
         { key: 'setor', header: 'Setor', render: (item) => item.setor },
-        { key: 'responsavel', header: 'Responsavel', render: (item) => item.responsavel },
+        { key: 'responsavel', header: 'Responsável', render: (item) => item.responsavel },
         { key: 'data', header: 'Data', render: (item) => item.dataRegistro },
         {
           key: 'status',
@@ -40,35 +41,36 @@ export function RncTable({ items, onEdit, onPrint, onVisualizar, canEdit }: Prop
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
-              <ActionButton
-                enabledLabel="Visualizar"
-                enabledTitle="Pre-visualizar relatorio RNC (impressao / PDF)"
-                onClick={() => onVisualizar(item)}
-                variant="ghost"
-              />
-              <ActionButton enabledLabel="Imprimir" enabledTitle="Imprimir RNC" onClick={() => onPrint(item)} variant="ghost" />
+              <TableIconButton label="Pre-visualizar relatorio RNC (impressao / PDF)" onClick={() => onVisualizar(item)}>
+                <IconEye />
+              </TableIconButton>
+              <TableIconButton label="Imprimir RNC" onClick={() => onPrint(item)}>
+                <IconPrinter />
+              </TableIconButton>
               {canEdit ? (
-                <ActionButton
+                <TableIconButton
                   disabled={item.status === 'concluido' || item.status === 'cancelado'}
-                  disabledLabel={item.status === 'cancelado' ? 'Cancelado' : 'Travado'}
-                  disabledTitle={
+                  label={
                     item.status === 'cancelado'
                       ? 'RNC cancelada nao pode ser editada por este fluxo.'
-                      : 'RNC concluida nao pode ser editada por este fluxo.'
+                      : item.status === 'concluido'
+                        ? 'RNC concluida nao pode ser editada por este fluxo.'
+                        : 'Editar RNC'
                   }
-                  enabledLabel="Editar"
-                  enabledTitle="Editar RNC"
                   onClick={() => onEdit(item)}
-                  variant="ghost"
-                />
+                >
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
             </div>
           ),
         },
       ]}
+      emptyDescription="Registe uma RNC ou ajuste o filtro de busca/status."
+      emptyText="Nenhuma RNC encontrada"
       items={items}
     />
   );

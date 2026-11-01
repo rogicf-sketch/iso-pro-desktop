@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld('isoProDesktop', {
   loadRirPdfFontesEmbutidas: () => ipcRenderer.invoke('desktop-rir:fontes-embutidas'),
   /** Relatórios HTML — pré-visualização (evita `window.open` bloqueado no Electron). */
   beginHtmlPreviewLoading: (titulo) => ipcRenderer.invoke('desktop-preview:html-begin', titulo),
-  previewHtml: (html) => ipcRenderer.invoke('desktop-preview:html', html),
+  previewHtml: (html, assets) => ipcRenderer.invoke('desktop-preview:html', html, assets),
   verifySmtpMail: (payload) => ipcRenderer.invoke('desktop-mail:verify-smtp', payload),
   sendMail: (payload) => ipcRenderer.invoke('desktop-mail:send', payload),
   /** HTTP Supabase via processo principal (TLS/rede fiavel no desktop empacotado). */

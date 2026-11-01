@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFornecedoresSotOnCloud } from '../../../lib/cadastrosTabelas';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import type { FornecedorFormData } from '../types/fornecedor.types';
@@ -19,6 +20,13 @@ vi.mock('../../../lib/snapshotSliceRead', () => ({
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: vi.fn(() => true),
+}));
+
+vi.mock('../../../lib/cadastrosTabelas', () => ({
+  writeFornecedoresSotOnCloud: vi.fn(async () => ({
+    updatedAt: new Date().toISOString(),
+    missing: false,
+  })),
 }));
 
 vi.mock('../../../lib/isoProSnapshot', async (importOriginal) => {
@@ -73,6 +81,10 @@ describe('fornecedores.service / salvarFornecedor criacao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeFornecedoresSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -92,10 +104,14 @@ describe('fornecedores.service / salvarFornecedor criacao (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue({ fornecedores: [] });
+    mockReadForWrite.mockResolvedValue({
+      payload: { fornecedores: [] },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito fornecedor.'));
+    vi.mocked(writeFornecedoresSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito fornecedor.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -132,6 +148,10 @@ describe('fornecedores.service / salvarFornecedor edicao (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeFornecedoresSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -166,7 +186,7 @@ describe('fornecedores.service / salvarFornecedor edicao (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito edicao forn.'));
+    vi.mocked(writeFornecedoresSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito edicao forn.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -174,7 +194,9 @@ describe('fornecedores.service / salvarFornecedor edicao (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(isSnapshotConflictResult(result)).toBe(true);
-    expect(store[STORAGE_KEY]).toBe(JSON.stringify([]));
+    // Load espelha a nuvem no local; o conflito bloqueia writeLocal da edicao.
+    const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { id: string; nome: string }[];
+    expect(local.find((f) => f.id === 'for-edit')?.nome).toBe('Forn Antigo');
   });
 
   it('em sucesso remoto atualiza copia local', async () => {
@@ -212,6 +234,10 @@ describe('fornecedores.service / toggleFornecedorStatus (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeFornecedoresSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
     store = {};
     vi.stubGlobal(
       'localStorage',
@@ -246,7 +272,7 @@ describe('fornecedores.service / toggleFornecedorStatus (Supabase)', () => {
   });
 
   it('em conflito de snapshot nao persiste localmente', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito toggle forn.'));
+    vi.mocked(writeFornecedoresSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito toggle forn.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -254,7 +280,9 @@ describe('fornecedores.service / toggleFornecedorStatus (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(isSnapshotConflictResult(result)).toBe(true);
-    expect(store[STORAGE_KEY]).toBe(JSON.stringify([]));
+    // Load espelha a nuvem; o conflito bloqueia writeLocal do toggle.
+    const local = JSON.parse(store[STORAGE_KEY] ?? '[]') as { id: string; ativo: boolean }[];
+    expect(local.find((f) => f.id === 'for-tog')?.ativo).toBe(true);
   });
 
   it('em sucesso remoto atualiza ativo na copia local', async () => {

@@ -53,6 +53,40 @@ export async function persistRirRegistroToStorage(reg: RirRegistro): Promise<Rir
   return slimRirForCloudIndex(reg, storageRef);
 }
 
+/**
+ * Junta índice (tabela/snapshot) + corpo no Storage.
+ * O índice manda no cabeçalho (status, codigo, laudo, …): o JSON no Storage
+ * pode vir de cache CDN e sobrescreveria um "tratado" acabado de gravar.
+ */
+export function mergeRirIndexWithStorageBody(index: RirRegistro, full: RirRegistro): RirRegistro {
+  return {
+    ...full,
+    id: index.id || full.id,
+    codigo: index.codigo || full.codigo,
+    status: index.status ?? full.status,
+    dataRegistro: index.dataRegistro || full.dataRegistro,
+    laudo: index.laudo ?? full.laudo,
+    recebimentoId: index.recebimentoId || full.recebimentoId,
+    recebimentoNotaFiscal: index.recebimentoNotaFiscal ?? full.recebimentoNotaFiscal,
+    recebimentoFornecedor: index.recebimentoFornecedor ?? full.recebimentoFornecedor,
+    recebimentoRomaneio: index.recebimentoRomaneio ?? full.recebimentoRomaneio,
+    recebimentoData: index.recebimentoData ?? full.recebimentoData,
+    fornecedorNome: index.fornecedorNome || full.fornecedorNome,
+    procedimentoNumero: index.procedimentoNumero || full.procedimentoNumero,
+    disciplina: index.disciplina || full.disciplina,
+    uo: index.uo || full.uo,
+    localObra: index.localObra || full.localObra,
+    contratoNumero: index.contratoNumero || full.contratoNumero,
+    responsavel: index.responsavel || full.responsavel,
+    // Corpo pesado: preferir Storage se existir
+    itensRir: Array.isArray(full.itensRir) && full.itensRir.length > 0 ? full.itensRir : index.itensRir ?? [],
+    instrumentos: full.instrumentos || index.instrumentos || '',
+    documentosQc: full.documentosQc || index.documentosQc || '',
+    observacoesQc: full.observacoesQc || index.observacoesQc || '',
+    payloadStorageRef: index.payloadStorageRef ?? full.payloadStorageRef,
+  };
+}
+
 /** Se tiver `payloadStorageRef`, descarrega o corpo completo do Storage. */
 export async function hydrateRirRegistroFromStorage(reg: RirRegistro): Promise<RirRegistro> {
   const ref = reg.payloadStorageRef?.trim() ?? '';
@@ -62,9 +96,5 @@ export async function hydrateRirRegistroFromStorage(reg: RirRegistro): Promise<R
   const full = await downloadEvidenciaJson<RirRegistro>(ref);
   if (!full || typeof full !== 'object') return reg;
 
-  return {
-    ...full,
-    id: reg.id || full.id,
-    payloadStorageRef: ref,
-  };
+  return mergeRirIndexWithStorageBody(reg, { ...full, payloadStorageRef: ref });
 }

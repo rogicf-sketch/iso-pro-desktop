@@ -1,0 +1,28 @@
+---
+description: Não pedir ao utilizador para refazer o que já está feito/proveado
+alwaysApply: true
+---
+
+# Não refazer o que já está construído / em produção
+
+Antes de pedir ao utilizador para **instalar, configurar, testar MFA, revalidar JWT, re-preencher checklist**, ler:
+
+1. `docs/CHECKLIST-CAMPO-P1-239-MFA.md` — secção **Já fechado**
+2. `docs/ROADMAP-EXECUCAO-P0-P1.md` e `docs/RUNBOOK-P0-OPS-TOP-MUNDIAL.md`
+3. Checklists com `[x]` (JWT, Sentry, etc.)
+4. Histórico desta conversa e transcripts recentes
+
+## Já tratado como FEITO (não pedir de novo)
+
+- **MFA admin TOTP** — login pede código 6 dígitos há semanas → **MFA OK**
+- **EXE PC instalado** (desde ~2026-08-05) — não pedir reinstalar do zero; só mencionar update se a versão for &lt; **0.1.247** (gate) ou &lt; **0.1.257** (última recomendada)
+- **JWT cutover login** (anon bloqueado em auth) — feito
+- **JWT onda 2 LIVE** (revoke writes + smoke) — feito **2026-08-25**; peek anon mantido de propósito (onda 2b depois)
+- **Atendimento perf prod** + APK **1.0.125** — feito; rollout campo pendente se posts ainda em versão antiga
+- **SoT hard-fail / migrações Ago em prod** — feitos nos runbooks
+
+## Só pedir ao utilizador o que é NOVO ou bloqueante
+
+Ex.: aplicar migração em **prod**, smoke humano JWT write em staging se ainda `[ ]`, cutover `sa-east-1`, posts **adicionais** ainda não registados.
+
+Quando o utilizador disser que algo “já tem / já faz tempo”, **aceitar e marcar `[x]`** — não inventar passos de reconfiguração.

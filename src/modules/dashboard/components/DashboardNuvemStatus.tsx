@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
+import {
+  reconcileAtendimentoHistorico,
+  type AtendimentoHistoricoReconcileResult,
+} from '../../../lib/atendimentoHistoricoReconcile';
 import { clearDualWriteFailures, listDualWriteFailures } from '../../../lib/dualWriteEscala';
 import {
   ensureEscalaOutboxPendingBestEffort,
@@ -8,8 +12,14 @@ import {
   type EscalaOutboxDomain,
   type EscalaOutboxStatus,
 } from '../../../lib/escalaOutbox';
+import {
+  reconcileEscalaSot,
+  runEscalaSotReconcileBestEffort,
+  type EscalaSotReconcileResult,
+} from '../../../lib/escalaSotReconcile';
 import { getOperationalSloSummary } from '../../../lib/operationalSlo';
 import { getReleaseChannel } from '../../../lib/releaseChannel';
+import { getSotFallbackSummary } from '../../../lib/sotFallbackTelemetry';
 import type { SupabaseQuotaUsage } from '../../../lib/supabaseQuotaUsage';
 import { formatQuotaBytes } from '../../../lib/supabaseQuotaUsage';
 import type { SnapshotSaudeNuvem } from '../../configuracoes/services/snapshotSaudeNuvem.service';
@@ -51,14 +61,24 @@ export function DashboardNuvemStatus({
     panel.status === 'missing' ? '—' : snapshotSaude ? snapshotSaude.payloadLabel : refreshing ? '…' : '—';
   const dualFailures = listDualWriteFailures();
   const slo = getOperationalSloSummary();
+  const fallbacks = getSotFallbackSummary();
   const channel = getReleaseChannel();
   const [outbox, setOutbox] = useState<EscalaOutboxStatus | null>(null);
+  const [sot, setSot] = useState<EscalaSotReconcileResult | null>(null);
+  const [atdHistorico, setAtdHistorico] = useState<AtendimentoHistoricoReconcileResult | null>(null);
   const [flushing, setFlushing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void fetchEscalaOutboxStatus().then((status) => {
-      if (!cancelled) setOutbox(status);
+    void Promise.all([
+      fetchEscalaOutboxStatus(),
+      reconcileEscalaSot({ heal: false }),
+      reconcileAtendimentoHistorico({ heal: false }),
+    ]).then(([status, sotResult, atdResult]) => {
+      if (cancelled) return;
+      setOutbox(status);
+      setSot(sotResult);
+      setAtdHistorico(atdResult);
     });
     return () => {
       cancelled = true;
@@ -67,18 +87,24 @@ export function DashboardNuvemStatus({
 
   const outboxFailed = outbox?.failed ?? 0;
   const outboxPending = (outbox?.pending ?? 0) + (outbox?.processing ?? 0);
-  const escalaProblems = outboxFailed + dualFailures.length;
+  const sotDiverged = sot && !sot.ok ? sot.diverged.length : 0;
+  const atdDiverged = Boolean(atdHistorico && !atdHistorico.ok);
+  const escalaProblems = outboxFailed + dualFailures.length + sotDiverged + (atdDiverged ? 1 : 0);
   const dualTone = escalaProblems > 0 ? 'warn' : outboxPending > 0 ? 'warn' : 'ok';
   const escalaValue =
-    outbox == null && dualFailures.length === 0
+    outbox == null && dualFailures.length === 0 && sot == null && atdHistorico == null
       ? 'OK'
       : outboxFailed > 0
         ? `${outboxFailed} falha(s)`
-        : outboxPending > 0
-          ? `${outboxPending} na fila`
-          : dualFailures.length > 0
-            ? `${dualFailures.length} local`
-            : 'OK';
+        : atdDiverged
+          ? 'Historico ATD'
+          : sotDiverged > 0
+            ? `SoT ${sotDiverged}`
+            : outboxPending > 0
+              ? `${outboxPending} na fila`
+              : dualFailures.length > 0
+                ? `${dualFailures.length} local`
+                : 'OK';
   const escalaMeta =
     outboxFailed > 0
       ? (outbox?.failures ?? [])
@@ -86,11 +112,15 @@ export function DashboardNuvemStatus({
           .filter(Boolean)
           .slice(0, 4)
           .join(', ') || 'Outbox servidor'
-      : outboxPending > 0
-        ? 'A sincronizar tabelas de escala'
-        : dualFailures.length > 0
-          ? dualFailures.map((f) => f.domain).join(', ')
-          : 'Tabelas de escala alinhadas';
+      : atdDiverged
+        ? `Historico ATD divergente: faltam ${atdHistorico!.missingInTableCount} na tabela`
+        : sotDiverged > 0
+          ? `Divergencia: ${sot!.diverged.slice(0, 4).join(', ')}`
+          : outboxPending > 0
+            ? 'A sincronizar tabelas de escala'
+            : dualFailures.length > 0
+              ? dualFailures.map((f) => f.domain).join(', ')
+              : 'Tabelas de escala alinhadas';
 
   const dbTone = quotaUsage?.databaseTone ?? 'neutral';
   const stTone = quotaUsage?.storageTone ?? 'neutral';
@@ -167,7 +197,10 @@ export function DashboardNuvemStatus({
           <span className="dashboard-widget__label">SLO 24h</span>
           <strong className="dashboard-widget__value">{slo.label}</strong>
           <span className="dashboard-widget__meta">
-            Conflitos {slo.snapshotConflicts} · sync {slo.dualWriteFailures}
+            Conflitos {slo.snapshotConflicts} · falhas sync {slo.dualWriteFailures}
+            {slo.sotDivergences > 0 ? ` · heal SoT ${slo.sotDivergences}` : ''}
+            {fallbacks.total24h > 0 ? ` · fallback SoT ${fallbacks.total24h}` : ''}
+            {slo.lockLong > 0 ? ` · locks longos ${slo.lockLong}` : ''}
             {channel === 'canary' ? ' · canary' : ''}
           </span>
         </article>
@@ -176,13 +209,14 @@ export function DashboardNuvemStatus({
           <span className="dashboard-widget__label">Escala</span>
           <strong className="dashboard-widget__value">{escalaValue}</strong>
           <span className="dashboard-widget__meta">{escalaMeta}</span>
-          {outboxPending > 0 || outboxFailed > 0 || dualFailures.length > 0 ? (
+          {outboxPending > 0 || outboxFailed > 0 || dualFailures.length > 0 || sotDiverged > 0 || atdDiverged ? (
             <Button
               disabled={flushing}
               onClick={() => {
                 setFlushing(true);
                 const domains = new Set<EscalaOutboxDomain>();
                 for (const f of dualFailures) domains.add(f.domain);
+                for (const d of sot?.diverged ?? []) domains.add(d);
                 for (const f of outbox?.failures ?? []) {
                   const d = String(f.domain ?? '');
                   if (
@@ -199,15 +233,24 @@ export function DashboardNuvemStatus({
                   const list =
                     domains.size > 0
                       ? [...domains]
-                      : outboxFailed > 0
+                      : outboxFailed > 0 || sotDiverged > 0
                         ? (['documentos', 'recebimentos', 'inventarios', 'rir', 'rnc'] as EscalaOutboxDomain[])
                         : [];
                   for (const domain of list) {
                     await ensureEscalaOutboxPendingBestEffort(domain, 'dashboard_resync');
                   }
                   if (list.length === 0) await flushEscalaOutboxBestEffort(8);
+                  const [sotAfter, atdAfter] = await Promise.all([
+                    runEscalaSotReconcileBestEffort({
+                      heal: true,
+                      source: 'dashboard_resync',
+                    }),
+                    reconcileAtendimentoHistorico({ heal: true }),
+                  ]);
                   const status = await fetchEscalaOutboxStatus();
                   setOutbox(status);
+                  setSot(sotAfter);
+                  setAtdHistorico(atdAfter);
                 })().finally(() => {
                   if (dualFailures.length > 0) clearDualWriteFailures();
                   setFlushing(false);
@@ -217,7 +260,15 @@ export function DashboardNuvemStatus({
               type="button"
               variant="ghost"
             >
-              {flushing ? 'A sincronizar…' : outboxPending > 0 || outboxFailed > 0 ? 'Sincronizar fila' : 'Limpar aviso'}
+              {flushing
+                ? 'A sincronizar…'
+                : atdDiverged
+                  ? 'Reparar Historico ATD'
+                  : sotDiverged > 0
+                    ? 'Reparar SoT'
+                    : outboxPending > 0 || outboxFailed > 0
+                      ? 'Sincronizar fila'
+                      : 'Limpar aviso'}
             </Button>
           ) : null}
         </article>
@@ -262,7 +313,7 @@ export function DashboardNuvemStatus({
             waiting={quotaWaiting}
             percent={quotaUsage?.databasePercent ?? 0}
             tone={dbTone}
-            size={96}
+            size={48}
           />
         </article>
 
@@ -304,7 +355,7 @@ export function DashboardNuvemStatus({
             waiting={quotaWaiting}
             percent={quotaUsage?.storagePercent ?? 0}
             tone={stTone}
-            size={96}
+            size={48}
           />
         </article>
       </div>

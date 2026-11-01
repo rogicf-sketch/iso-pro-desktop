@@ -1,12 +1,15 @@
 import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { avisarPreservacaoLocalStorageCorrupto } from '../../../lib/localStoragePreservacao';
+import { writeEtiquetasSotOnCloud } from '../../../lib/cadastrosTabelas';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import {
-  commitIsoProSnapshotPatch,
+  invalidateIsoProSnapshotCache,
+  isIsoProSnapshotConflictError,
   readIsoProSnapshotSlicesForWrite,
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
-import { readRemoteOrLocal, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
+import { REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { executeWrite, withLocalFallback } from '../../../lib/service-result';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
@@ -62,9 +65,20 @@ const seedData: Etiqueta[] = [
   },
 ];
 
+const DEMO_ETIQUETA_IDS = new Set(seedData.map((e) => e.id));
+
+function isSomenteSeedDemo(items: Etiqueta[]): boolean {
+  return items.length > 0 && items.every((e) => DEMO_ETIQUETA_IDS.has(e.id));
+}
+
+function localEtiquetasPareceSeedOuVazio(items: Etiqueta[]): boolean {
+  return items.length === 0 || isSomenteSeedDemo(items);
+}
+
 function readAll(): Etiqueta[] {
   const raw = localStorage.getItem(etiquetasStorageKey());
   if (!raw) {
+    if (hasSupabaseConfig()) return [];
     localStorage.setItem(etiquetasStorageKey(), JSON.stringify(seedData));
     return seedData;
   }
@@ -74,6 +88,10 @@ function readAll(): Etiqueta[] {
     const validated = parseEtiquetasPersistidas(parsed);
     if (!validated) {
       avisarPreservacaoLocalStorageCorrupto('Etiquetas', etiquetasStorageKey());
+      return [];
+    }
+    if (hasSupabaseConfig() && isSomenteSeedDemo(validated)) {
+      localStorage.removeItem(etiquetasStorageKey());
       return [];
     }
     return validated;
@@ -97,26 +115,45 @@ type SnapshotPayload = {
   etiquetas?: unknown;
 };
 
+/**
+ * SoT table-first: `iso_pro_write_etiquetas_sot` (tabelas + projecao snapshot).
+ * Sem fallback patch_snapshot (hard-fail sot_require_rpc).
+ */
 async function writeSnapshotEtiquetas(items: Etiqueta[]): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['etiquetas']);
-    return {
-      baselineUpdatedAt,
-      patch: {
-        etiquetas: items,
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
-  });
+  const etiquetas = items;
+  const maxAttempts = 5;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(['etiquetas']);
+      const sot = await writeEtiquetasSotOnCloud({
+        baselineUpdatedAt,
+        replaceAll: etiquetas,
+      });
+      assertNoSilentSotFallback('etiquetas', sot.missing);
+      invalidateIsoProSnapshotCache();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar etiquetas na nuvem.');
 }
 
 /**
- * Se a nuvem nao tem etiquetas e este PC tem lista local, promove uma vez para o snapshot (nao perde cadastro antigo).
+ * Se a nuvem nao tem etiquetas e este PC tem lista local real (nao seed demo), promove uma vez.
  */
 async function garantirMigracaoLocalParaNuvemSeNecessario(): Promise<void> {
   if (!hasSupabaseConfig()) return;
   const local = readAll();
-  if (local.length === 0) return;
+  if (local.length === 0 || isSomenteSeedDemo(local)) return;
 
   const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(['etiquetas']);
   const nuvem = parseSnapshotEtiquetasRaw(payload.etiquetas);
@@ -131,8 +168,27 @@ async function readSnapshotEtiquetas(): Promise<Etiqueta[]> {
   return parseSnapshotEtiquetasRaw(payload.etiquetas);
 }
 
+async function loadEtiquetasFromCloudOrLocal(): Promise<Etiqueta[]> {
+  const localNow = readAll();
+  const preferMs = localEtiquetasPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
+  const { data } = await withLocalFallback({
+    shouldTryRemote: shouldTryRemoteRead(),
+    loadRemote: async () => {
+      const remote = await readSnapshotEtiquetas();
+      if (remote.length > 0 || !localEtiquetasPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
+    loadLocal: () => readAll(),
+    fallbackMessage: 'Falha ao consultar etiquetas no Supabase.',
+    preferMs,
+  });
+  return data;
+}
+
 async function loadEtiquetas(): Promise<Etiqueta[]> {
-  return readRemoteOrLocal({ readRemote: readSnapshotEtiquetas, readLocal: readAll });
+  return loadEtiquetasFromCloudOrLocal();
 }
 
 /** Retorna etiquetas completas para os ids informados (ordem nao garantida). */
@@ -240,6 +296,7 @@ export function getEtiquetaPreset(modelo: EtiquetaModelo, formato: EtiquetaForma
   if (formato === 'termica_58') return { larguraMm: 58, alturaMm: modelo === 'cartao' ? 90 : 40 };
   if (formato === 'termica_80') return { larguraMm: 80, alturaMm: modelo === 'cartao' ? 100 : 60 };
   if (formato === 'a4_1col') return { larguraMm: 190, alturaMm: modelo === 'cartao' ? 80 : 60 };
+  if (formato === 'a4_3col') return { larguraMm: 63, alturaMm: modelo === 'cartao' ? 48 : 36 };
   return { larguraMm: 100, alturaMm: modelo === 'cartao' ? 70 : 50 };
 }
 
@@ -252,11 +309,20 @@ export function validateEtiqueta(data: EtiquetaFormData): string | null {
 }
 
 export async function listarEtiquetas(filtro: EtiquetaFiltro): Promise<ServiceResult<PaginatedResult<EtiquetaListItem>>> {
+  const localNow = readAll();
+  const preferMs = localEtiquetasPareceSeedOuVazio(localNow) ? REMOTE_READ_TIMEOUT_MS : undefined;
   const fallbackResult = await withLocalFallback({
     shouldTryRemote: shouldTryRemoteRead(),
-    loadRemote: () => readSnapshotEtiquetas(),
+    loadRemote: async () => {
+      const remote = await readSnapshotEtiquetas();
+      if (remote.length > 0 || !localEtiquetasPareceSeedOuVazio(localNow)) {
+        writeAll(remote);
+      }
+      return remote;
+    },
     loadLocal: () => readAll(),
     fallbackMessage: 'Falha ao consultar etiquetas no Supabase.',
+    preferMs,
   });
 
   let items = [...fallbackResult.data];

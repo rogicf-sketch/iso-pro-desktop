@@ -38,6 +38,10 @@ describe('validateDocumento', () => {
     expect(validateDocumento({ ...base, dataDocumento: '  ' })).toBe('Informe a data do documento.');
   });
 
+  it('exige descricao do documento', () => {
+    expect(validateDocumento({ ...base, descricao: '  ' })).toBe('Informe a descricao do documento.');
+  });
+
   it('exige ao menos um item', () => {
     expect(validateDocumento({ ...base, itens: [] })).toBe('Adicione ao menos um item ao documento.');
   });

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeDocumentosSotOnCloud } from '../../../lib/documentosPlanejamentoTabelas';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
+import { invalidateMateriaisBaseCache } from '../../materiais/services/materiais.service';
 import type { DocumentoFormData } from '../types/documento.types';
 import { cancelarDocumento, excluirDocumentoDefinitivamente, excluirDocumentosDefinitivamente, salvarDocumento } from './documentos.service';
 
@@ -25,6 +27,18 @@ vi.mock('../../../lib/supabase', async (importOriginal) => {
     ...actual,
     hasSupabaseConfig: vi.fn(() => true),
     shouldUseCloudMaterials: vi.fn(() => false),
+    getSupabase: vi.fn(() => null),
+  };
+});
+
+vi.mock('../../../lib/documentosPlanejamentoTabelas', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../lib/documentosPlanejamentoTabelas')>();
+  return {
+    ...actual,
+    writeDocumentosSotOnCloud: vi.fn(async () => ({
+      updatedAt: new Date().toISOString(),
+      missing: false,
+    })),
   };
 });
 
@@ -134,6 +148,11 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeDocumentosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    invalidateMateriaisBaseCache();
     resetMateriaisMockParaDocumentos();
     store = {};
     const ls = {
@@ -173,11 +192,36 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
         },
       ],
     });
+    mockReadForWrite.mockResolvedValue({
+      payload: {
+        documentos: [
+          {
+            id: 'doc-edit',
+            numero: 'N1',
+            revisao: 'A',
+            data: '2026-01-10',
+            descricao: 'Antigo',
+            responsavel: 'Resp',
+            itens: [
+              {
+                id: 'item-1',
+                codigo: 'C1',
+                descricao: 'Material',
+                unidade: 'UN',
+                quantidade: 10,
+                quantidadeAtendida: 0,
+              },
+            ],
+          },
+        ],
+      },
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
     seedMateriaisLocalStorageParaValidacao(store);
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Dados alterados por outro usuario.'));
+    vi.mocked(writeDocumentosSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Dados alterados por outro usuario.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -188,7 +232,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
     expect(result.error).toBe('Dados alterados por outro usuario.');
     expect(result.meta?.snapshotConflict).toBe(true);
     expect(store[STORAGE_KEY]).toBe(JSON.stringify([]));
-    expect(mockCommitWrite).toHaveBeenCalledTimes(1);
+    expect(writeDocumentosSotOnCloud).toHaveBeenCalled();
   });
 
   it('recusa salvar quando o codigo do material nao existe no cadastro de materiais', async () => {
@@ -220,7 +264,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/BV-SUB-TRA501/);
     expect(result.error).toMatch(/nao cadastrado/i);
-    expect(mockCommitWrite).not.toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).not.toHaveBeenCalled();
   });
 
   it('em sucesso remoto persiste copia local', async () => {
@@ -258,7 +302,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/armazenamento deste navegador/i);
     expect(result.error).toMatch(/Enviar planejamento deste PC para a nuvem/i);
-    expect(mockCommitWrite).not.toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).not.toHaveBeenCalled();
   });
 
   it('permite editar documento com atendimento (subir revisao / aumentar qtd) e preserva qtd atendida', async () => {
@@ -344,7 +388,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
     expect(result.data?.itens).toHaveLength(2);
     expect(result.data?.itens[0].quantidadeAtendida).toBe(4);
     expect(result.data?.itens[0].quantidadeProjeto).toBe(12);
-    expect(mockCommitWrite).toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).toHaveBeenCalled();
   });
 
   it('recusa reduzir quantidade abaixo do ja atendido', async () => {
@@ -390,7 +434,7 @@ describe('documentos.service / salvarDocumento (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/nao pode ser menor/i);
-    expect(mockCommitWrite).not.toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).not.toHaveBeenCalled();
   });
 });
 
@@ -451,6 +495,11 @@ describe('documentos.service / cancelarDocumento (Supabase)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeDocumentosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    invalidateMateriaisBaseCache();
     resetMateriaisMockParaDocumentos();
     store = {};
     vi.stubGlobal(
@@ -471,11 +520,15 @@ describe('documentos.service / cancelarDocumento (Supabase)', () => {
       } as Storage,
     );
     mockReadPayload.mockResolvedValue(payloadDocCancelarPendente());
+    mockReadForWrite.mockResolvedValue({
+      payload: payloadDocCancelarPendente(),
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
     seedMateriaisLocalStorageParaValidacao(store);
   });
 
   it('em conflito de snapshot nao persiste localmente e expoe meta.snapshotConflict', async () => {
-    mockCommitWrite.mockRejectedValue(new IsoProSnapshotConflictError('Conflito no cancelamento.'));
+    vi.mocked(writeDocumentosSotOnCloud).mockRejectedValue(new IsoProSnapshotConflictError('Conflito no cancelamento.'));
 
     store[STORAGE_KEY] = JSON.stringify([]);
 
@@ -521,7 +574,7 @@ describe('documentos.service / cancelarDocumento (Supabase)', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/armazenamento deste navegador/i);
-    expect(mockCommitWrite).not.toHaveBeenCalled();
+    expect(writeDocumentosSotOnCloud).not.toHaveBeenCalled();
   });
 
   it('documento nao pendente exige justificativa administrativa', async () => {
@@ -566,6 +619,11 @@ describe('documentos.service / excluirDocumentoDefinitivamente (Supabase)', () =
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    vi.mocked(writeDocumentosSotOnCloud).mockResolvedValue({
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      missing: false,
+    });
+    invalidateMateriaisBaseCache();
     resetMateriaisMockParaDocumentos();
     store = {};
     const ls = {

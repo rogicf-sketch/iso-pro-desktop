@@ -2,10 +2,12 @@ import { getScopedIsoProStorageKey } from '../../../lib/isoProAmbiente';
 import { readRemoteOrLocal, shouldTryRemoteRead, withRemoteReadTimeout, REMOTE_READ_TIMEOUT_HEAVY_MS } from '../../../lib/dataReadPolicy';
 import { isIsoProDesktop } from '../../../lib/pdfCloud/pdfCloudConfig';
 import { traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
-import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { getSupabase, hasSupabaseConfig, rpcComJwtSemFila, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { ensureIsoProDataSessionReadable } from '../../../lib/isoProJwtSession';
+import { fetchAllExportRpcPages } from '../../../lib/exportRpcPages';
 import {
   readIsoProSnapshotSlicesForWrite,
-  readIsoProSnapshotStats,
+  readIsoProSnapshotCursor,
   SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS,
   SNAPSHOT_ATENDIMENTO_BAIXA_WRITE_SLICE_KEYS,
   SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
@@ -43,6 +45,10 @@ import {
   numerosDocumentosDistintosItens,
   resolverIndiceDocumentoParaItemEstorno,
 } from '../utils/estornoDocumento.utils';
+import {
+  isSyntheticLoadTestAtendimento,
+  resolveDataAtendimentoIso,
+} from '../utils/isSyntheticLoadTestAtendimento';
 import {
   buildDesktopAtendimentoIdempotencyKey,
   getAtendimentoCloudBaselineCursor,
@@ -111,28 +117,36 @@ function estornoLogStorageKey(): string {
 
 function bloqueioLocalChavesAtendimento(param: {
   documentosLength: number;
-  materiaisLength: number;
+  /**
+   * Tamanho da lista de materiais que sera gravada no localStorage.
+   * `null` = nao persiste materiais nesta operacao (cadastro na nuvem) — nao comparar
+   * com o JSON local, senao um catalogo residual no PC bloqueia atendimento a falso.
+   */
+  materiaisLength: number | null;
   atendimentosLength: number;
 }): string | null {
-  return mensagemSeSubstituirLocalPerderiaCadastros(
-    [
-      {
-        storageKey: documentosKeyAtendimento(),
-        tamanhoNovaLista: param.documentosLength,
-        nomeCurto: 'documento(s) de planejamento',
-      },
-      {
-        storageKey: materiaisKeyAtendimento(),
-        tamanhoNovaLista: param.materiaisLength,
-        nomeCurto: 'material(is) do cadastro',
-      },
-      {
-        storageKey: atendimentosStorageKey(),
-        tamanhoNovaLista: param.atendimentosLength,
-        nomeCurto: 'atendimento(s)',
-      },
-    ],
-  );
+  const verificacoes = [
+    {
+      storageKey: documentosKeyAtendimento(),
+      tamanhoNovaLista: param.documentosLength,
+      nomeCurto: 'documento(s) de planejamento',
+    },
+    ...(param.materiaisLength != null
+      ? [
+          {
+            storageKey: materiaisKeyAtendimento(),
+            tamanhoNovaLista: param.materiaisLength,
+            nomeCurto: 'material(is) do cadastro',
+          },
+        ]
+      : []),
+    {
+      storageKey: atendimentosStorageKey(),
+      tamanhoNovaLista: param.atendimentosLength,
+      nomeCurto: 'atendimento(s)',
+    },
+  ];
+  return mensagemSeSubstituirLocalPerderiaCadastros(verificacoes);
 }
 
 type SnapshotPayload = {
@@ -322,8 +336,11 @@ function mergeEstornoLog(local: EstornoLogRegistro[], remote: EstornoLogRegistro
 async function carregarEstornoLog(): Promise<EstornoLogRegistro[]> {
   if (hasSupabaseConfig()) {
     try {
-      const payload = await readSnapshotPayload();
-      return mapEstornoLogFromSnapshot(payload.atendimentoEstornoLog);
+      // Só a fatia do log — NÃO o snapshot operacional (documentos/materiais = dezenas de MB).
+      const slices = await readSnapshotRemoteSliceOrFull<Pick<SnapshotPayload, 'atendimentoEstornoLog'>>([
+        'atendimentoEstornoLog',
+      ]);
+      return mapEstornoLogFromSnapshot(slices.atendimentoEstornoLog);
     } catch {
       /* fallback local */
     }
@@ -474,10 +491,173 @@ async function readSnapshotPayloadHistorico(): Promise<SnapshotPayload> {
   return await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_ATENDIMENTO_HISTORICO_SLICE_KEYS);
 }
 
-/** Histórico de lotes sem documentos[] / materiais — abertura do módulo. */
+export type HistoricoAtendimentosPage = {
+  items: Atendimento[];
+  totalCount: number;
+  limit: number;
+  offset: number;
+};
+
+type ListAtendimentoLotesOpts = {
+  limit?: number;
+  offset?: number;
+  q?: string | null;
+  desde?: string | null;
+};
+
+/** Historico a partir das tabelas de lotes (baixa table-first — sem blob), uma pagina. */
+async function readRemoteHistoricoAtendimentosFromLotes(
+  opts: ListAtendimentoLotesOpts = {},
+): Promise<HistoricoAtendimentosPage | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const q = String(opts.q ?? '').trim() || null;
+  const desde = opts.desde?.trim() || null;
+  const { data, error } = await supabase.rpc('iso_pro_list_atendimento_lotes', {
+    p_tenant_id: getActiveTenantId(),
+    p_limit: limit,
+    p_offset: offset,
+    p_q: q,
+    p_desde: desde,
+  });
+  if (error || data == null) return null;
+  const row = data as {
+    atendimentos?: unknown;
+    totalCount?: unknown;
+    limit?: unknown;
+    offset?: unknown;
+    _error?: string;
+  };
+  if (row._error || !Array.isArray(row.atendimentos)) return null;
+  const items =
+    row.atendimentos.length === 0
+      ? []
+      : mapSnapshotAtendimentos({ atendimentos: row.atendimentos as SnapshotPayload['atendimentos'] });
+  const totalCount = Number(row.totalCount);
+  return {
+    items,
+    totalCount: Number.isFinite(totalCount) ? totalCount : items.length,
+    limit: Number(row.limit) || limit,
+    offset: Number(row.offset) || offset,
+  };
+}
+
+/** Arquivo completo (export / UI / bloqueios): tabelas + snapshot fundidos (tabelas ganham). */
 async function readRemoteHistoricoAtendimentos(): Promise<Atendimento[]> {
-  const payload = await readSnapshotPayloadHistorico();
-  return mapSnapshotAtendimentos(payload);
+  const pageSize = 200;
+  const hardCap = 5_000;
+  const fromTables: Atendimento[] = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+  let tablesReadable = false;
+
+  while (offset < total && offset < hardCap) {
+    const page = await readRemoteHistoricoAtendimentosFromLotes({ limit: pageSize, offset }).catch(() => null);
+    if (!page) {
+      break;
+    }
+    tablesReadable = true;
+    fromTables.push(...page.items);
+    total = page.totalCount;
+    if (page.items.length === 0) break;
+    offset += page.items.length;
+    if (page.items.length < pageSize) break;
+  }
+
+  let fromSnapshot: Atendimento[] = [];
+  try {
+    const payload = await readSnapshotPayloadHistorico();
+    fromSnapshot = mapSnapshotAtendimentos(payload);
+  } catch {
+    fromSnapshot = [];
+  }
+
+  if (tablesReadable) {
+    const merged = mergeHistoricoTabelasComSnapshot(fromTables, fromSnapshot);
+    const tableKeys = new Set(fromTables.map((a) => chaveListaAtendimentoUnificada(a)));
+    const snapOnlyCount = fromSnapshot.filter((a) => !tableKeys.has(chaveListaAtendimentoUnificada(a))).length;
+    // Blindagem: lotes so no snapshot (legado) nao migrados para tabelas apos baixa table-first.
+    if (snapOnlyCount > 0) {
+      captureOperationalEvent(
+        'sot_divergence',
+        {
+          source: 'historico_tabelas_incompletas',
+          domain: 'documentos',
+          tableCount: fromTables.length,
+          snapshotCount: fromSnapshot.length,
+          snapOnlyCount,
+          mergedCount: merged.length,
+        },
+        'warning',
+      );
+      void backfillHistoricoLotesFromSnapshotBestEffort(fromSnapshot, fromTables);
+    }
+    return merged;
+  }
+
+  return fromSnapshot;
+}
+
+/**
+ * Funde lotes das tabelas com o snapshot. Tabelas ganham no mesmo id/numero
+ * (SoT apos baixa/estorno); snapshot preenche lotes antigos ainda nao migrados.
+ */
+function mergeHistoricoTabelasComSnapshot(
+  fromTables: Atendimento[],
+  fromSnapshot: Atendimento[],
+): Atendimento[] {
+  const porChave = new Map<string, Atendimento>();
+  for (const a of fromSnapshot) {
+    porChave.set(chaveListaAtendimentoUnificada(a), a);
+  }
+  for (const a of fromTables) {
+    porChave.set(chaveListaAtendimentoUnificada(a), a);
+  }
+  return Array.from(porChave.values())
+    .filter((a) => !isSyntheticLoadTestAtendimento(a))
+    .sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+}
+
+/** Reinsere no SoT tabular lotes que so existem no snapshot (heal). */
+async function backfillHistoricoLotesFromSnapshotBestEffort(
+  fromSnapshot: Atendimento[],
+  fromTables: Atendimento[],
+): Promise<void> {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    const tableKeys = new Set(fromTables.map((a) => chaveListaAtendimentoUnificada(a)));
+    const missing = fromSnapshot.filter((a) => !tableKeys.has(chaveListaAtendimentoUnificada(a)));
+    if (!missing.length) return;
+    const wire = missing.map(atendimentoToSnapshotRecord);
+    // Chunks para obras grandes
+    const chunkSize = 40;
+    for (let i = 0; i < wire.length; i += chunkSize) {
+      const chunk = wire.slice(i, i + chunkSize);
+      const { error } = await supabase.rpc('iso_pro_upsert_atendimento_lotes_from_json', {
+        p_tenant_id: getActiveTenantId(),
+        p_atendimentos: chunk,
+      });
+      if (error) {
+        console.warn('[historico-backfill]', error.message);
+        captureOperationalEvent(
+          'dual_write_failure',
+          { source: 'historico_backfill', error: error.message, attempted: chunk.length },
+          'error',
+        );
+        return;
+      }
+    }
+    captureOperationalEvent(
+      'offline_flush',
+      { source: 'historico_backfill_ok', count: missing.length },
+      'info',
+    );
+  } catch (err) {
+    console.warn('[historico-backfill]', err);
+  }
 }
 
 function documentosSinteticosDeAtendidoPorCodigo(
@@ -610,7 +790,13 @@ type SnapshotDocumentoRecord = NonNullable<SnapshotPayload['documentos']>[number
 type SnapshotAtendimentoRecord = NonNullable<SnapshotPayload['atendimentos']>[number];
 type SnapshotHistoricoRecord = NonNullable<SnapshotPayload['atendimentoHistorico']>[number];
 
-function documentoStoredToSnapshotRecord(doc: DocumentoStored): SnapshotDocumentoRecord {
+function documentoStoredToSnapshotRecord(
+  doc: DocumentoStored,
+  onlyItemIds?: Set<string>,
+): SnapshotDocumentoRecord {
+  const itens = onlyItemIds?.size
+    ? doc.itens.filter((item) => onlyItemIds.has(item.id))
+    : doc.itens;
   return {
     id: doc.id,
     numero: doc.numero,
@@ -618,7 +804,7 @@ function documentoStoredToSnapshotRecord(doc: DocumentoStored): SnapshotDocument
     descricao: doc.descricao,
     responsavel: doc.responsavel,
     status: doc.status,
-    itens: doc.itens.map((item) => ({
+    itens: itens.map((item) => ({
       id: item.id,
       codigo: item.codigoMaterial,
       descricao: item.descricaoMaterial,
@@ -732,15 +918,13 @@ async function writeSnapshotAtendimentoPatch(patch: {
         currentPayload = lido.slices as Record<string, unknown>;
         baselineUpdatedAt = lido.baselineUpdatedAt;
       } else if (!cursor) {
-        const stats = await withRemoteReadTimeout(
-          () => readIsoProSnapshotStats(),
-          REMOTE_READ_TIMEOUT_HEAVY_MS,
-        ).catch(() => null);
-        baselineUpdatedAt = stats?.updatedAt ?? null;
+        // Baixa: so cursor OCC (1 coluna). Nunca stats/blob no Confirmar.
+        const at = await withRemoteReadTimeout(() => readIsoProSnapshotCursor(), 3_000).catch(() => null);
+        baselineUpdatedAt = at;
         if (!baselineUpdatedAt) {
           const lido = await withRemoteReadTimeout(
             () => readIsoProSnapshotSlicesForWrite(['configuracoesSistema']),
-            REMOTE_READ_TIMEOUT_HEAVY_MS,
+            3_000,
           );
           currentPayload = lido.slices as Record<string, unknown>;
           baselineUpdatedAt = lido.baselineUpdatedAt;
@@ -748,7 +932,13 @@ async function writeSnapshotAtendimentoPatch(patch: {
         if (baselineUpdatedAt) setAtendimentoCloudBaselineCursor(baselineUpdatedAt);
       }
 
-      const patchDocumentos = (patch.documentos ?? []).map(documentoStoredToSnapshotRecord);
+      // Patch minimo: so itens baixados (espelho table-first nao precisa do desenho inteiro).
+      const itemIdsBaixa = new Set(
+        (patch.atendimentos ?? []).flatMap((a) => a.itens.map((it) => it.documentoItemId)),
+      );
+      const patchDocumentos = (patch.documentos ?? []).map((doc) =>
+        documentoStoredToSnapshotRecord(doc, itemIdsBaixa),
+      );
       const existingEstornoLog = mapEstornoLogFromSnapshot(
         currentPayload.atendimentoEstornoLog as SnapshotPayload['atendimentoEstornoLog'],
       );
@@ -760,11 +950,6 @@ async function writeSnapshotAtendimentoPatch(patch: {
         ? [...existingEstornoLog, ...patch.estornoLogAppend].map(estornoLogToSnapshotRecord)
         : (currentPayload.atendimentoEstornoLog ?? existingEstornoLog.map(estornoLogToSnapshotRecord));
 
-      const atendimentoHistoricoNovos =
-        !ehEstorno && patch.atendimentos?.length
-          ? buildAtendimentoHistoricoFromAtendimentos(patch.atendimentos)
-          : [];
-
       const cfgAtual = (currentPayload.configuracoesSistema ?? {}) as Record<string, unknown>;
       let sequenciaCfg = Number(cfgAtual.sequenciaAtendimento) || 0;
       for (const a of patch.atendimentos ?? []) {
@@ -772,11 +957,13 @@ async function writeSnapshotAtendimentoPatch(patch: {
         if (parsed) sequenciaCfg = Math.max(sequenciaCfg, parsed.sequencia);
       }
 
+      // Baixa: nao enviar atendimentoHistorico (SoT = tabelas de lotes + comando).
       const nextSlices: SnapshotSlice = {
         documentos,
         atendimentos: atendimentosNovos,
-        ...(ehEstorno ? {} : { atendimentoHistorico: atendimentoHistoricoNovos }),
-        atendimentoEstornoLog: Array.isArray(atendimentoEstornoLog) ? atendimentoEstornoLog : [],
+        ...(ehEstorno
+          ? { atendimentoEstornoLog: Array.isArray(atendimentoEstornoLog) ? atendimentoEstornoLog : [] }
+          : {}),
         configuracoesSistema: {
           ...cfgAtual,
           sequenciaAtendimento: sequenciaCfg,
@@ -787,10 +974,13 @@ async function writeSnapshotAtendimentoPatch(patch: {
       const baselineSlices: SnapshotSlice = {
         documentos: [],
         atendimentos: [],
-        ...(ehEstorno ? {} : { atendimentoHistorico: [] }),
-        atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
-          ? (currentPayload.atendimentoEstornoLog as unknown[])
-          : existingEstornoLog.map(estornoLogToSnapshotRecord),
+        ...(ehEstorno
+          ? {
+              atendimentoEstornoLog: Array.isArray(currentPayload.atendimentoEstornoLog)
+                ? (currentPayload.atendimentoEstornoLog as unknown[])
+                : existingEstornoLog.map(estornoLogToSnapshotRecord),
+            }
+          : {}),
         configuracoesSistema: cfgAtual,
         dataAtualizacao: currentPayload.dataAtualizacao as string | undefined,
       };
@@ -928,6 +1118,12 @@ export function invalidateSaldoOperacionalCache(): void {
   if (saldoOperacionalCache) {
     saldoOperacionalCache = { map: saldoOperacionalCache.map, at: 0 };
   }
+}
+
+/** Testes: descarta mapa SWR para nao vazar saldo de um caso para o seguinte. */
+export function resetSaldoOperacionalCacheForTests(): void {
+  saldoOperacionalCache = null;
+  saldoOperacionalInflight = null;
 }
 
 /** Snapshot sincrono do saldo em cache (sem rede). Usado no bipe para nao esperar 40s. */
@@ -1075,7 +1271,11 @@ function mapAtendimentosFromSnapshotArray(payload: SnapshotPayload): Atendimento
     motivoRetirada: String(atendimento.motivoRetirada ?? ''),
     origem: atendimento.origem === 'mobile' ? 'mobile' : 'windows',
     status: atendimento.status === 'estornado' ? 'estornado' : 'concluido',
-    dataAtendimento: String(atendimento.dataAtendimento ?? new Date().toISOString()),
+    dataAtendimento: resolveDataAtendimentoIso(
+      atendimento.dataAtendimento,
+      (atendimento as { createdAt?: string; created_at?: string }).createdAt ??
+        (atendimento as { created_at?: string }).created_at,
+    ),
     itens: (atendimento.itens ?? []).map((item, itemIndex) => ({
       id: String(item.id ?? `${atendimento.id ?? index}-item-${itemIndex + 1}`),
       documentoItemId: String(item.documentoItemId ?? ''),
@@ -1094,7 +1294,7 @@ function mapAtendimentosFromSnapshotArray(payload: SnapshotPayload): Atendimento
   for (const at of mapped) {
     normalizarCabecalhoDocumentoAtendimentoAgrupado(at);
   }
-  return mapped;
+  return mapped.filter((at) => !isSyntheticLoadTestAtendimento(at));
 }
 
 /** Copia matrícula/função das linhas planas do histórico (mobile grava `matricula` no atendente). */
@@ -1170,7 +1370,7 @@ function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendime
         motivoRetirada: String(raw.motivoRetirada ?? ''),
         origem: raw.origem === 'mobile' ? ('mobile' as const) : ('windows' as const),
         status: 'concluido' as const,
-        dataAtendimento: String(raw.data ?? new Date().toISOString()),
+        dataAtendimento: resolveDataAtendimentoIso(raw.data),
         itens: [],
       };
 
@@ -1198,7 +1398,7 @@ function mapAtendimentosFromHistoricoGrouped(payload: SnapshotPayload): Atendime
   for (const at of result) {
     normalizarCabecalhoDocumentoAtendimentoAgrupado(at);
   }
-  return result;
+  return result.filter((at) => !isSyntheticLoadTestAtendimento(at));
 }
 
 function contarDocumentosDistintosItens(at: Atendimento): number {
@@ -1320,7 +1520,7 @@ export async function readRemoteStateForWrite(documentoIds: string[]) {
           documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
         })
       : buildSaldoMap(payloadLight);
-  // Materiais do PC + saldo fresco dos agregados (nao baixar o array materiais da nuvem).
+  // Materiais: com nuvem, cadastro da nuvem/RAM + saldo fresco; sem nuvem, PC local.
   const localMats = loadLocalState().materiais;
   // Em paralelo, com uma repeticao por documento (RPC leve ~2KB cada).
   const docsLidos = await Promise.all(
@@ -1328,13 +1528,35 @@ export async function readRemoteStateForWrite(documentoIds: string[]) {
   );
   const documentos = docsLidos.filter((doc): doc is DocumentoStored => doc != null);
 
-  let materiais: MaterialStored[] =
-    localMats.length > 0
-      ? localMats.map((m) => ({
-          ...m,
-          saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual ?? 0,
-        }))
-      : mapSnapshotMateriais(payloadLight, saldoMap);
+  let materiais: MaterialStored[];
+  if (shouldUseCloudMaterials()) {
+    try {
+      const cadastro = await carregarMateriaisDoCadastro();
+      materiais = cadastro.map((m) => ({
+        id: m.id,
+        codigo: m.codigo,
+        descricao: m.descricao,
+        unidade: m.unidade,
+        saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual ?? 0,
+      }));
+    } catch {
+      materiais =
+        localMats.length > 0
+          ? localMats.map((m) => ({
+              ...m,
+              saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual ?? 0,
+            }))
+          : mapSnapshotMateriais(payloadLight, saldoMap);
+    }
+  } else {
+    materiais =
+      localMats.length > 0
+        ? localMats.map((m) => ({
+            ...m,
+            saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? m.saldoAtual ?? 0,
+          }))
+        : mapSnapshotMateriais(payloadLight, saldoMap);
+  }
 
   if (materiais.length === 0 && documentos.length > 0) {
     const byCode = new Map<string, MaterialStored>();
@@ -1387,7 +1609,15 @@ function mesclarDocumentosLocaisComRemotos(
   return out;
 }
 
+/**
+ * Status após baixa/estorno sem métricas de recebimento em memória.
+ * Não desce Recebido→Parcial só porque houve QTD ATENDIDA parcial — o detalhe
+ * trata linha com estoque coberto como Recebido. A coluna na nuvem é rederivada
+ * por iso_pro_documento_status_derivado no espelho.
+ */
 function deriveDocumentoStatus(doc: DocumentoStored): DocumentoStored['status'] {
+  if (doc.status === 'cancelado') return 'cancelado';
+
   const total = doc.itens.length;
   let atendidos = 0;
   let pendentes = 0;
@@ -1401,8 +1631,11 @@ function deriveDocumentoStatus(doc: DocumentoStored): DocumentoStored['status'] 
     }
   }
 
-  if (!total || pendentes === total) return 'pendente';
+  if (!total) return doc.status === 'recebido' ? 'recebido' : 'pendente';
   if (atendidos === total) return 'atendido';
+  // Estoque já cobria o desenho: baixa parcial mantém Recebido (igual detalhe/folha).
+  if (doc.status === 'recebido') return 'recebido';
+  if (pendentes === total) return 'pendente';
   return 'parcial';
 }
 
@@ -1413,6 +1646,90 @@ function documentoSemSaldoParaAtendimento(doc: DocumentoStored): boolean {
     const proj = Math.max(0, Number(item.quantidadeProjeto) || 0);
     const atd = Math.max(0, Number(item.quantidadeAtendida) || 0);
     return proj <= atd;
+  });
+}
+
+type AuditoriaLinhaDocumento = {
+  id: string;
+  codigo: string;
+  qProjeto: number;
+  qAtendida: number;
+};
+
+type AuditoriaDocumentoLinhas = {
+  documentoId: string;
+  numero: string;
+  status: string;
+  itens: AuditoriaLinhaDocumento[];
+};
+
+/** Snapshot das linhas afectadas antes/depois da mutação (before/after na auditoria). */
+function snapshotLinhasDocumentoParaAuditoria(
+  docs: DocumentoStored[],
+  grupos: Array<{ documentoId: string; itens: Array<{ documentoItemId: string }> }>,
+): AuditoriaDocumentoLinhas[] {
+  const byDoc = new Map<string, AuditoriaDocumentoLinhas>();
+  for (const grupo of grupos) {
+    const doc = docs.find((d) => d.id === grupo.documentoId);
+    if (!doc) continue;
+    let entry = byDoc.get(doc.id);
+    if (!entry) {
+      entry = {
+        documentoId: doc.id,
+        numero: doc.numero,
+        status: doc.status,
+        itens: [],
+      };
+      byDoc.set(doc.id, entry);
+    } else {
+      entry.status = doc.status;
+    }
+    for (const ri of grupo.itens) {
+      const line = doc.itens.find((i) => i.id === ri.documentoItemId);
+      if (!line) continue;
+      if (entry.itens.some((x) => x.id === line.id)) continue;
+      entry.itens.push({
+        id: line.id,
+        codigo: line.codigoMaterial,
+        qProjeto: line.quantidadeProjeto,
+        qAtendida: line.quantidadeAtendida,
+      });
+    }
+  }
+  return [...byDoc.values()];
+}
+
+function auditarAtendimentoRegistrado(opts: {
+  actorLogin: string;
+  novosAtendimentos: Atendimento[];
+  documentosMutados: Map<string, DocumentoStored>;
+  grupos: Array<{ documentoId: string; itens: Array<{ documentoItemId: string }> }>;
+  beforeDocs: AuditoriaDocumentoLinhas[];
+  origem: 'mobile' | 'windows';
+}): void {
+  const docsAfter = [...opts.documentosMutados.values()];
+  const afterDocs = snapshotLinhasDocumentoParaAuditoria(docsAfter, opts.grupos);
+  appendAuthAuditEvent({
+    type: 'atendimento_registrado',
+    actorLogin: opts.actorLogin,
+    detail: `Atendimento(s) ${opts.novosAtendimentos.map((a) => a.numero).join(', ')} — ${opts.novosAtendimentos.length} lote(s), docs ${docsAfter.map((d) => d.numero).join(', ')}.`,
+    entityType: 'atendimento',
+    entityId: opts.novosAtendimentos[0]?.id,
+    before: { documentos: opts.beforeDocs },
+    after: {
+      lotes: opts.novosAtendimentos.map((a) => ({
+        id: a.id,
+        numero: a.numero,
+        documentoNumero: a.documentoNumero,
+        itens: a.itens.map((it) => ({
+          codigo: it.codigoMaterial,
+          quantidade: it.quantidadeAtendida,
+          documento: it.documentoNumero,
+        })),
+      })),
+      documentos: afterDocs,
+      origem: opts.origem,
+    },
   });
 }
 
@@ -1454,8 +1771,6 @@ function validateRequestedItems(items: Array<{ documentoItemId: string; quantida
 function mapDocumentosPendentesWire(
   docs: Awaited<ReturnType<typeof listDocumentosPendentesAtendimentoFromCloud>>['documentos'],
   saldoMap: Map<string, number>,
-  /** Se true e o codigo nao esta no mapa, usa quantidadePendente (bipe nao bloqueia por saldo frio). */
-  fallbackSaldoParaPendente = false,
 ): AtendimentoDocumento[] {
   return docs
     .map((doc) => {
@@ -1479,13 +1794,9 @@ function mapDocumentosPendentesWire(
             const quantidadeProjeto = Number(item.quantidade ?? 0) || 0;
             const quantidadeAtendida = Number(item.quantidadeAtendida ?? 0) || 0;
             const pendente = Math.max(0, quantidadeProjeto - quantidadeAtendida);
-            const saldoCached = saldoMap.get(key);
-            const saldoDisponivel =
-              saldoCached != null
-                ? saldoCached
-                : fallbackSaldoParaPendente
-                  ? pendente
-                  : 0;
+            // Saldo real do estoque (recebido − atendido). Nunca inventar saldo = pendente:
+            // documento Pendente (sem estoque) tem de ficar «Sem saldo» e bloquear atendimento.
+            const saldoDisponivel = Math.max(0, Number(saldoMap.get(key) ?? 0) || 0);
             return {
               documentoItemId: String(item.id ?? ''),
               materialId: null as string | null,
@@ -1502,8 +1813,58 @@ function mapDocumentosPendentesWire(
           .filter((item) => item.quantidadePendente > 0),
       };
     })
-    .filter((doc) => doc.id && doc.linhas.length > 0)
+    // Cabeçalhos da lista rápida vêm com itens:[] — manter para typeahead;
+    // as linhas hidratam ao seleccionar o desenho.
+    .filter((doc) => Boolean(doc.id))
     .sort((a, b) => a.numero.localeCompare(b.numero));
+}
+
+/** Carrega itens pendentes de um desenho (lista rápida só traz cabeçalho). */
+export async function hidratarDocumentoPendenteAtendimento(
+  documentoId: string,
+): Promise<AtendimentoDocumento | null> {
+  const id = String(documentoId ?? '').trim();
+  if (!id || !shouldTryRemoteRead()) return null;
+  try {
+    const stored = await withRemoteReadTimeout(() => carregarDocumentoStoredDaNuvem(id), 8_000);
+    if (!stored?.id) return null;
+    // Esperar mapa fresco (nao peek frio) — senao Saldo fica 0 com desenho Recebido.
+    const saldoMap = await obterSaldoMapOperacional().catch(() => new Map<string, number>());
+    const wire = {
+      id: stored.id,
+      numero: stored.numero,
+      revisao: stored.revisao,
+      descricao: stored.descricao,
+      responsavel: stored.responsavel,
+      status: stored.status,
+      itens: stored.itens.map((item) => ({
+        id: item.id,
+        codigo: item.codigoMaterial,
+        descricao: item.descricaoMaterial,
+        unidade: item.unidade,
+        quantidade: item.quantidadeProjeto,
+        quantidadeAtendida: item.quantidadeAtendida,
+      })),
+    };
+    const mapped = mapDocumentosPendentesWire([wire], saldoMap);
+    if (mapped[0]) return mapped[0];
+    return {
+      id: stored.id,
+      numero: stored.numero,
+      revisao: stored.revisao,
+      descricao: stored.descricao,
+      responsavel: stored.responsavel,
+      status: (stored.status === 'parcial' ||
+      stored.status === 'atendido' ||
+      stored.status === 'cancelado' ||
+      stored.status === 'recebido'
+        ? stored.status
+        : 'pendente') as AtendimentoDocumento['status'],
+      linhas: [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function listarDocumentosPendentes(): Promise<AtendimentoDocumento[]> {
@@ -1571,10 +1932,10 @@ export async function buscarDocumentosPendentesPorCodigoMaterialNuvem(
       listDocumentosPendentesPorCodigoMaterialFromCloud(codigo),
     );
     if (!cloud.error && cloud.documentos.length > 0) {
-      // Nunca espera saldo frio no bipe: usa cache ou pendente do desenho.
+      // Bipe: usa saldo em cache (0 se ainda frio). Nao inventar saldo = pendente.
       const saldoMap = peekSaldoMapOperacionalCached() ?? new Map<string, number>();
       void aquecerSaldoOperacionalAtendimento();
-      return mapDocumentosPendentesWire(cloud.documentos, saldoMap, true);
+      return mapDocumentosPendentesWire(cloud.documentos, saldoMap);
     }
   } catch {
     /* busca é auxiliar — sem erro visível */
@@ -1609,15 +1970,34 @@ export async function listarDocumentosPendentesComMeta(): Promise<ServiceResult<
 
 export async function listarHistoricoAtendimentos(): Promise<Atendimento[]> {
   if (shouldTryRemoteRead()) {
+    let localLen = 0;
+    try {
+      localLen = readJson<Atendimento>(atendimentosStorageKey()).length;
+    } catch {
+      localLen = 0;
+    }
+    const preferMs = localLen === 0 ? REMOTE_READ_TIMEOUT_HEAVY_MS : undefined;
     const items = await readRemoteOrLocal({
       readRemote: () => readRemoteHistoricoAtendimentos(),
-      readLocal: () => readJson<Atendimento>(atendimentosStorageKey()),
+      readLocal: () => {
+        try {
+          return readJson<Atendimento>(atendimentosStorageKey());
+        } catch {
+          return [];
+        }
+      },
+      preferMs,
+      timeoutMs: REMOTE_READ_TIMEOUT_HEAVY_MS,
     });
-    return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+    return [...items]
+      .filter((a) => !isSyntheticLoadTestAtendimento(a))
+      .sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
   }
   await mesclarAtendimentoDesktopComNuvem();
   const items = readJson<Atendimento>(atendimentosStorageKey());
-  return [...items].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
+  return [...items]
+    .filter((a) => !isSyntheticLoadTestAtendimento(a))
+    .sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento));
 }
 
 /** Resumo para bloquear exclusao definitiva de documentos que ainda tem historico de atendimento. */
@@ -1688,20 +2068,22 @@ async function carregarAtendimentosEDocumentosParaExport(): Promise<{
   atendimentos: Atendimento[];
   documentos: DocumentoStored[];
 }> {
+  // Mesma fonte do Historico (tabelas ∪ snapshot). Nunca so snapshot — evita Excel ≠ tela.
+  const atendimentos = await listarHistoricoAtendimentos();
   if (hasSupabaseConfig()) {
     try {
       const state = await readRemoteState();
       return {
-        atendimentos: [...state.atendimentos].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento)),
+        atendimentos: [...atendimentos].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento)),
         documentos: state.documentos,
       };
     } catch {
-      /* fallback local */
+      /* fallback local docs */
     }
   }
   const local = loadLocalState();
   return {
-    atendimentos: [...local.atendimentos].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento)),
+    atendimentos: [...atendimentos].sort((a, b) => b.dataAtendimento.localeCompare(a.dataAtendimento)),
     documentos: local.documentos,
   };
 }
@@ -1751,14 +2133,52 @@ function linhaCsvLoteSemItens(
   ];
 }
 
+function filtrarDesdeIso(iso: string | null | undefined, corteIso: string | null): boolean {
+  if (!corteIso) return true;
+  const t = new Date(String(iso ?? '')).getTime();
+  const corte = new Date(corteIso).getTime();
+  if (!Number.isFinite(t)) return false;
+  if (!Number.isFinite(corte)) return true;
+  return t >= corte;
+}
+
 /**
  * CSV (Excel PT) uma linha por material atendido, com dados do lote e do documento.
  * Inclui `estorno_permitido` (sim/nao) e `qtd_pode_estornar` (numero) para ver de imediato no Excel se ainda da para estornar e quanto.
  * Lotes com estorno total (`itens` vazios) geram uma linha resumo para nao sumirem do relatorio.
+ * `desde` (ISO) alinha ao filtro de periodo do Historico — evita exportar o arquivo inteiro.
  */
-export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const { atendimentos, documentos } = await carregarAtendimentosEDocumentosParaExport();
-  const docMap = new Map(documentos.map((d) => [d.id, d]));
+export async function montarExportacaoAtendimentosCsvItens(opts?: {
+  desde?: string | null;
+}): Promise<ServiceResult<{ csv: string; fileName: string }>> {
+  const desde = opts?.desde?.trim() || null;
+  type ExportRow = {
+    lote_numero?: string;
+    lote_id?: string;
+    data_atendimento?: string | null;
+    status_lote?: string;
+    documento_numero?: string;
+    documento_revisao?: string;
+    documento_descricao?: string;
+    documento_responsavel?: string;
+    atendente?: string;
+    recebedor_colaborador_id?: string;
+    recebedor_tipo?: string;
+    recebedor?: string;
+    recebedor_empresa?: string;
+    recebedor_documento?: string;
+    recebedor_telefone?: string;
+    autorizador_interno?: string;
+    motivo_retirada?: string;
+    origem_registro?: string;
+    atendimento_item_id?: string;
+    documento_item_id?: string;
+    codigo_material?: string;
+    descricao_material?: string;
+    unidade?: string;
+    quantidade_no_lote?: number;
+    quantidade_retirada_original?: number;
+  };
 
   const header = [
     'lote_numero',
@@ -1793,9 +2213,87 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
     'quantidade_estornada_acumulada',
   ];
 
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const fileName = nomeArquivoExportAtendimentos(stamp);
+
+  const montarCsvDeRows = (rows: ExportRow[]): string => {
+    const linhas: string[] = [header.join(CSV_EXCEL_SEP_ATD)];
+    for (const r of rows) {
+      const qtdLinha = Number(r.quantidade_no_lote) || 0;
+      const qtdOriginal = Number(r.quantidade_retirada_original) || qtdLinha;
+      const status = String(r.status_lote ?? '');
+      const podeLinha = status === 'concluido' && qtdLinha > 0 ? 'sim' : 'nao';
+      const atendidoLinha = qtdLinha > 0 ? 'sim' : 'nao';
+      const origem = String(r.origem_registro ?? '');
+      linhas.push(
+        [
+          String(r.lote_numero ?? ''),
+          String(r.lote_id ?? ''),
+          String(r.data_atendimento ?? ''),
+          status,
+          atendidoLinha,
+          podeLinha,
+          podeLinha === 'sim' ? formatDecimalExcelPtBr(qtdLinha) : '0',
+          podeLinha,
+          String(r.documento_numero ?? ''),
+          String(r.documento_revisao ?? ''),
+          String(r.documento_descricao ?? ''),
+          String(r.documento_responsavel ?? ''),
+          String(r.atendente ?? ''),
+          String(r.recebedor_colaborador_id ?? ''),
+          String(r.recebedor_tipo ?? ''),
+          String(r.recebedor ?? ''),
+          String(r.recebedor_empresa ?? ''),
+          String(r.recebedor_documento ?? ''),
+          String(r.recebedor_telefone ?? ''),
+          String(r.autorizador_interno ?? ''),
+          String(r.motivo_retirada ?? ''),
+          rotuloOrigemAtendimento(origem === 'mobile' ? 'mobile' : 'windows'),
+          String(r.atendimento_item_id ?? ''),
+          String(r.documento_item_id ?? ''),
+          String(r.codigo_material ?? ''),
+          String(r.descricao_material ?? ''),
+          String(r.unidade ?? ''),
+          formatDecimalExcelPtBr(qtdLinha),
+          formatDecimalExcelPtBr(qtdOriginal),
+          formatDecimalExcelPtBr(Math.max(0, qtdOriginal - qtdLinha)),
+        ]
+          .map((c) => escapeCsvCellSemicolon(String(c)))
+          .join(CSV_EXCEL_SEP_ATD),
+      );
+    }
+    return `\uFEFF${linhas.join('\r\n')}\r\n`;
+  };
+
+  if (hasSupabaseConfig()) {
+    try {
+      await ensureIsoProDataSessionReadable();
+      const supabase = getSupabase();
+      if (supabase) {
+        const cloud = await fetchAllExportRpcPages<ExportRow>({
+          supabase,
+          rpcName: 'iso_pro_export_atendimentos_itens_page',
+          tenantId: getActiveTenantId(),
+          rpcArgs: desde ? { p_desde: desde } : {},
+        });
+        if (!cloud.missingRpc && !cloud.error) {
+          return { success: true, data: { csv: montarCsvDeRows(cloud.rows), fileName } };
+        }
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
+  const { atendimentos, documentos } = await carregarAtendimentosEDocumentosParaExport();
+  const docMap = new Map(documentos.map((d) => [d.id, d]));
+  const atendimentosFiltrados = desde
+    ? atendimentos.filter((a) => filtrarDesdeIso(a.dataAtendimento, desde))
+    : atendimentos;
+
   const linhas: string[] = [header.join(CSV_EXCEL_SEP_ATD)];
 
-  for (const at of atendimentos) {
+  for (const at of atendimentosFiltrados) {
     const docCab = docMap.get(at.documentoId);
     const docRev = docCab?.revisao ?? '';
     const docDesc = docCab?.descricao ?? '';
@@ -1861,27 +2359,45 @@ export async function montarExportacaoAtendimentosCsvItens(): Promise<ServiceRes
   }
 
   const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const fileName = nomeArquivoExportAtendimentos(stamp);
   return { success: true, data: { csv, fileName } };
 }
 
-/** ZIP com CSV de atendimentos e CSV de log de estornos (auditoria). */
-export async function montarExportacaoAtendimentosPacoteZip(): Promise<
-  ServiceResult<{ zipBlob: Blob; fileName: string }>
-> {
-  const csvResult = await montarExportacaoAtendimentosCsvItens();
+/** CSV so do log de estornos (auditoria), opcionalmente filtrado por periodo. */
+export async function montarExportacaoEstornosCsv(opts?: {
+  desde?: string | null;
+}): Promise<ServiceResult<{ csv: string; fileName: string }>> {
+  const desde = opts?.desde?.trim() || null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const all = await carregarEstornoLog();
+  const filtrados = desde ? all.filter((e) => filtrarDesdeIso(e.dataEstorno, desde)) : all;
+  return {
+    success: true,
+    data: { csv: montarCsvEstornoLog(filtrados), fileName: nomeArquivoExportEstornoLog(stamp) },
+  };
+}
+
+/** ZIP com CSV de atendimentos e CSV de log de estornos (auditoria). Respeita `desde`. */
+export async function montarExportacaoAtendimentosPacoteZip(opts?: {
+  desde?: string | null;
+}): Promise<ServiceResult<{ zipBlob: Blob; fileName: string }>> {
+  const desde = opts?.desde?.trim() || null;
+  // CSV (RPC) + fatia leve do log em paralelo — evita esperar o snapshot completo.
+  const [csvResult, estornoResult] = await Promise.all([
+    montarExportacaoAtendimentosCsvItens({ desde }),
+    montarExportacaoEstornosCsv({ desde }),
+  ]);
   if (!csvResult.success || !csvResult.data) {
     return { success: false, error: csvResult.error ?? 'Nao foi possivel gerar o CSV de atendimentos.' };
   }
+  if (!estornoResult.success || !estornoResult.data) {
+    return { success: false, error: estornoResult.error ?? 'Nao foi possivel gerar o CSV de estornos.' };
+  }
 
-  const estornoLog = await carregarEstornoLog();
-  const csvEstorno = montarCsvEstornoLog(estornoLog);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
   const zip = new JSZip();
   zip.file(nomeArquivoExportAtendimentos(stamp), csvResult.data.csv);
-  zip.file(nomeArquivoExportEstornoLog(stamp), csvEstorno);
+  zip.file(nomeArquivoExportEstornoLog(stamp), estornoResult.data.csv);
 
   const zipBlob = await zip.generateAsync({
     type: 'blob',
@@ -1895,7 +2411,10 @@ export async function montarExportacaoAtendimentosPacoteZip(): Promise<
 /** Pre-aquece cursor OCC ao abrir Atendimento (Confirmar sem leitura de fatia). */
 export async function aquecerBaselineAtendimentoNuvem(): Promise<void> {
   if (!shouldTryRemoteRead()) return;
-  await warmAtendimentoCloudBaselineCursor(() => readIsoProSnapshotStats());
+  await warmAtendimentoCloudBaselineCursor(async () => {
+    const updatedAt = await readIsoProSnapshotCursor();
+    return updatedAt ? { updatedAt } : null;
+  });
 }
 
 export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResult<Atendimento[]>> {
@@ -1936,6 +2455,162 @@ export async function listarHistoricoAtendimentosComMeta(): Promise<ServiceResul
   };
 }
 
+type HistoricoLotesRpcBody = {
+  atendimentos?: unknown;
+  totalCount?: unknown;
+  limit?: unknown;
+  offset?: unknown;
+  _error?: string;
+};
+
+function paginaHistoricoDoCorpoRpc(
+  data: HistoricoLotesRpcBody,
+  limit: number,
+  offset: number,
+): HistoricoAtendimentosPage | null {
+  if (data._error || !Array.isArray(data.atendimentos)) return null;
+  const items =
+    data.atendimentos.length === 0
+      ? []
+      : mapSnapshotAtendimentos({
+          atendimentos: data.atendimentos as SnapshotPayload['atendimentos'],
+        }).filter((a) => !isSyntheticLoadTestAtendimento(a));
+  const totalCount = Number(data.totalCount);
+  return {
+    items,
+    totalCount: Number.isFinite(totalCount) ? totalCount : items.length,
+    limit: Number(data.limit) || limit,
+    offset: Number(data.offset) || offset,
+  };
+}
+
+/**
+ * Uma pagina do Historico nas tabelas de lotes, com o JWT do login.
+ * A chave anon nao le essas tabelas: a tela recebia zero e parecia arquivo vazio.
+ */
+async function listarHistoricoPaginaNasTabelas(opts: {
+  page: number;
+  pageSize: number;
+  q: string;
+  desde: string | null;
+}): Promise<HistoricoAtendimentosPage | null> {
+  if (typeof rpcComJwtSemFila !== 'function') return null;
+  const limit = Math.min(Math.max(opts.pageSize, 1), 100);
+  const offset = (Math.max(opts.page, 1) - 1) * limit;
+  const args = {
+    p_tenant_id: getActiveTenantId(),
+    p_limit: limit,
+    p_offset: offset,
+    p_q: opts.q || null,
+    p_desde: opts.desde,
+  };
+  const direct = await rpcComJwtSemFila<HistoricoLotesRpcBody>(
+    'iso_pro_list_atendimento_lotes',
+    args,
+    12_000,
+  );
+  if (!direct.skipped && !direct.error && direct.data) {
+    return paginaHistoricoDoCorpoRpc(direct.data, limit, offset);
+  }
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  const queued = await supabase.rpc('iso_pro_list_atendimento_lotes', args);
+  if (queued.error || queued.data == null) return null;
+  return paginaHistoricoDoCorpoRpc(queued.data as HistoricoLotesRpcBody, limit, offset);
+}
+
+/**
+ * Uma pagina do Historico (UI). Sempre usa o mesmo arquivo fundido (tabelas ∪ snapshot)
+ * que o export — nunca so a RPC tabular, senao lotes legados somem da tela.
+ */
+export async function listarHistoricoAtendimentosPagina(opts: {
+  page: number;
+  pageSize: number;
+  q?: string;
+  desde?: string | null;
+}): Promise<ServiceResult<HistoricoAtendimentosPage>> {
+  const pageSize = Math.min(Math.max(opts.pageSize || 15, 1), 100);
+  const page = Math.max(opts.page || 1, 1);
+  const offset = (page - 1) * pageSize;
+  const q = String(opts.q ?? '').trim();
+  const desde = opts.desde?.trim() || null;
+
+  if (shouldTryRemoteRead()) {
+    try {
+      const direta = await listarHistoricoPaginaNasTabelas({ page, pageSize, q, desde });
+      if (direta) {
+        return {
+          success: true,
+          data: direta,
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* cai no arquivo fundido */
+    }
+  }
+
+  let source: 'supabase' | 'local' = 'local';
+  let fallbackReason = '';
+  let full: Atendimento[] = [];
+
+  if (shouldTryRemoteRead()) {
+    try {
+      // Sempre arquivo fundido (tabelas ∪ snapshot) — igual ao export/CSV.
+      // Nao usar so a RPC paginada: lotes legados so no snapshot sumiriam da UI.
+      full = await withRemoteReadTimeout(() => readRemoteHistoricoAtendimentos(), REMOTE_READ_TIMEOUT_HEAVY_MS);
+      source = 'supabase';
+    } catch (error) {
+      full = await listarHistoricoAtendimentos();
+      if (!isIsoProDesktop()) {
+        return {
+          success: false,
+          error: traduzirErroOperacionalIsoPro(
+            error instanceof Error ? error.message : 'Falha ao consultar historico de atendimentos no Supabase.',
+          ),
+        };
+      }
+      fallbackReason = traduzirErroOperacionalIsoPro(
+        error instanceof Error ? error.message : 'Falha ao consultar historico na nuvem.',
+      );
+    }
+  } else {
+    full = await listarHistoricoAtendimentos();
+  }
+
+  const filtrados = full.filter((a) => {
+    if (isSyntheticLoadTestAtendimento(a)) return false;
+    if (desde) {
+      const t = new Date(a.dataAtendimento).getTime();
+      const corte = new Date(desde).getTime();
+      if (!Number.isFinite(t)) return false;
+      if (Number.isFinite(corte) && t < corte) return false;
+    }
+    if (!q) return true;
+    const hay = [
+      a.numero,
+      a.documentoNumero,
+      a.atendente,
+      a.recebedor,
+      ...a.itens.map((i) => `${i.codigoMaterial} ${i.descricaoMaterial}`),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q.toLowerCase());
+  });
+  const items = filtrados.slice(offset, offset + pageSize);
+  return {
+    success: true,
+    data: {
+      items,
+      totalCount: filtrados.length,
+      limit: pageSize,
+      offset,
+    },
+    meta: { source, fallbackReason: fallbackReason || undefined },
+  };
+}
+
 export async function registrarAtendimento(payload: {
   documentoId: string;
   atendente: string;
@@ -1950,6 +2625,7 @@ export async function registrarAtendimento(payload: {
   /** Omitido ou `windows` = desktop; `mobile` = aplicativo movel. */
   origem?: 'windows' | 'mobile';
   itens: Array<{ documentoItemId: string; quantidade: number }>;
+  documentosSeed?: DocumentoStored[];
 }): Promise<ServiceResult<Atendimento>> {
   if (!payload.atendente.trim()) return { success: false, error: 'Informe o atendente.' };
   if (!payload.itens.length) return { success: false, error: 'Informe ao menos um item para atender.' };
@@ -1972,6 +2648,7 @@ export async function registrarAtendimento(payload: {
     motivoRetirada: payload.motivoRetirada,
     origem: payload.origem,
     documentos: [{ documentoId: payload.documentoId, itens: requestItems }],
+    documentosSeed: payload.documentosSeed,
   });
   if (!sessao.success || !sessao.data?.length) {
     return { success: false, error: sessao.error ?? 'Falha ao salvar atendimento.', meta: sessao.meta };
@@ -1994,6 +2671,8 @@ export type RegistrarAtendimentosSessaoPayload = {
     documentoId: string;
     itens: Array<{ documentoItemId: string; quantidade: number }>;
   }>;
+  /** Desenhos ja carregados na UI — evita re-fetch na nuvem no Confirmar. */
+  documentosSeed?: DocumentoStored[];
 };
 
 /**
@@ -2071,30 +2750,34 @@ export async function registrarAtendimentosSessao(
   }
 
   const docIds = gruposValidados.map((g) => g.documentoId);
-  // Local-first (igual mobile): sem agregados/fatias pesadas no Confirmar.
-  // Sempre relê os desenhos desta retirada na nuvem antes de validar pendente —
-  // senao o PC usa cache frio e pode acusar "maior que o pendente" a falso.
+  // Confirmar: preferir seed da UI (zero rede). So busca na nuvem o que faltar.
+  const tPrep0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const localState = loadLocalState();
   const documentos = [...localState.documentos];
-  if (shouldTryRemoteRead()) {
+  for (const seed of payload.documentosSeed ?? []) {
+    const idx = documentos.findIndex((d) => d.id === seed.id);
+    if (idx >= 0) documentos[idx] = seed;
+    else documentos.push(seed);
+  }
+  const faltamIds = docIds.filter((id) => !documentos.some((d) => d.id === id));
+  if (shouldTryRemoteRead() && faltamIds.length) {
+    if (typeof console !== 'undefined' && console.info) {
+      console.info(
+        `[atendimento] confirmar_sessao refetch_docs=${faltamIds.length} (seed=${payload.documentosSeed?.length ?? 0})`,
+      );
+    }
     const docsLidos = await Promise.all(
-      docIds.map((id) =>
-        withRemoteReadTimeout(() => carregarDocumentoStoredDaNuvem(id), 5_000).catch(() => null),
+      faltamIds.map((id) =>
+        withRemoteReadTimeout(() => carregarDocumentoStoredDaNuvem(id), 2_000).catch(() => null),
       ),
     );
-    const semNuvem: string[] = [];
-    for (let i = 0; i < docIds.length; i += 1) {
-      const id = docIds[i]!;
+    for (let i = 0; i < faltamIds.length; i += 1) {
       const remoto = docsLidos[i];
-      if (!remoto) {
-        semNuvem.push(id);
-        continue;
-      }
-      const idx = documentos.findIndex((d) => d.id === id);
-      if (idx >= 0) documentos[idx] = remoto;
-      else documentos.push(remoto);
+      if (!remoto) continue;
+      documentos.push(remoto);
     }
-    if (semNuvem.length) {
+    const aindaFalta = docIds.some((id) => !documentos.some((d) => d.id === id));
+    if (aindaFalta) {
       return {
         success: false,
         error:
@@ -2102,8 +2785,14 @@ export async function registrarAtendimentosSessao(
       };
     }
   }
-  const materiaisLocais = localState.materiais.length > 0;
-  const materiais = materiaisLocais
+  // Com materiais na nuvem: nao usar/gravar iso-pro-desktop-materiais como verdade do catalogo.
+  // Saldo real do mapa operacional (recebido − atendido). Nunca 999999 — isso permitia
+  // atender desenho Pendente (sem estoque).
+  const persistMateriaisLocais = !shouldUseCloudMaterials() && localState.materiais.length > 0;
+  const saldoMapConfirmacao = persistMateriaisLocais
+    ? null
+    : await obterSaldoMapOperacional().catch(() => new Map<string, number>());
+  const materiais = persistMateriaisLocais
     ? [...localState.materiais]
     : (() => {
         const byCode = new Map<string, MaterialStored>();
@@ -2116,9 +2805,7 @@ export async function registrarAtendimentosSessao(
               codigo: item.codigoMaterial,
               descricao: item.descricaoMaterial,
               unidade: item.unidade,
-              // Sem recalculo remoto no Confirmar (latencia). UI ja validou saldo no leitor.
-              // Nao persistir estes saldos sinteticos no localStorage.
-              saldoAtual: 999999,
+              saldoAtual: Math.max(0, Number(saldoMapConfirmacao?.get(k) ?? 0) || 0),
             });
           }
         }
@@ -2142,6 +2829,7 @@ export async function registrarAtendimentosSessao(
   const documentosMutados = new Map<string, DocumentoStored>();
   const novosAtendimentos: Atendimento[] = [];
   const dataAtendimento = new Date().toISOString();
+  const auditoriaBeforeDocs = snapshotLinhasDocumentoParaAuditoria(documentos, gruposValidados);
 
   for (const grupo of gruposValidados) {
     const documentoIndex = documentos.findIndex((doc) => doc.id === grupo.documentoId);
@@ -2244,92 +2932,49 @@ export async function registrarAtendimentosSessao(
   if (shouldTryRemoteRead()) {
     const bloqueioAtendimento = bloqueioLocalChavesAtendimento({
       documentosLength: documentos.length,
-      materiaisLength: materiais.length,
+      // Com materiais na nuvem nao gravamos iso-pro-desktop-materiais — ignorar o JSON local.
+      materiaisLength: persistMateriaisLocais ? materiais.length : null,
       atendimentosLength: atendimentos.length,
     });
     if (bloqueioAtendimento) return { success: false, error: bloqueioAtendimento };
 
-    // Igual mobile: se a nuvem demorar >4s, grava local e libera a UI; sync continua.
-    // Em conflito/erro rapido: nao confirma sucesso (evita lote so no PC).
+    // Nunca liberar recibo antes da nuvem confirmar. O atalho de 4s (local + sync em fundo)
+    // gerava recibo falso: Historico vazio e QTD ATENDIDA=0 (incidente Construcap 26/07/2026).
+    // O comando e idempotente — se falhar/timeout, o utilizador confirma de novo sem duplicar.
     const persistLocal = () => {
       writeJson(documentosKeyAtendimento(), documentos);
-      if (materiaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
+      if (persistMateriaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
       writeJson(atendimentosStorageKey(), atendimentos);
     };
 
+    const tCloud0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const cloudPromise = writeSnapshotAtendimentoPatch({
       documentos: documentosPatch,
       atendimentos: novosAtendimentos,
     });
 
     try {
-      const raced = await Promise.race([
-        cloudPromise.then(() => 'ok' as const),
-        new Promise<'pending'>((resolve) => {
-          setTimeout(() => resolve('pending'), 4_000);
-        }),
-      ]);
-
-      if (raced === 'ok') {
-        persistLocal();
-        appendAuthAuditEvent({
-          type: 'atendimento_registrado',
-          actorLogin: payload.atendente.trim() || 'desconhecido',
-          detail: `Atendimento(s) ${novosAtendimentos.map((a) => a.numero).join(', ')} — ${novosAtendimentos.length} lote(s), docs ${[...documentosMutados.values()].map((d) => d.numero).join(', ')}.`,
-          entityType: 'atendimento',
-          entityId: novosAtendimentos[0]?.id,
-          after: {
-            lotes: novosAtendimentos.map((a) => ({
-              id: a.id,
-              numero: a.numero,
-              documentoNumero: a.documentoNumero,
-              itens: a.itens.map((it) => ({
-                codigo: it.codigoMaterial,
-                quantidade: it.quantidadeAtendida,
-                documento: it.documentoNumero,
-              })),
-            })),
-            origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
-          },
-        });
-        return {
-          success: true,
-          data: novosAtendimentos,
-          meta: { source: 'supabase' },
-        };
-      }
-
-      persistLocal();
-      appendAuthAuditEvent({
-        type: 'atendimento_registrado',
-        actorLogin: payload.atendente.trim() || 'desconhecido',
-        detail: `Atendimento(s) ${novosAtendimentos.map((a) => a.numero).join(', ')} gravado(s) no PC; sync nuvem em curso.`,
-        entityType: 'atendimento',
-        entityId: novosAtendimentos[0]?.id,
-        after: {
-          lotes: novosAtendimentos.map((a) => ({
-            id: a.id,
-            numero: a.numero,
-            documentoNumero: a.documentoNumero,
-          })),
-          origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
-          sync: 'pending',
-        },
-      });
-      void cloudPromise.catch((error: unknown) => {
-        const message = traduzirErroOperacionalIsoPro(
-          error instanceof Error ? error.message : 'Falha ao sincronizar atendimento na nuvem.',
+      await cloudPromise;
+      if (typeof console !== 'undefined' && console.info) {
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        console.info(
+          `[atendimento] registrar_sessao prep=${Math.round(tCloud0 - tPrep0)}ms ` +
+            `cloud=${Math.round(now - tCloud0)}ms lotes=${novosAtendimentos.length}`,
         );
-        captureOperationalEvent('atendimento_sync_background_fail', { message }, 'warning');
+      }
+      persistLocal();
+      auditarAtendimentoRegistrado({
+        actorLogin: payload.atendente.trim() || 'desconhecido',
+        novosAtendimentos,
+        documentosMutados,
+        grupos: gruposValidados,
+        beforeDocs: auditoriaBeforeDocs,
+        origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
       });
-
       return {
         success: true,
         data: novosAtendimentos,
-        meta: {
-          source: 'local',
-          fallbackReason: 'Retirada gravada no PC; sincronizacao com a nuvem em curso.',
-        },
+        meta: { source: 'supabase' },
       };
     } catch (error) {
       const message = traduzirErroOperacionalIsoPro(
@@ -2353,8 +2998,16 @@ export async function registrarAtendimentosSessao(
   const blockedSalvar = whenBusinessWriteBlockedResult<Atendimento[]>();
   if (blockedSalvar) return blockedSalvar;
   writeJson(documentosKeyAtendimento(), documentos);
-  if (materiaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
+  if (persistMateriaisLocais) writeJson(materiaisKeyAtendimento(), materiais);
   writeJson(atendimentosStorageKey(), atendimentos);
+  auditarAtendimentoRegistrado({
+    actorLogin: payload.atendente.trim() || 'desconhecido',
+    novosAtendimentos,
+    documentosMutados,
+    grupos: gruposValidados,
+    beforeDocs: auditoriaBeforeDocs,
+    origem: payload.origem === 'mobile' ? 'mobile' : 'windows',
+  });
   return { success: true, data: novosAtendimentos, meta: { source: 'local' } };
 }
 

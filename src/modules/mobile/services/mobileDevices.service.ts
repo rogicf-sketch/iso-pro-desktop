@@ -234,6 +234,28 @@ async function updateRemoteDeviceById(id: string, payload: { autorizado?: boolea
   }
 }
 
+async function deleteRemoteDeviceById(id: string) {
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new Error('Supabase nao configurado.');
+  }
+
+  const { data, error } = await supabase
+    .from('dispositivos_mobile')
+    .delete()
+    .eq('id', id)
+    .eq('tenant_id', getActiveTenantId())
+    .select('id');
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  if (!data?.length) {
+    throw new Error('Dispositivo nao encontrado ou sem permissao para excluir.');
+  }
+}
+
 export async function listMobileDevices(filters: MobileDeviceFilter): Promise<ListResponse> {
   try {
     const remoteItems = hasSupabaseConfig() ? await listRemoteDevices() : sortDevices(readDevices());
@@ -324,6 +346,23 @@ export async function unblockMobileDevice(id: string) {
  */
 export async function revokeMobileDevice(id: string) {
   await updateDeviceStatus(id, 'pendente');
+}
+
+/**
+ * Excluir = apagar o registo da lista (nuvem). O aparelho só volta a aparecer
+ * se o app se registar de novo (ex.: nova instalação / novo device_id).
+ */
+export async function deleteMobileDevice(id: string) {
+  if (hasSupabaseConfig()) {
+    await deleteRemoteDeviceById(id);
+    return;
+  }
+
+  if (isBusinessLocalWriteBlocked()) {
+    throw new Error('Nao e possivel excluir sem ligacao a nuvem neste build.');
+  }
+
+  writeDevices(readDevices().filter((item) => item.id !== id));
 }
 
 /** Teste manual: leitura da tabela (mesma usada pelo app mobile). */

@@ -1,16 +1,32 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { executarIsoProAdminUserUpsert, isIsoProAdminUserEdgeConfigured } from './isoProAdminUser.service';
+import {
+  executarIsoProAdminUserUpsert,
+  isIsoProAdminUserEdgeConfigured,
+  isIsoProAdminUserEdgeUnreachableError,
+} from './isoProAdminUser.service';
 
-const { mockHasSupabaseConfig, mockGetSupabase, mockReadConfiguracoes } = vi.hoisted(() => ({
+const { mockHasSupabaseConfig, mockGetSupabase, mockReadConfiguracoes, mockResolveCreds } = vi.hoisted(() => ({
   mockHasSupabaseConfig: vi.fn(() => true),
   mockGetSupabase: vi.fn(),
   mockReadConfiguracoes: vi.fn(() => ({ isoProAdminUserSecret: '' })),
+  mockResolveCreds: vi.fn(() => ({
+    url: 'https://example.supabase.co',
+    key: 'anon-key',
+    urlFrom: 'vite-env' as const,
+    keyFrom: 'vite-env' as const,
+  })),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
   hasSupabaseConfig: () => mockHasSupabaseConfig(),
   getSupabase: () => mockGetSupabase(),
+  resolveSupabaseCredentials: () => mockResolveCreds(),
+}));
+
+vi.mock('../../../lib/supabaseDesktopFetch', () => ({
+  canUseDesktopSupabaseFetch: () => false,
+  createDesktopSupabaseFetch: () => fetch,
 }));
 
 vi.mock('../../configuracoes/services/configuracoes.service', () => ({
@@ -21,10 +37,14 @@ describe('isoProAdminUser.service', () => {
   beforeEach(() => {
     mockHasSupabaseConfig.mockReturnValue(true);
     mockReadConfiguracoes.mockReturnValue({ isoProAdminUserSecret: '  x  ' });
+    mockGetSupabase.mockReturnValue({
+      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: null } }) },
+    });
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('isIsoProAdminUserEdgeConfigured e falso quando segredo vazio', () => {
@@ -37,12 +57,18 @@ describe('isoProAdminUser.service', () => {
     expect(isIsoProAdminUserEdgeConfigured()).toBe(true);
   });
 
-  it('executarIsoProAdminUserUpsert envia cabecalho e corpo', async () => {
-    const invoke = vi.fn().mockResolvedValue({
-      data: { ok: true, user: { id: 'u1', login: 'a' } },
-      error: null,
+  it('detecta erro de Edge inacessivel', () => {
+    expect(isIsoProAdminUserEdgeUnreachableError('Failed to send a request to the Edge Function')).toBe(true);
+    expect(isIsoProAdminUserEdgeUnreachableError('Segredo incorrecto')).toBe(false);
+  });
+
+  it('executarIsoProAdminUserUpsert faz POST com segredo no corpo', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, user: { id: 'u1', login: 'a' } }),
     });
-    mockGetSupabase.mockReturnValue({ functions: { invoke } });
+    vi.stubGlobal('fetch', fetchMock);
 
     const res = await executarIsoProAdminUserUpsert({
       secret: 's',
@@ -62,15 +88,11 @@ describe('isoProAdminUser.service', () => {
     });
 
     expect(res.success).toBe(true);
-    expect(invoke).toHaveBeenCalledWith(
-      'iso_pro_admin_user',
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.supabase.co/functions/v1/iso_pro_admin_user',
       expect.objectContaining({
-        headers: { 'x-iso-pro-admin-user-secret': 's' },
-        body: expect.objectContaining({
-          mode: 'create',
-          actorLogin: 'admin',
-          tenantId: '00000000-0000-0000-0000-000000000001',
-        }),
+        method: 'POST',
+        body: expect.stringContaining('"adminUserSecret":"s"'),
       }),
     );
   });

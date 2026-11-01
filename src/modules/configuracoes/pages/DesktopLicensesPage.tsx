@@ -5,6 +5,7 @@ import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { Select } from '../../../components/ui/Select';
 import { useAuth } from '../../auth/hooks/useAuth';
+import { DesktopLicenseIssuePanel } from '../components/DesktopLicenseIssuePanel';
 import { DesktopLicensesTable } from '../components/DesktopLicensesTable';
 import { useDesktopLicenses } from '../hooks/useDesktopLicenses';
 
@@ -22,11 +23,20 @@ export function DesktopLicensesPage() {
     riskIndicators,
     statusFilter,
     periodFilter,
+    tenantFilter,
     searchTerm,
     page,
     pageSize,
+    superAdmin,
+    privateKeyConfigured,
+    tenants,
+    capabilitiesHint,
+    actorLogin,
+    actorSenha,
+    onDefaultTenant,
     setStatusFilter,
     setPeriodFilter,
+    setTenantFilter,
     setSearchTerm,
     setPage,
     reload,
@@ -50,7 +60,7 @@ export function DesktopLicensesPage() {
               <Button onClick={exportLicenses} variant="ghost">
                 Exportar CSV
               </Button>
-              <Button onClick={reload} variant="ghost">
+              <Button onClick={() => void reload()} variant="ghost">
                 Atualizar lista
               </Button>
             </div>
@@ -60,15 +70,34 @@ export function DesktopLicensesPage() {
 
       <ModuleHelp>
         <p className="panel-copy">
-          Painel central para acompanhar licencas emitidas, status remoto, maquina vinculada e acoes administrativas de revogacao ou reativacao.
+          Painel central para acompanhar licencas emitidas, status remoto, maquina vinculada e acoes administrativas de
+          revogacao ou reativacao.
+          {superAdmin
+            ? ' Modo super-admin activo: podes emitir e gerir licencas de todas as empresas a partir da organizacao principal.'
+            : ''}
         </p>
       </ModuleHelp>
 
       <OperationalNotice>{`Fonte atual: ${syncSource === 'supabase' ? 'Supabase' : 'fallback local'}.${syncWarning ? ` Aviso: ${syncWarning}` : ''}`}</OperationalNotice>
-      {canAdminister ? (
-        <OperationalNotice tone="warning">
-          Regra de seguranca: revogar uma licenca centralmente deve ser usado quando um equipamento sair da operacao ou perder autorizacao de uso.
+      {superAdmin ? (
+        <OperationalNotice tone="success">
+          Super-admin de plataforma activo. Lista unificada de licencas; usa «Empresa destino» ao emitir.
         </OperationalNotice>
+      ) : null}
+      {onDefaultTenant && canAdminister && !superAdmin && capabilitiesHint ? (
+        <OperationalNotice tone="warning">
+          Super-admin indisponivel nesta sessao: {capabilitiesHint}. Confirma a migracao{' '}
+          <code>plataforma_super_admin</code>, o segredo ISO_PRO_ADMIN_USER_SECRET e que entraste na organizacao
+          principal.
+        </OperationalNotice>
+      ) : null}
+      {canAdminister ? (
+        <ModuleHelp>
+          <OperationalNotice tone="warning">
+            Regra de seguranca: revogar uma licenca centralmente deve ser usado quando um equipamento sair da operacao ou
+            perder autorizacao de uso.
+          </OperationalNotice>
+        </ModuleHelp>
       ) : null}
       {riskIndicators.expired ? (
         <OperationalNotice tone="critical">{`Risco: ${riskIndicators.expired} licenca(s) desktop ja estao expiradas no registro central.`}</OperationalNotice>
@@ -80,14 +109,47 @@ export function DesktopLicensesPage() {
         <OperationalNotice tone="warning">{`Governanca: ${riskIndicators.missingMachineLabel} licenca(s) estao sem nome administrativo da maquina.`}</OperationalNotice>
       ) : null}
 
+      {superAdmin && actorLogin ? (
+        <DesktopLicenseIssuePanel
+          actorLogin={actorLogin}
+          actorSenha={actorSenha}
+          onIssued={() => void reload()}
+          privateKeyConfigured={privateKeyConfigured}
+          tenants={tenants}
+        />
+      ) : null}
+
       <div className="form-columns">
-        <Input label="Buscar por titular, maquina ou licenca" onChange={(event) => setSearchTerm(event.target.value)} placeholder="Ex.: cliente, pc-almox, license id" value={searchTerm} />
-        <Select label="Status" onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} value={statusFilter}>
+        <Input
+          label="Buscar por titular, maquina ou licenca"
+          onChange={(event) => setSearchTerm(event.target.value)}
+          placeholder="Ex.: cliente, pc-almox, license id"
+          value={searchTerm}
+        />
+        {superAdmin ? (
+          <Select label="Empresa" onChange={(event) => setTenantFilter(event.target.value)} value={tenantFilter}>
+            <option value="todos">Todas as empresas</option>
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </Select>
+        ) : null}
+        <Select
+          label="Status"
+          onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+          value={statusFilter}
+        >
           <option value="todos">Todos</option>
           <option value="active">Ativas</option>
           <option value="revoked">Revogadas</option>
         </Select>
-        <Select label="Periodo" onChange={(event) => setPeriodFilter(event.target.value as typeof periodFilter)} value={periodFilter}>
+        <Select
+          label="Periodo"
+          onChange={(event) => setPeriodFilter(event.target.value as typeof periodFilter)}
+          value={periodFilter}
+        >
           <option value="todos">Todo o periodo</option>
           <option value="30d">Emitidas nos ultimos 30 dias</option>
           <option value="90d">Emitidas nos ultimos 90 dias</option>
@@ -117,19 +179,33 @@ export function DesktopLicensesPage() {
       </div>
 
       {error ? <div className="error-box">{error}</div> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
 
       {loading ? (
         <OperationalNotice>Carregando licencas desktop...</OperationalNotice>
       ) : (
         <>
-          <DesktopLicensesTable canAdminister={canAdminister} items={paginatedItems} onRestore={handleRestore} onRevoke={handleRevoke} />
-          <Pagination onPageChange={setPage} page={page} pageSize={pageSize} total={filteredItems.length} />
+          <DesktopLicensesTable
+            canAdminister={canAdminister}
+            items={paginatedItems}
+            onRestore={handleRestore}
+            onRevoke={handleRevoke}
+            showTenant={superAdmin}
+          />
+          <Pagination
+            itemLabel="licenças"
+            onPageChange={setPage}
+            page={page}
+            pageSize={pageSize}
+            total={filteredItems.length}
+          />
         </>
       )}
 
       {!canAdminister ? (
-        <OperationalNotice>Seu perfil pode consultar licencas desktop, mas nao pode revogar nem reativar.</OperationalNotice>
+        <OperationalNotice>
+          Seu perfil pode consultar licencas desktop, mas nao pode revogar nem reativar.
+        </OperationalNotice>
       ) : null}
     </div>
   );

@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
@@ -20,7 +21,7 @@ const initialFilters: InventarioFiltro = {
   busca: '',
   status: 'todos',
   page: 1,
-  pageSize: 6,
+  pageSize: 15,
 };
 
 const emptyForm: InventarioFormData = {
@@ -48,7 +49,7 @@ export function useInventarios() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selected, setSelected] = useState<Inventario | null>(null);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -85,6 +86,16 @@ export function useInventarios() {
   const refreshing = listQuery.isFetching && items.length > 0;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
   const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['inventario', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -208,6 +219,7 @@ export function useInventarios() {
     success,
     fallbackReason,
     listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,

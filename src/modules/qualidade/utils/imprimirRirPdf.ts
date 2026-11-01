@@ -61,7 +61,7 @@ async function gerarBytesRir(
 
 ): Promise<{ bytes: Uint8Array; origem: 'local' | 'nuvem'; fileName: string }> {
 
-  const html = montarHtmlRelatorioRirParaPdf(registro);
+  const html = await montarHtmlRelatorioRirParaPdf(registro);
 
   const fileName = nomeArquivoRir(registro);
 
@@ -126,7 +126,7 @@ export async function imprimirRirRelatorioPdf(
   registro: RirRegistro,
   opts?: { printWindow?: Window | null },
 ): Promise<RirPdfResult> {
-  const html = montarDocumentoHtmlImpressaoRir(registro);
+  const html = await montarDocumentoHtmlImpressaoRir(registro);
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
 
   if (api?.printHtml) {
@@ -180,7 +180,7 @@ export async function imprimirRirRelatorioPdf(
 
 export async function salvarRirRelatorioPdf(registro: RirRegistro): Promise<RirPdfResult> {
 
-  const html = montarHtmlRelatorioRirParaPdf(registro);
+  const html = await montarHtmlRelatorioRirParaPdf(registro);
 
   const fileName = nomeArquivoRir(registro);
 
@@ -242,7 +242,7 @@ export async function preVisualizarRirRelatorio(registro: RirRegistro): Promise<
 
     const titulo = tituloRir(registro);
 
-    const html = montarDocumentoHtmlImpressaoRir(registro);
+    const html = await montarDocumentoHtmlImpressaoRir(registro);
 
     const htmlPreview = await abrirPreVisualizacaoHtmlRelatorio(html, {
       tituloCarregamento: titulo,

@@ -51,4 +51,9 @@ export type DocumentosImportacaoResumo = {
   atualizados: number;
   ignorados: number;
   detalhes: string[];
+  /** Mensagem curta quando a importacao nao aplicou alteracoes (modal de relatorio). */
+  mensagem?: string;
+  ficheiroOrigem?: string;
+  /** Revisões antigas canceladas (opção explícita na importação). */
+  canceladosPorRevisao?: number;
 };

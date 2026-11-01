@@ -1,8 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconPencil, IconRefresh } from '../../../components/ui/TableActionIcons';
 import type { UsuarioSistema } from '../types/usuario.types';
 
 type Props = {
@@ -20,7 +20,7 @@ export function UsuariosTable({ items, onEdit, onToggleStatus, canEdit, canAdmin
       columns={[
         {
           key: 'usuario',
-          header: 'Usuario',
+          header: 'Usuário',
           render: (item) => (
             <div>
               <strong>{item.nome}</strong>
@@ -50,31 +50,33 @@ export function UsuariosTable({ items, onEdit, onToggleStatus, canEdit, canAdmin
         {
           key: 'status',
           header: 'Status',
-          render: (item) => <StatusBadge text={item.ativo ? 'Ativo' : 'Inativo'} tone={item.ativo ? 'ok' : 'warning'} />,
+          render: (item) => <StatusBadge text={item.ativo ? 'Ativo' : 'Inativo'} tone={item.ativo ? 'ok' : 'neutral'} />,
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
               {canEdit ? (
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
+                <TableIconButton label="Editar usuário" onClick={() => onEdit(item)}>
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
               {canAdminister ? (
-                <ActionButton
-                  enabledLabel={item.ativo ? 'Desativar' : 'Ativar'}
-                  enabledTitle={item.ativo ? 'Desativar usuario no sistema.' : 'Reativar usuario para liberar novo acesso.'}
+                <TableIconButton
+                  label={item.ativo ? 'Desativar usuário' : 'Ativar usuário'}
                   onClick={() => onToggleStatus(item)}
-                  variant={item.ativo ? 'danger' : 'primary'}
-                />
+                  tone={item.ativo ? 'danger' : 'neutral'}
+                >
+                  {item.ativo ? <IconBan /> : <IconRefresh />}
+                </TableIconButton>
               ) : null}
             </div>
           ),
         },
       ]}
-      emptyText="Nenhum usuario encontrado."
+      emptyDescription="Crie um usuário do sistema ou limpe o filtro de busca."
+      emptyText="Nenhum usuário encontrado"
       items={items}
     />
   );

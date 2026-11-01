@@ -1,0 +1,13 @@
+---
+description: Evitar texto UI corrompido (mojibake UTF-8) em strings do produto
+globs: src/**/*.{ts,tsx,js,jsx}
+alwaysApply: false
+---
+
+# Sem texto corrompido (mojibake)
+
+Nunca gravar sequências como `â€¦`, `â€”`, `NÃ£o`, `possÃ­vel`, `Â«…Â»` em strings ou comentários visíveis.
+
+- Preferir ASCII estável em UI: `...`, `-`, `Nao`, aspas `"`.
+- Se usar acentos UTF-8 (`Não`, `possível`), garantir ficheiro UTF-8 e validar no ecrã.
+- Antes de fechar alterações de copy, correr `npm run check:mojibake` (também corre em `build:hosting` / CI).

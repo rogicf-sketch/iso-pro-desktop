@@ -1,9 +1,5 @@
-import {
-  clearIsoProJwtSession,
-  ensureIsoProDataSessionReadable,
-} from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
-import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from './supabase';
+import { hasSupabaseConfig, rpcSemFilaAuth, shouldUseCloudMaterials } from './supabase';
 
 export type MaterialPageWire = {
   id: string | number;
@@ -36,32 +32,22 @@ export async function listMateriaisPageFromCloud(options?: {
     return { materiais: [], total: 0, source: 'none', error: 'Materiais nuvem indisponiveis.' };
   }
 
-  await ensureIsoProDataSessionReadable();
+  // Leitura directa: a fila de sessao do cliente segurava a lista e o PC mostrava a copia local antiga.
+  const { data, error } = await rpcSemFilaAuth<{
+    materiais?: unknown;
+    total?: number;
+    _source?: string;
+    _error?: string;
+  }>('iso_pro_list_materiais_page', {
+    p_tenant_id: getActiveTenantId(),
+    p_busca: options?.busca?.trim() || null,
+    p_offset: options?.offset ?? 0,
+    p_limit: options?.limit ?? 50,
+    p_disciplina: options?.disciplina?.trim() || null,
+    p_ativo: options?.ativo && options.ativo !== 'todos' ? options.ativo : null,
+  });
 
-  const invoke = async () => {
-    const supabase = getSupabase();
-    if (!supabase) return { data: null as unknown, error: { message: 'Supabase indisponivel.' } };
-    return supabase.rpc('iso_pro_list_materiais_page', {
-      p_tenant_id: getActiveTenantId(),
-      p_busca: options?.busca?.trim() || null,
-      p_offset: options?.offset ?? 0,
-      p_limit: options?.limit ?? 50,
-      p_disciplina: options?.disciplina?.trim() || null,
-      p_ativo: options?.ativo && options.ativo !== 'todos' ? options.ativo : null,
-    });
-  };
-
-  let { data, error } = await invoke();
-
-  if (
-    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(String(error.message))) ||
-    (!error && Number((data as { total?: number } | null)?.total ?? 0) === 0)
-  ) {
-    await clearIsoProJwtSession();
-    ({ data, error } = await invoke());
-  }
-
-  if (error) return { materiais: [], total: 0, source: 'error', error: error.message };
+  if (error) return { materiais: [], total: 0, source: 'error', error };
   const row = (data ?? {}) as {
     materiais?: unknown;
     total?: number;

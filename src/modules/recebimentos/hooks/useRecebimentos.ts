@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
+import { useStaleWhileRevalidateListaRetry } from '../../../hooks/useStaleWhileRevalidateListaRetry';
 import { useConfirmDialog } from '../../../components/ui/ConfirmDialogProvider';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
 import { verifyCurrentUserPassword } from '../../auth/services/auth.service';
@@ -38,7 +39,7 @@ const initialFilters: RecebimentoFiltro = {
   status: 'todos',
   modo: 'todos',
   page: 1,
-  pageSize: 6,
+  pageSize: 18,
 };
 
 const emptyForm: RecebimentoFormData = {
@@ -65,6 +66,8 @@ export function useRecebimentos() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [viewOpening, setViewOpening] = useState(false);
+  const viewSeqRef = useRef(0);
   /** Somente leitura: ver cabecalho e itens sem editar (ex.: recebimento conferido). */
   const [isViewOnly, setIsViewOnly] = useState(false);
   const [selected, setSelected] = useState<Recebimento | null>(null);
@@ -85,7 +88,7 @@ export function useRecebimentos() {
   }
   const [selectAllFilteredBusy, setSelectAllFilteredBusy] = useState(false);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const importMassInputRef = useRef<HTMLInputElement>(null);
@@ -96,8 +99,10 @@ export function useRecebimentos() {
     recebimentoCount: number;
   } | null>(null);
   const [importingRecebimentosMass, setImportingRecebimentosMass] = useState(false);
+  const [importMassProgress, setImportMassProgress] = useState('');
   const [importMassResultado, setImportMassResultado] = useState<RecebimentosImportacaoResumo | null>(null);
   const [importMassSnapshotConflict, setImportMassSnapshotConflict] = useState(false);
+  const [exportingRecebimentosCsv, setExportingRecebimentosCsv] = useState(false);
 
   const selectedRecebimentoIdSet = useMemo(() => new Set(selectedRecebimentoIds), [selectedRecebimentoIds]);
   const idsParaExcluirKey = idsParaExcluirRecebimentos.slice().sort().join('\u0001');
@@ -122,6 +127,8 @@ export function useRecebimentos() {
         items: result.data.items,
         total: result.data.total,
         fallbackReason: result.meta?.fallbackReason ?? '',
+        listSource: result.meta?.source ?? 'local',
+        staleWhileRevalidate: Boolean(result.meta?.staleWhileRevalidate),
       };
     },
   });
@@ -130,6 +137,17 @@ export function useRecebimentos() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
   const fallbackReason = listQuery.data?.fallbackReason ?? '';
+  const listSource = listQuery.data?.listSource ?? 'local';
+  const staleWhileRevalidate = Boolean(listQuery.data?.staleWhileRevalidate);
+
+  useStaleWhileRevalidateListaRetry({
+    staleWhileRevalidate,
+    hasCloudConfig,
+    queryClient,
+    queryKeyPrefix: ['recebimentos', 'lista'],
+    deps: [filtersForLista],
+  });
+
   const listError =
     listQuery.isError && listQuery.error instanceof Error
       ? listQuery.error.message
@@ -141,7 +159,11 @@ export function useRecebimentos() {
     setError('');
     setSuccess('');
     setImportMassSnapshotConflict(false);
-    await queryClient.invalidateQueries({ queryKey: ['recebimentos'] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['recebimentos'] }),
+      // Lista de planejamento lê coluna status; após NF precisa refrescar (Recebido/Parcial).
+      queryClient.invalidateQueries({ queryKey: ['documentos'] }),
+    ]);
   }, [queryClient]);
 
   useEffect(() => {
@@ -219,7 +241,9 @@ export function useRecebimentos() {
       return { success: false, error: erroMateriais };
     }
 
-    const result = await salvarRecebimento({ ...data, fornecedor: fornecedorCadastrado }, selected?.id);
+    const result = await salvarRecebimento({ ...data, fornecedor: fornecedorCadastrado }, selected?.id, {
+      actorLogin: user?.login,
+    });
     if (result.success) {
       setIsModalOpen(false);
       setSelected(null);
@@ -246,7 +270,7 @@ export function useRecebimentos() {
     if (!(await confirm({ message: `Confirma o cancelamento do recebimento ${item.notaFiscal || item.id}?` }))) {
       return;
     }
-    const result = await cancelarRecebimento(item.id);
+    const result = await cancelarRecebimento(item.id, { actorLogin: user?.login });
     if (!result.success) {
       setError(result.error ?? 'Nao foi possivel cancelar recebimento.');
       return;
@@ -317,8 +341,8 @@ export function useRecebimentos() {
   }
 
   function abrirDestravarRecebimento(item: RecebimentoListItem) {
-    if (!canAccessAction('recebimentos', 'administrar')) {
-      setError('Seu perfil nao possui permissao para administrar recebimentos.');
+    if (!canAccessAction('recebimentos', 'editar') && !canAccessAction('recebimentos', 'administrar')) {
+      setError('Seu perfil nao possui permissao para destravar recebimentos (precisa editar ou administrar).');
       return;
     }
     const ok =
@@ -340,8 +364,8 @@ export function useRecebimentos() {
 
   async function confirmarDestravarRecebimento() {
     if (!destravarContext) return;
-    if (!canAccessAction('recebimentos', 'administrar')) {
-      setError('Seu perfil nao possui permissao para administrar recebimentos.');
+    if (!canAccessAction('recebimentos', 'editar') && !canAccessAction('recebimentos', 'administrar')) {
+      setError('Seu perfil nao possui permissao para destravar recebimentos (precisa editar ou administrar).');
       return;
     }
     setError('');
@@ -430,22 +454,27 @@ export function useRecebimentos() {
       setError('Seu perfil nao possui permissao para exportar recebimentos.');
       return;
     }
+    if (exportingRecebimentosCsv) return;
     setError('');
-    const result = await montarExportacaoRecebimentosCsvItens({
-      filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status, modo: filtersForLista.modo },
-    });
-    if (!result.success || !result.data) {
-      setError(result.error ?? 'Nao foi possivel gerar o CSV.');
-      return;
+    setSuccess('');
+    setExportingRecebimentosCsv(true);
+    try {
+      const result = await montarExportacaoRecebimentosCsvItens({
+        filtroLista: { busca: filtersForLista.busca, status: filtersForLista.status, modo: filtersForLista.modo },
+      });
+      if (!result.success || !result.data) {
+        setError(result.error ?? 'Nao foi possivel gerar o CSV.');
+        return;
+      }
+      baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
+      if (result.meta?.fallbackReason) {
+        setSuccess(`Exportacao concluida — ${result.meta.fallbackReason}`);
+        return;
+      }
+      setSuccess('Exportacao concluida. O ficheiro CSV foi descarregado.');
+    } finally {
+      setExportingRecebimentosCsv(false);
     }
-    baixarBlob(new Blob([result.data.csv], { type: 'text/csv;charset=utf-8' }), result.data.fileName);
-    if (result.meta?.fallbackReason) {
-      setSuccess(
-        `Exportacao Excel (CSV) concluida — ${result.meta.fallbackReason}`,
-      );
-      return;
-    }
-    setSuccess('Exportacao Excel (CSV) concluida — nota fiscal, fornecedor, romaneio e linhas de material.');
   }
 
   function downloadModeloCsvImportacaoRecebimentos() {
@@ -537,29 +566,43 @@ export function useRecebimentos() {
     setSuccess('');
     setImportMassSnapshotConflict(false);
     setImportingRecebimentosMass(true);
+    setImportMassProgress('A preparar as notas…');
     const text = importMassStaging.text;
 
-    const result = await importarRecebimentosDoArquivoCsv(text);
-    setImportingRecebimentosMass(false);
-    setImportMassStaging(null);
+    try {
+      const result = await importarRecebimentosDoArquivoCsv(text, {
+        onProgress: (mensagem) => setImportMassProgress(mensagem),
+      });
 
-    if (!result.success) {
-      setImportMassSnapshotConflict(isSnapshotConflictResult(result));
-      if (result.data?.detalhes.length) {
-        setError(`${result.error ?? 'Importacao nao concluida.'} Detalhes: ${result.data.detalhes.join(' | ')}`);
-      } else {
-        setError(result.error ?? 'Importacao nao concluida.');
+      if (!result.success) {
+        setImportMassSnapshotConflict(isSnapshotConflictResult(result));
+        if (result.data?.detalhes.length) {
+          setError(`${result.error ?? 'Importacao nao concluida.'} Detalhes: ${result.data.detalhes.slice(0, 8).join(' | ')}`);
+        } else {
+          setError(result.error ?? 'Importacao nao concluida. Atualize a pagina e confira o total antes de importar de novo.');
+        }
+        return;
       }
-      return;
-    }
 
-    const r = result.data;
-    if (!r) {
-      setError('Resumo da importacao indisponivel.');
-      return;
+      const r = result.data;
+      if (!r) {
+        setError('Resumo da importacao indisponivel.');
+        return;
+      }
+      setImportMassResultado(r);
+      void invalidateRecebimentosLista();
+    } catch (error) {
+      const detalhe = error instanceof Error ? error.message.replace(/\s+/g, ' ').slice(0, 180) : '';
+      setError(
+        detalhe
+          ? `A importacao nao confirmou o fim. ${detalhe} Atualize a pagina e confira o total antes de importar de novo.`
+          : 'A importacao nao confirmou o fim. Atualize a pagina e confira o total antes de importar de novo.',
+      );
+    } finally {
+      setImportingRecebimentosMass(false);
+      setImportMassProgress('');
+      setImportMassStaging(null);
     }
-    await invalidateRecebimentosLista();
-    setImportMassResultado(r);
   }
 
   async function reloadAfterImportMassSnapshotConflict() {
@@ -574,6 +617,8 @@ export function useRecebimentos() {
     error: error || listError,
     success,
     fallbackReason,
+    listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,
@@ -591,15 +636,22 @@ export function useRecebimentos() {
       setIsModalOpen(true);
     },
     openViewModal: async (item: RecebimentoListItem) => {
+      const seq = ++viewSeqRef.current;
       setError('');
-      const result = await buscarRecebimentoPorId(item.id);
+      setIsViewOnly(true);
+      setSelected(null);
+      setViewOpening(true);
+      setIsModalOpen(true);
+      const result = await buscarRecebimentoPorId(item.id, { visualizacao: true });
+      if (seq !== viewSeqRef.current) return;
+      setViewOpening(false);
       if (!result.success || !result.data) {
+        setIsModalOpen(false);
+        setIsViewOnly(false);
         setError(result.error ?? 'Nao foi possivel carregar o recebimento.');
         return;
       }
       setSelected(result.data);
-      setIsViewOnly(true);
-      setIsModalOpen(true);
     },
     openEditModal: async (item: RecebimentoListItem) => {
       if (!canAccessAction('recebimentos', 'editar')) {
@@ -624,19 +676,24 @@ export function useRecebimentos() {
       setIsModalOpen(true);
     },
     closeModal: () => {
+      viewSeqRef.current += 1;
+      setViewOpening(false);
       setSelected(null);
       setIsViewOnly(false);
       setIsModalOpen(false);
     },
+    viewOpening,
     isViewOnly,
     submitRecebimento,
     handleCancelar,
     exportRecebimentosExcel,
+    exportingRecebimentosCsv,
     downloadModeloCsvImportacaoRecebimentos,
     downloadModeloCsvImportacaoRecebimentosItens,
     importMassInputRef,
     importMassStaging,
     importingRecebimentosMass,
+    importMassProgress,
     importMassResultado,
     importMassSnapshotConflict,
     openImportRecebimentosMassaPicker,

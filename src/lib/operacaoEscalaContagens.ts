@@ -1,6 +1,9 @@
-import { clearIsoProJwtSession, ensureIsoProDataSessionReadable } from './isoProJwtSession';
+import { ensureIsoProDataSessionReadable } from './isoProJwtSession';
 import { getActiveTenantId } from './isoProTenant';
-import { getSupabase, hasSupabaseConfig } from './supabase';
+import { SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS } from './isoProSnapshot';
+import { readSnapshotRemoteSliceOrFull } from './snapshotSliceRead';
+import { getSupabase, hasSupabaseConfig, rpcComJwtSemFila, rpcSemFilaAuth } from './supabase';
+import { buildSaldoMap } from '../modules/estoque/saldoFromSnapshot';
 
 export type OperacaoContagens = {
   docsPendentes: number;
@@ -41,19 +44,9 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Contagens leves para Painel e badges (1 RPC, sem arrays). */
-export async function fetchOperacaoContagens(): Promise<OperacaoContagens> {
-  if (!hasSupabaseConfig()) return { ...CONTAGENS_VAZIAS };
-  const supabase = getSupabase();
-  if (!supabase) return { ...CONTAGENS_VAZIAS };
-
-  const { data, error } = await supabase.rpc('iso_pro_operacao_contagens', {
-    p_tenant_id: getActiveTenantId(),
-  });
-  if (error) return { ...CONTAGENS_VAZIAS };
+function parseContagensRow(data: unknown): OperacaoContagens | null {
   const row = (data ?? {}) as Record<string, unknown>;
-  if (row._error) return { ...CONTAGENS_VAZIAS };
-
+  if (row._error) return null;
   return {
     docsPendentes: num(row.docsPendentes),
     docsStatusPendente: num(row.docsStatusPendente),
@@ -70,6 +63,31 @@ export async function fetchOperacaoContagens(): Promise<OperacaoContagens> {
     rirReprovadoSemRnc: num(row.rirReprovadoSemRnc),
     sourceDocs: String(row._sourceDocs ?? 'unknown'),
   };
+}
+
+async function fetchOperacaoContagensNow(): Promise<OperacaoContagens> {
+  if (!hasSupabaseConfig()) return { ...CONTAGENS_VAZIAS };
+
+  await ensureIsoProDataSessionReadable();
+
+  const supabase = getSupabase();
+  if (!supabase) return { ...CONTAGENS_VAZIAS };
+  const { data, error } = await supabase.rpc('iso_pro_operacao_contagens', {
+    p_tenant_id: getActiveTenantId(),
+  });
+  const parsed = error ? null : parseContagensRow(data);
+  return parsed ?? { ...CONTAGENS_VAZIAS };
+}
+
+let operacaoContagensFlight: Promise<OperacaoContagens> | null = null;
+
+/** Contagens leves para Painel e badges (1 RPC, sem arrays). Chamadas juntas partilham a mesma ida. */
+export async function fetchOperacaoContagens(): Promise<OperacaoContagens> {
+  if (operacaoContagensFlight) return operacaoContagensFlight;
+  operacaoContagensFlight = fetchOperacaoContagensNow().finally(() => {
+    operacaoContagensFlight = null;
+  });
+  return operacaoContagensFlight;
 }
 
 export type DocumentoPendenteAtendimentoWire = {
@@ -120,18 +138,7 @@ export async function listDocumentosPendentesAtendimentoFromCloud(options?: {
     });
   };
 
-  let { data, error } = await invoke();
-
-  const totalOf = (raw: unknown) => Number((raw as { total?: number } | null)?.total ?? 0);
-  const sourceOf = (raw: unknown) => String((raw as { _source?: string } | null)?._source ?? '');
-  const needsAnonRetry =
-    (error && /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID/i.test(String(error.message))) ||
-    (!error && (totalOf(data) === 0 || sourceOf(data) === 'snapshot'));
-
-  if (needsAnonRetry) {
-    await clearIsoProJwtSession();
-    ({ data, error } = await invoke());
-  }
+  const { data, error } = await invoke();
 
   if (error) {
     return { documentos: [], total: 0, truncated: false, source: 'error', error: error.message };
@@ -239,25 +246,12 @@ export async function listDocumentosPendentesPorCodigoMaterialFromCloud(
     return { documentos };
   };
 
-  let result = await queryOnce();
-  // RLS com JWT residual devolve 0 linhas sem erro — so faz retry se ainda ha sessao Auth.
-  if (result.documentos.length === 0) {
-    const supabase = getSupabase();
-    const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : '';
-    const authBlocked =
-      Boolean(result.error) &&
-      /ISO_PRO_TENANT_FORBIDDEN|ISO_PRO_TENANT_INVALID|permission|rls|policy|jwt/i.test(result.error ?? '');
-    if (token || authBlocked) {
-      await clearIsoProJwtSession();
-      result = await queryOnce();
-    }
-  }
-  return result;
+  return queryOnce();
 }
 
 /**
- * Mapa codigo → quantidade recebida, agregado no servidor a partir do snapshot
- * (mesmas regras do buildSaldoMap). Devolve `null` quando a RPC nao existe/falha —
+ * Mapa codigo → quantidade recebida, agregado no servidor (tabelas SoT; fallback snapshot).
+ * Mesmas regras do buildSaldoMap. Devolve `null` quando a RPC nao existe/falha —
  * o caller decide o fallback (baixar a fatia `recebimentos` completa).
  */
 export async function fetchQuantidadeRecebidaPorCodigo(): Promise<Map<string, number> | null> {
@@ -297,6 +291,236 @@ export async function fetchQuantidadeAtendidaPorCodigo(): Promise<Map<string, nu
     const key = String(k ?? '').trim().toLowerCase();
     if (!key) continue;
     out.set(key, num(v));
+  }
+  return out;
+}
+
+function recebimentosSinteticosDeRecebidoPorCodigo(
+  recebidoPorCodigo: Map<string, number>,
+): Array<{ modoRecebimento: 'direto'; itens: Array<{ codigo: string; quantidade: number }> }> {
+  return [
+    {
+      modoRecebimento: 'direto',
+      itens: [...recebidoPorCodigo.entries()].map(([codigo, quantidade]) => ({ codigo, quantidade })),
+    },
+  ];
+}
+
+function documentosSinteticosDeAtendidoPorCodigo(
+  atendidoPorCodigo: Map<string, number>,
+): Array<{
+  id: string;
+  itens: Array<{ codigo: string; quantidade: number; quantidadeAtendida: number }>;
+}> {
+  return [
+    {
+      id: '__atendido_agg__',
+      itens: [...atendidoPorCodigo.entries()].map(([codigo, quantidadeAtendida]) => ({
+        codigo,
+        quantidade: quantidadeAtendida,
+        quantidadeAtendida,
+      })),
+    },
+  ];
+}
+
+/**
+ * Saldo operacional 100k-safe: RPCs de agregado + fatia leve (materiais/ajustes).
+ * Nao baixa documentos[] nem recebimentos[].
+ */
+export async function carregarSaldoMapFromAgregadosNuvem(): Promise<Map<string, number> | null> {
+  if (!hasSupabaseConfig()) return null;
+
+  const [recebidoPorCodigo, atendidoPorCodigo] = await Promise.all([
+    fetchQuantidadeRecebidaPorCodigo().catch(() => null),
+    fetchQuantidadeAtendidaPorCodigo().catch(() => new Map<string, number>()),
+  ]);
+  if (recebidoPorCodigo == null && atendidoPorCodigo.size === 0) return null;
+
+  const parcial = await readSnapshotRemoteSliceOrFull<Record<string, unknown>>(
+    SNAPSHOT_SALDO_AGREGADOS_SLICE_KEYS,
+  );
+  return buildSaldoMap({
+    ...parcial,
+    recebimentos:
+      recebidoPorCodigo != null ? recebimentosSinteticosDeRecebidoPorCodigo(recebidoPorCodigo) : [],
+    documentos: documentosSinteticosDeAtendidoPorCodigo(atendidoPorCodigo),
+  });
+}
+
+/**
+ * Documentos (com itens do codigo) — leitura directa das tabelas, limite seguro.
+ * Inclui linhas ja atendidas (consulta material), ao contrario da lista de pendentes.
+ */
+export async function listDocumentosPorCodigoMaterialFromCloud(
+  codigoMaterial: string,
+  limitDocs = 80,
+): Promise<{
+  documentos: Array<{
+    id: string;
+    numero: string;
+    revisao: string;
+    descricao: string;
+    status: string;
+    itens: Array<{
+      id: string;
+      codigo: string;
+      descricao: string;
+      unidade: string;
+      quantidade: number;
+      quantidadeAtendida: number;
+    }>;
+  }>;
+  error?: string;
+}> {
+  const codigo = codigoMaterial.trim();
+  if (!codigo) return { documentos: [] };
+  if (!hasSupabaseConfig()) return { documentos: [], error: 'Supabase nao configurado.' };
+
+  await ensureIsoProDataSessionReadable();
+  const supabase = getSupabase();
+  if (!supabase) return { documentos: [], error: 'Supabase indisponivel.' };
+  const tenantId = getActiveTenantId();
+
+  const { data: linhas, error: e1 } = await supabase
+    .from('iso_pro_documento_itens_planejamento')
+    .select('documento_id')
+    .eq('tenant_id', tenantId)
+    .ilike('codigo', codigo)
+    .limit(400);
+  if (e1) return { documentos: [], error: e1.message };
+
+  const docIds = [...new Set((linhas ?? []).map((l) => String(l.documento_id)))].slice(0, limitDocs);
+  if (!docIds.length) return { documentos: [] };
+
+  const [{ data: docs, error: e2 }, { data: itens, error: e3 }] = await Promise.all([
+    supabase
+      .from('iso_pro_documentos_planejamento')
+      .select('id,numero,revisao,descricao,status')
+      .eq('tenant_id', tenantId)
+      .in('id', docIds),
+    supabase
+      .from('iso_pro_documento_itens_planejamento')
+      .select('id,documento_id,codigo,descricao,unidade,quantidade,quantidade_atendida')
+      .eq('tenant_id', tenantId)
+      .in('documento_id', docIds)
+      .ilike('codigo', codigo),
+  ]);
+  if (e2) return { documentos: [], error: e2.message };
+  if (e3) return { documentos: [], error: e3.message };
+
+  const itensPorDoc = new Map<
+    string,
+    Array<{
+      id: string;
+      codigo: string;
+      descricao: string;
+      unidade: string;
+      quantidade: number;
+      quantidadeAtendida: number;
+    }>
+  >();
+  for (const item of itens ?? []) {
+    const key = String(item.documento_id);
+    const lista = itensPorDoc.get(key) ?? [];
+    lista.push({
+      id: String(item.id),
+      codigo: String(item.codigo ?? ''),
+      descricao: String(item.descricao ?? ''),
+      unidade: String(item.unidade ?? 'UN'),
+      quantidade: Number(item.quantidade) || 0,
+      quantidadeAtendida: Number(item.quantidade_atendida) || 0,
+    });
+    itensPorDoc.set(key, lista);
+  }
+
+  return {
+    documentos: (docs ?? [])
+      .filter((d) => String(d.status ?? '').trim().toLowerCase() !== 'cancelado')
+      .map((d) => ({
+        id: String(d.id),
+        numero: String(d.numero ?? ''),
+        revisao: String(d.revisao ?? 'A'),
+        descricao: String(d.descricao ?? ''),
+        status: String(d.status ?? 'pendente'),
+        itens: itensPorDoc.get(String(d.id)) ?? [],
+      }))
+      .filter((d) => d.itens.length > 0),
+  };
+}
+
+async function rpcPlanejamentoAuthSemFila<T>(
+  fn: string,
+  args: Record<string, unknown>,
+  timeoutMs = 25_000,
+): Promise<{ data: T | null; error: string | null }> {
+  const jwt = await rpcComJwtSemFila<T>(fn, args, timeoutMs);
+  if (!jwt.skipped) return { data: jwt.data, error: jwt.error };
+  return rpcSemFilaAuth<T>(fn, args, timeoutMs);
+}
+
+/** Metricas previstas/recebido/atendido por codigo — tabelas SoT (100k-safe).
+ *  Com codigos, a RPC filtra so esses itens. Sem codigos, le o cache gravado.
+ *  Sempre fora da fila de sessao (Electron: supabase.rpc bloqueava o Visualizar/PDF). */
+export async function fetchMetricasPlanejamentoPorCodigo(codigos?: string[]): Promise<Map<
+  string,
+  { prevista: number; recebido: number; atendido: number }
+> | null> {
+  if (!hasSupabaseConfig()) return null;
+  const codes = [...new Set((codigos ?? []).map((c) => c.trim()).filter(Boolean))];
+  const chunkSize = 80;
+  const out = new Map<string, { prevista: number; recebido: number; atendido: number }>();
+  const chunks: string[][] =
+    codes.length === 0
+      ? [[]]
+      : Array.from({ length: Math.ceil(codes.length / chunkSize) }, (_, i) =>
+          codes.slice(i * chunkSize, (i + 1) * chunkSize),
+        );
+
+  let anyOk = false;
+  for (const chunk of chunks) {
+    const { data, error } = await rpcPlanejamentoAuthSemFila<{
+      porCodigo?: Record<string, { prevista?: unknown; recebido?: unknown; atendido?: unknown }>;
+      _error?: string;
+    }>('iso_pro_sum_metricas_planejamento_por_codigo', {
+      p_tenant_id: getActiveTenantId(),
+      ...(chunk.length ? { p_codigos: chunk } : {}),
+    });
+    if (error || data?._error || !data?.porCodigo || typeof data.porCodigo !== 'object') continue;
+    anyOk = true;
+    for (const [k, v] of Object.entries(data.porCodigo)) {
+      const key = String(k ?? '').trim().toLowerCase();
+      if (!key || !v || typeof v !== 'object') continue;
+      out.set(key, {
+        prevista: num(v.prevista),
+        recebido: num(v.recebido),
+        atendido: num(v.atendido),
+      });
+    }
+  }
+  return anyOk ? out : null;
+}
+
+/** Localizacoes de recebimento por codigo (opcionalmente filtrado). */
+export async function fetchLocalizacoesRecebimentoPorCodigo(
+  codigos?: string[],
+): Promise<Map<string, string> | null> {
+  if (!hasSupabaseConfig()) return null;
+  const codes = [...new Set((codigos ?? []).map((c) => c.trim()).filter(Boolean))];
+  const { data, error } = await rpcPlanejamentoAuthSemFila<{
+    porCodigo?: Record<string, unknown>;
+    _error?: string;
+  }>('iso_pro_localizacoes_recebimento_por_codigo', {
+    p_tenant_id: getActiveTenantId(),
+    p_codigos: codes.length ? codes : null,
+  });
+  if (error || data?._error || !data?.porCodigo || typeof data.porCodigo !== 'object') return null;
+  const out = new Map<string, string>();
+  for (const [k, v] of Object.entries(data.porCodigo)) {
+    const key = String(k ?? '').trim().toLowerCase();
+    const loc = String(v ?? '').trim();
+    if (!key || !loc) continue;
+    out.set(key, loc);
   }
   return out;
 }

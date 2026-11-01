@@ -28,6 +28,10 @@ function cfgMinima(overrides: Partial<ConfiguracaoSistema> = {}): ConfiguracaoSi
     desktopLicencaEmitidaPara: '',
     desktopLicencaExpiraEm: '',
     logoInstitucionalUrl: '/logo.png',
+  logoInstitucionalTamanhoRelatorio: 'auto',
+  logoInstitucionalFormatoQuadro: 'auto',
+  logoInstitucionalAspecto: 0,
+  logoInstitucionalZoomPct: 100,
     documentoRodapeNome: '',
     documentoRodapeCnpj: '',
     relatorioFinalIaHabilitado: true,
@@ -62,7 +66,7 @@ function cfgMinima(overrides: Partial<ConfiguracaoSistema> = {}): ConfiguracaoSi
     pdfNuvemHabilitado: true,
     pdfNuvemTimeoutSegundos: 90,
     ...overrides,
-  };
+  } as ConfiguracaoSistema;
 }
 
 describe('isoProIaApi.service', () => {

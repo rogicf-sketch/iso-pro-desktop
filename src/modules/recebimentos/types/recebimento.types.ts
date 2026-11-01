@@ -65,4 +65,5 @@ export type RecebimentosImportacaoResumo = {
   atualizados: number;
   ignorados: number;
   detalhes: string[];
+  mensagem?: string;
 };

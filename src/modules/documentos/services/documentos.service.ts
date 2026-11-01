@@ -7,25 +7,51 @@ import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterial
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
 import { parseDocumentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
 import { readRemoteOrLocal, REMOTE_READ_TIMEOUT_MS, shouldTryRemoteRead } from '../../../lib/dataReadPolicy';
-import { hasSupabaseConfig } from '../../../lib/supabase';
+import {
+  getSupabase,
+  hasSupabaseConfig,
+  restGetSemFilaAuth,
+  rpcComJwtSemFila,
+  rpcSemFilaAuth,
+} from '../../../lib/supabase';
 import {
   contarRegistosArrayLocalStorage,
   mensagemSeSubstituirLocalPerderiaCadastros,
 } from '../../../lib/localSnapshotWriteGuard';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
+import { getCurrentUser } from '../../auth/services/auth.service';
 import { carregarRecebimentosCompletos } from '../../recebimentos/services/recebimentos.service';
 import { listarMateriais, validarCodigosMateriaisAtivosNoCadastroParaRecebimento, carregarMateriaisDoCadastro } from '../../materiais/services/materiais.service';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import {
-  commitIsoProSnapshotPatch,
   invalidateIsoProSnapshotCache,
+  isIsoProSnapshotConflictError,
   readIsoProSnapshotSlicesForWrite,
   SNAPSHOT_PLANEJAMENTO_SLICE_KEYS,
   SNAPSHOT_SALDO_SLICE_KEYS,
 } from '../../../lib/isoProSnapshot';
 import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
 import { buildSaldoMap, codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
-import { upsertDocumentosPlanejamentoEmLotes, listDocumentosPlanejamentoPageFromCloud, listDocumentosPlanejamentoIdsFromCloud } from '../../../lib/documentosPlanejamentoTabelas';
-import { runDualWriteBestEffort } from '../../../lib/dualWriteEscala';
+import {
+  countDocumentosPlanejamentoTabelas,
+  listAllDocumentosPlanejamentoCompletosFromCloud,
+  listAllDocumentosPlanejamentoIndiceFromCloud,
+  listDocumentosPlanejamentoPageFromCloud,
+  listDocumentosPlanejamentoIdsFromCloud,
+  listExportDocumentosItensRowsFromCloud,
+  listExportDocumentosCsvFinalFromCloud,
+  readDocumentoPlanejamentoFromCloud,
+  upsertDocumentosPlanejamentoEmLotes,
+  writeDocumentosSotOnCloud,
+} from '../../../lib/documentosPlanejamentoTabelas';
+import {
+  fetchLocalizacoesRecebimentoPorCodigo,
+  fetchMetricasPlanejamentoPorCodigo,
+  fetchQuantidadeRecebidaPorCodigo,
+} from '../../../lib/operacaoEscalaContagens';
+import { ensureIsoProDataSessionReadable } from '../../../lib/isoProJwtSession';
+import { fetchAllExportRpcPages } from '../../../lib/exportRpcPages';
+import { getActiveTenantId } from '../../../lib/isoProTenant';
 import { parseDecimalFlexible, roundPesoKg } from '../../../lib/parseDecimal';
 import { executeWrite, getErrorMessage } from '../../../lib/service-result';
 import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
@@ -43,17 +69,34 @@ import type {
   DocumentosImportacaoResumo,
 } from '../types/documento.types';
 import { listarDocumentosComAtendimentoVinculado } from '../../atendimento/services/atendimento.service';
-import { construirJsonImportacaoDocumentosPlanoCsv } from './documentos.import.csv';
+import {
+  construirJsonImportacaoDocumentosPlanoCsv,
+  extrairChavesDocumentosDoCsv,
+  extrairDescricoesDocumentosDoCsv,
+  previewImportacaoDocumentosCsv,
+} from './documentos.import.csv';
+import {
+  coletarRevisoesActivasOutrasParaChaves,
+  listarRevisoesActivasOutrasDoNumero,
+  motivoCancelamentoSubstituidoPorRevisao,
+  type RevisaoActivaOutra,
+} from '../utils/documentoRevisoesAntigas';
 import { imprimirPlanejamentoCampoHtml } from '../utils/imprimirPlanejamentoCampoHtml';
 import { preservarAtendimentoNosItens } from '../utils/preservarAtendimentoNosItens';
 import {
   aplicarStatusPlanejamentoEmDocumentos,
+  fundirMetricasPlanejamento,
+  metricasSementeDoDocumento,
   montarLocalizacoesPorCodigoMaterial,
   montarMetricasPorCodigoMaterial,
+  normalizeCodigoPlanejamento,
   resolverLocalizacaoExibicaoPlanejamento,
+  resolverStatusDocumentoPlanejamento,
   resolverStatusLinhaDocumento,
   type MetricasPorCodigoMaterial,
 } from './documentoPlanejamento';
+
+export { fundirMetricasPlanejamento, metricasSementeDoDocumento };
 import {
   documentosReconciliadosDoPayload,
   montarSaldoPayloadComDocumentosReconciliados,
@@ -71,7 +114,41 @@ import {
 } from '../../../lib/yieldCooperativeImport';
 import { registerSnapshotDerivedCacheInvalidator } from '../../../lib/snapshotDerivedCache';
 
-export { previewImportacaoDocumentosCsv } from './documentos.import.csv';
+export { previewImportacaoDocumentosCsv, extrairDescricoesDocumentosDoCsv };
+
+/** Pré-visualização local do CSV. Não lê a nuvem — a caixa de confirmação abre na hora. */
+export function previewImportacaoDocumentosComRevisoesAntigas(text: string):
+  | { ok: true; linhaCount: number; revisoesAntigasActivas: RevisaoActivaOutra[] }
+  | { ok: false; error: string } {
+  const preview = previewImportacaoDocumentosCsv(text);
+  if (!preview.ok) return preview;
+  return { ok: true, linhaCount: preview.linhaCount, revisoesAntigasActivas: [] };
+}
+
+/** Aviso de revisões antigas, em segundo plano, depois da confirmação já estar na tela. */
+export async function carregarRevisoesAntigasActivasDoCsvImportacao(text: string): Promise<RevisaoActivaOutra[]> {
+  const chaves = extrairChavesDocumentosDoCsv(text);
+  if (!chaves.length || !hasSupabaseConfig()) return [];
+  const indice = await listAllDocumentosPlanejamentoIndiceFromCloud();
+  if (indice.error) return [];
+  const existentes = indice.documentos.map((d) => ({
+    id: d.id,
+    numero: d.numero,
+    revisao: d.revisao,
+    status: statusDocumentoListaSeguro(d.status),
+  }));
+  return coletarRevisoesActivasOutrasParaChaves(existentes, chaves);
+}
+
+/** Aviso antes de gravar (criar novo ou outro id): outras revisões activas do mesmo número. */
+export async function previewRevisoesActivasOutrasAoSalvar(
+  numero: string,
+  revisao: string,
+  excludeId?: string | null,
+): Promise<RevisaoActivaOutra[]> {
+  const existentes = await loadDocumentos();
+  return listarRevisoesActivasOutrasDoNumero(existentes, numero, revisao, excludeId);
+}
 
 type PlanejamentoDocumentosBundle = {
   documentos: Documento[];
@@ -248,6 +325,51 @@ function auditarCancelamentoDocumento(
       statusAnterior === 'pendente'
         ? `Documento ${doc.numero} rev. ${doc.revisao} cancelado (estava pendente).`
         : `Documento ${doc.numero} rev. ${doc.revisao} cancelado por administracao. Status anterior: ${statusAnterior}. Motivo: ${motivoTrim}.`,
+    entityType: 'documento',
+    entityId: doc.id,
+    before: { status: statusAnterior, numero: doc.numero, revisao: doc.revisao },
+    after: { status: doc.status, numero: doc.numero, revisao: doc.revisao },
+  });
+}
+
+function resumoAuditoriaDocumento(
+  doc: Pick<Documento, 'id' | 'numero' | 'revisao' | 'descricao' | 'responsavel' | 'dataDocumento' | 'status' | 'itens'>,
+) {
+  return {
+    id: doc.id,
+    numero: doc.numero,
+    revisao: doc.revisao,
+    descricao: doc.descricao,
+    responsavel: doc.responsavel,
+    dataDocumento: doc.dataDocumento,
+    status: doc.status,
+    totalItens: doc.itens?.length ?? 0,
+    quantidadePlanejada: (doc.itens ?? []).reduce((s, it) => s + (Number(it.quantidadeProjeto) || 0), 0),
+    quantidadeAtendida: (doc.itens ?? []).reduce((s, it) => s + (Number(it.quantidadeAtendida) || 0), 0),
+  };
+}
+
+function auditarDocumentoSalvo(before: Documento | undefined, after: Documento, actorLogin?: string) {
+  const actor = actorLogin?.trim() || getCurrentUser()?.login?.trim() || 'desconhecido';
+  if (before) {
+    appendAuthAuditEvent({
+      type: 'documento_editado',
+      actorLogin: actor,
+      detail: `Documento editado ${after.numero} rev. ${after.revisao}`,
+      entityType: 'documento',
+      entityId: after.id,
+      before: resumoAuditoriaDocumento(before),
+      after: resumoAuditoriaDocumento(after),
+    });
+    return;
+  }
+  appendAuthAuditEvent({
+    type: 'documento_criado',
+    actorLogin: actor,
+    detail: `Documento criado ${after.numero} rev. ${after.revisao} · ${after.itens?.length ?? 0} item(ns)`,
+    entityType: 'documento',
+    entityId: after.id,
+    after: resumoAuditoriaDocumento(after),
   });
 }
 
@@ -378,6 +500,9 @@ async function loadDocumentos(): Promise<Documento[]> {
  * Usar a copia local como base (ex.: seed demo num posto novo, ou sessao com leitura falhada) faria a
  * gravacao substituir o planejamento da nuvem pela copia errada e apagar os desenhos existentes
  * (incidente de 12/07/2026). Falha de leitura => importacao cancelada, nada e alterado.
+ *
+ * Preferir `carregarIndiceDocumentosParaImportacao` no fluxo normal (rápido). Este caminho completo
+ * fica para «substituir e limpar historico» (precisa do catalogo inteiro no SoT rewrite).
  */
 async function carregarDocumentosBaselineParaImportacao(): Promise<Documento[]> {
   if (!hasSupabaseConfig()) return readAll();
@@ -389,6 +514,103 @@ async function carregarDocumentosBaselineParaImportacao(): Promise<Documento[]> 
         `Verifique a ligacao e a sessao, recarregue a pagina e tente novamente. Detalhe: ${getErrorMessage(error, 'erro de leitura da nuvem')}`,
     );
   }
+}
+
+type DocumentoIndiceImport = Pick<Documento, 'id' | 'numero' | 'revisao' | 'status'>;
+
+/** Índice id/numero/revisao/status sem itens — baseline rápido (~4k linhas leves). */
+async function carregarIndiceDocumentosParaImportacao(): Promise<DocumentoIndiceImport[]> {
+  if (!hasSupabaseConfig()) {
+    return readAll().map((d) => ({
+      id: d.id,
+      numero: d.numero,
+      revisao: d.revisao,
+      status: d.status,
+    }));
+  }
+  const indice = await listAllDocumentosPlanejamentoIndiceFromCloud();
+  if (indice.error) {
+    throw new Error(
+      'Nao foi possivel ler o indice do planejamento na nuvem — importacao cancelada por seguranca. ' +
+        `Detalhe: ${indice.error}`,
+    );
+  }
+  return indice.documentos.map((d) => ({
+    id: d.id,
+    numero: d.numero,
+    revisao: d.revisao,
+    status: statusDocumentoListaSeguro(d.status),
+  }));
+}
+
+/**
+ * Import normal: upsert só dos desenhos alterados (sem DELETE+reinsert dos ~4k).
+ * Evita 4+ minutos para 1 CSV de um desenho.
+ */
+async function writeDocumentosImportDeltaOnCloud(
+  delta: Documento[],
+  indiceNuvem: DocumentoIndiceImport[],
+  opcoes?: { actorLogin?: string; onProgress?: (mensagem: string) => void },
+): Promise<void> {
+  if (!delta.length) return;
+
+  const byId = new Map(indiceNuvem.map((d) => [String(d.id), { id: d.id, numero: d.numero }]));
+  for (const d of delta) {
+    byId.set(String(d.id), { id: d.id, numero: d.numero });
+  }
+  const nextDocsMin = [...byId.values()];
+
+  // So as referencias de atendimento. O catalogo de desenhos ja esta no indice;
+  // baixar a coluna documentos (milhares de itens) estourava o tempo e abortava a importacao.
+  const { slices: refsAtendimento } = await readIsoProSnapshotSlicesForWrite([
+    'atendimentos',
+    'atendimentoHistorico',
+    'atendimentoEstornoLog',
+  ]);
+  const integridade = mensagemSePlanejamentoIncompativelComRefsAtendimento(
+    {
+      ...refsAtendimento,
+      documentos: indiceNuvem.map((d) => ({ id: d.id, numero: d.numero })),
+    } as PayloadComRefsAtendimento,
+    nextDocsMin,
+  );
+  if (integridade) {
+    appendAuthAuditEvent({
+      type: 'planejamento_gravacao_bloqueada_remocao_nuvem',
+      actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
+      detail: integridade,
+    });
+    throw new Error(integridade);
+  }
+
+  const upsert = await upsertDocumentosPlanejamentoEmLotes(documentosToPlanejamentoWire(delta), {
+    onProgress: (lote, total) => opcoes?.onProgress?.(`A gravar lote ${lote} de ${total}…`),
+  });
+  if (!upsert.ok) {
+    const detalhe = (upsert.error || 'Falha ao gravar desenhos importados na nuvem.').replace(/\s+/g, ' ').slice(0, 280);
+    throw new Error(
+      `Importacao nao concluida. ${detalhe} Atualize a pagina e confira o total antes de importar de novo.`,
+    );
+  }
+  invalidateIsoProSnapshotCache();
+}
+
+function mesclarDeltaDocumentosNoLocalStorage(delta: Documento[]): void {
+  const local = readAll();
+  if (!local.length) {
+    if (!hasSupabaseConfig()) {
+      writeAll(delta);
+      notificarReparacaoLocalStorage(documentosStorageKey());
+    }
+    // Web / posto so-nuvem: nao materializar o catalogo completo no localStorage.
+    return;
+  }
+  const map = new Map(local.map((d) => [`${d.numero.trim().toLowerCase()}|${d.revisao.trim().toLowerCase()}`, d]));
+  for (const d of delta) {
+    map.set(`${d.numero.trim().toLowerCase()}|${d.revisao.trim().toLowerCase()}`, d);
+  }
+  writeAll([...map.values()]);
+  notificarReparacaoLocalStorage(documentosStorageKey());
 }
 
 async function carregarDocumentosBase(): Promise<{
@@ -425,8 +647,23 @@ type SnapshotPayload = PayloadPlanejamentoReconcile & {
 };
 
 async function readSnapshotDocumentos(): Promise<Documento[]> {
+  // Table-first SEMPRE: a coluna `documentos` do snapshot fica stale quando a gravacao
+  // SoT escreve so nas tabelas (ex.: desenhos novos aparecem na lista paginada mas nao
+  // no Excel). Antes so caiamos nas tabelas se o array do snapshot estivesse vazio —
+  // com snapshot incompleto (ex.: 4090 vs 4143) a exportacao omitia docs como 50099.
+  if (hasSupabaseConfig()) {
+    const fromTables = await listAllDocumentosPlanejamentoCompletosFromCloud();
+    if (fromTables.error) {
+      // Continua para o snapshot abaixo (ultimo recurso).
+      console.warn('[I.S.O PRO] Leitura tabelas planejamento falhou; a tentar snapshot.', fromTables.error);
+    } else if (fromTables.documentos.length > 0) {
+      return fromTables.documentos.map((wire) => documentoFromPlanejamentoWire(wire));
+    }
+  }
+
   const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_PLANEJAMENTO_SLICE_KEYS);
   const rawDocs = payload.documentos ?? [];
+
   const reconciliados = documentosReconciliadosDoPayload(payload);
   const rawById = new Map(rawDocs.map((d, i) => [String(d.id ?? `doc-${i + 1}`), d]));
 
@@ -521,6 +758,26 @@ export async function diagnosticarPlanejamentoLocalVersusNuvem(): Promise<{
     };
   }
   try {
+    // Preferir contagens nas tabelas (rápido). O slice completo do snapshot pode ter
+    // milhares de desenhos e bloquear a lista com "Carregando documentos...".
+    const tabelas = await countDocumentosPlanejamentoTabelas();
+    if (tabelas.ok) {
+      const noSnapshot = tabelas.documentos;
+      const nuvemSemLinhasMaterial =
+        noSnapshot > 0 &&
+        localItens.totalItens > 0 &&
+        tabelas.itens < Math.max(5, Math.floor(localItens.totalItens * 0.02));
+      return {
+        noNavegador,
+        noSnapshot,
+        comItensNoLocal: localItens.comItens,
+        totalItensNoLocal: localItens.totalItens,
+        comItensNaNuvem: tabelas.documentosComItens,
+        totalItensNaNuvem: tabelas.itens,
+        nuvemSemLinhasMaterial,
+      };
+    }
+
     const payload = await readSnapshotRemoteSliceOrFull<SnapshotPayload>(SNAPSHOT_PLANEJAMENTO_SLICE_KEYS);
     const cloudItens = contarLinhasMaterialEmDocumentosSnapshot(payload.documentos);
     const noSnapshot = payload.documentos?.length ?? 0;
@@ -627,6 +884,32 @@ function mensagemSeGravacaoRemoveriaDesenhosDaNuvem(
   );
 }
 
+function documentosToPlanejamentoWire(items: Documento[]) {
+  return items.map((item) => ({
+    id: item.id,
+    numero: item.numero,
+    revisao: item.revisao,
+    data: item.dataDocumento,
+    descricao: item.descricao,
+    responsavel: item.responsavel,
+    // Coluna de escala / lista paginada; sem isto o sync restaura "pendente" stale.
+    status: item.status,
+    itens: item.itens.map((docItem) => ({
+      id: docItem.id,
+      codigo: docItem.codigoMaterial,
+      descricao: docItem.descricaoMaterial,
+      unidade: docItem.unidade,
+      quantidade: docItem.quantidadeProjeto,
+      quantidadeAtendida: docItem.quantidadeAtendida,
+      localizacao: (docItem.localizacao ?? '').trim(),
+    })),
+  }));
+}
+
+/**
+ * SoT table-first: `iso_pro_write_documentos_sot` (preserva qAt nas tabelas).
+ * Sem fallback patch_snapshot (hard-fail sot_require_rpc).
+ */
 async function writeSnapshotDocumentos(
   items: Documento[],
   opcoes?: {
@@ -639,115 +922,94 @@ async function writeSnapshotDocumentos(
     substituicaoExplicitaDaNuvem?: boolean;
   },
 ): Promise<void> {
-  await commitIsoProSnapshotPatch(async () => {
-    const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(
-      SNAPSHOT_PLANEJAMENTO_SLICE_KEYS,
-    );
-    let payloadTrabalho = currentPayload as PayloadComRefsAtendimento;
-    let removidosHistorico = 0;
-    let removidosAtendimentos = 0;
+  const maxAttempts = 5;
+  let lastError: unknown;
 
-    if (!opcoes?.substituicaoExplicitaDaNuvem) {
-      const docsNuvem = Array.isArray((currentPayload as { documentos?: unknown }).documentos)
-        ? ((currentPayload as { documentos: Array<{ id?: unknown; numero?: unknown; revisao?: unknown }> }).documentos)
-        : [];
-      const bloqueio = mensagemSeGravacaoRemoveriaDesenhosDaNuvem(docsNuvem, items, opcoes?.remocoesEsperadas ?? 0);
-      if (bloqueio) {
-        appendAuthAuditEvent({
-          type: 'planejamento_gravacao_bloqueada_remocao_nuvem',
-          actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
-          detail: bloqueio,
-        });
-        throw new Error(bloqueio);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const { slices: currentPayload, baselineUpdatedAt } = await readIsoProSnapshotSlicesForWrite(
+        SNAPSHOT_PLANEJAMENTO_SLICE_KEYS,
+      );
+      let payloadTrabalho = currentPayload as PayloadComRefsAtendimento;
+      let removidosHistorico = 0;
+      let removidosAtendimentos = 0;
+
+      if (!opcoes?.substituicaoExplicitaDaNuvem) {
+        let docsNuvem = Array.isArray((currentPayload as { documentos?: unknown }).documentos)
+          ? ((currentPayload as { documentos: Array<{ id?: unknown; numero?: unknown; revisao?: unknown }> }).documentos)
+          : [];
+        // Snapshot table-first pode omitir `documentos`; o anti-wipe precisa das tabelas.
+        if (!docsNuvem.length) {
+          const idsCloud = await listDocumentosPlanejamentoIdsFromCloud();
+          if (idsCloud.error && idsCloud.source === 'error') {
+            throw new Error(
+              `Nao foi possivel validar o planejamento na nuvem antes de gravar: ${idsCloud.error}`,
+            );
+          }
+          docsNuvem = idsCloud.ids.map((id) => ({ id }));
+        }
+        const bloqueio = mensagemSeGravacaoRemoveriaDesenhosDaNuvem(docsNuvem, items, opcoes?.remocoesEsperadas ?? 0);
+        if (bloqueio) {
+          appendAuthAuditEvent({
+            type: 'planejamento_gravacao_bloqueada_remocao_nuvem',
+            actorLogin: opcoes?.actorLogin?.trim() || 'desconhecido',
+            detail: bloqueio,
+          });
+          throw new Error(bloqueio);
+        }
       }
-    }
 
-    const nextDocsMin = items.map((d) => ({ id: d.id, numero: d.numero }));
+      const nextDocsMin = items.map((d) => ({ id: d.id, numero: d.numero }));
 
-    if (opcoes?.limparHistoricoIncompativel) {
-      const limpo = limparRefsAtendimentoIncompativeisComPlanejamento(payloadTrabalho, nextDocsMin);
-      payloadTrabalho = {
-        ...payloadTrabalho,
-        atendimentoHistorico: limpo.atendimentoHistorico,
-        atendimentos: limpo.atendimentos,
-      };
-      removidosHistorico = limpo.removidosHistorico;
-      removidosAtendimentos = limpo.removidosAtendimentos;
-    }
+      if (opcoes?.limparHistoricoIncompativel) {
+        const limpo = limparRefsAtendimentoIncompativeisComPlanejamento(payloadTrabalho, nextDocsMin);
+        payloadTrabalho = {
+          ...payloadTrabalho,
+          atendimentoHistorico: limpo.atendimentoHistorico,
+          atendimentos: limpo.atendimentos,
+        };
+        removidosHistorico = limpo.removidosHistorico;
+        removidosAtendimentos = limpo.removidosAtendimentos;
+      }
 
-    const integridade = mensagemSePlanejamentoIncompativelComRefsAtendimento(payloadTrabalho, nextDocsMin, {
-      dispensarValidacao: opcoes?.dispensarValidacaoRefsAtendimento === true,
-    });
-    if (integridade) {
-      throw new Error(integridade);
-    }
-
-    if (opcoes?.limparHistoricoIncompativel && (removidosHistorico > 0 || removidosAtendimentos > 0)) {
-      appendAuthAuditEvent({
-        type: 'planejamento_substituicao_limpou_historico',
-        actorLogin: opcoes.actorLogin?.trim() || 'desconhecido',
-        detail: `Substituicao de planejamento removeu ${removidosHistorico} linha(s) de atendimentoHistorico e ${removidosAtendimentos} atendimento(s) incompativeis com o novo planejamento.`,
+      const integridade = mensagemSePlanejamentoIncompativelComRefsAtendimento(payloadTrabalho, nextDocsMin, {
+        dispensarValidacao: opcoes?.dispensarValidacaoRefsAtendimento === true,
       });
-    }
+      if (integridade) {
+        throw new Error(integridade);
+      }
 
-    const documentosWire = items.map((item) => ({
-      id: item.id,
-      numero: item.numero,
-      revisao: item.revisao,
-      data: item.dataDocumento,
-      descricao: item.descricao,
-      responsavel: item.responsavel,
-      itens: item.itens.map((docItem) => ({
-        id: docItem.id,
-        codigo: docItem.codigoMaterial,
-        descricao: docItem.descricaoMaterial,
-        unidade: docItem.unidade,
-        quantidade: docItem.quantidadeProjeto,
-        quantidadeAtendida: docItem.quantidadeAtendida,
-        localizacao: (docItem.localizacao ?? '').trim(),
-      })),
-    }));
+      if (opcoes?.limparHistoricoIncompativel && (removidosHistorico > 0 || removidosAtendimentos > 0)) {
+        appendAuthAuditEvent({
+          type: 'planejamento_substituicao_limpou_historico',
+          actorLogin: opcoes.actorLogin?.trim() || 'desconhecido',
+          detail: `Substituicao de planejamento removeu ${removidosHistorico} linha(s) de atendimentoHistorico e ${removidosAtendimentos} atendimento(s) incompativeis com o novo planejamento.`,
+        });
+      }
 
-    return {
-      baselineUpdatedAt,
-      patch: {
-        ...(opcoes?.limparHistoricoIncompativel
-          ? {
-              atendimentoHistorico: payloadTrabalho.atendimentoHistorico,
-              atendimentos: payloadTrabalho.atendimentos,
-            }
-          : {}),
+      const documentosWire = documentosToPlanejamentoWire(items);
+      const sot = await writeDocumentosSotOnCloud({
         documentos: documentosWire,
-        dataAtualizacao: new Date().toISOString(),
-      },
-    };
-  });
+        baselineUpdatedAt,
+        atendimentoHistorico: opcoes?.limparHistoricoIncompativel
+          ? payloadTrabalho.atendimentoHistorico
+          : undefined,
+        atendimentos: opcoes?.limparHistoricoIncompativel ? payloadTrabalho.atendimentos : undefined,
+      });
+      assertNoSilentSotFallback('documentos', sot.missing);
+      invalidateIsoProSnapshotCache();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (isIsoProSnapshotConflictError(error) && attempt < maxAttempts - 1) {
+        invalidateIsoProSnapshotCache();
+        continue;
+      }
+      throw error;
+    }
+  }
 
-  // Dual-write Fase B: tabelas dedicadas em lotes (falha visível no painel se persistir).
-  // Inclui status derivado (prevista global por codigo) — a lista paginada le a coluna status.
-  await runDualWriteBestEffort('documentos', async () => {
-    const recebimentos = await carregarRecebimentosCompletos();
-    const comStatus = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
-    const documentosWire = comStatus.map((item) => ({
-      id: item.id,
-      numero: item.numero,
-      revisao: item.revisao,
-      data: item.dataDocumento,
-      descricao: item.descricao,
-      responsavel: item.responsavel,
-      status: item.status,
-      itens: item.itens.map((docItem) => ({
-        id: docItem.id,
-        codigo: docItem.codigoMaterial,
-        descricao: docItem.descricaoMaterial,
-        unidade: docItem.unidade,
-        quantidade: docItem.quantidadeProjeto,
-        quantidadeAtendida: docItem.quantidadeAtendida,
-        localizacao: (docItem.localizacao ?? '').trim(),
-      })),
-    }));
-    return upsertDocumentosPlanejamentoEmLotes(documentosWire);
-  });
+  throw lastError instanceof Error ? lastError : new Error('Falha ao gravar documentos na nuvem.');
 }
 
 function buildSearchText(item: Documento) {
@@ -789,42 +1051,94 @@ function toListItem(item: Documento): DocumentoListItem {
   };
 }
 
+function cancelarRevisoesActivasOutrasEmLista(
+  items: Documento[],
+  numero: string,
+  revisaoManter: string,
+  excludeId: string,
+  actorLogin?: string,
+): number {
+  const antigas = listarRevisoesActivasOutrasDoNumero(items, numero, revisaoManter, excludeId);
+  let n = 0;
+  for (const antiga of antigas) {
+    const idx = items.findIndex((d) => d.id === antiga.id);
+    if (idx === -1 || items[idx].status === 'cancelado') continue;
+    const statusAnterior = items[idx].status;
+    const motivo = motivoCancelamentoSubstituidoPorRevisao(numero, revisaoManter);
+    items[idx] = { ...items[idx], status: 'cancelado' };
+    auditarCancelamentoDocumento(items[idx], statusAnterior, {
+      motivoAdministrativo: motivo,
+      actorLogin,
+    });
+    n += 1;
+  }
+  return n;
+}
+
+function statusDocumentoListaSeguro(raw: unknown): Documento['status'] {
+  const statusRaw = String(raw ?? 'pendente');
+  return (
+    ['pendente', 'parcial', 'recebido', 'atendido', 'cancelado'].includes(statusRaw)
+      ? statusRaw
+      : 'pendente'
+  ) as Documento['status'];
+}
+
+/**
+ * Lista rápida (RPC) devolve a coluna `status`.
+ * Só reforça Atendido quando as quantidades da página já cobrem o documento.
+ */
+function statusDocumentoListaComQuantidades(
+  raw: unknown,
+  quantidadePlanejada: number,
+  quantidadeAtendida: number,
+): Documento['status'] {
+  const base = statusDocumentoListaSeguro(raw);
+  if (base === 'cancelado') return 'cancelado';
+  const qPlan = Number(quantidadePlanejada) || 0;
+  const qAtd = Number(quantidadeAtendida) || 0;
+  if (qPlan > 0 && qAtd + 1e-9 >= qPlan) return 'atendido';
+  return base;
+}
+
 export async function listarDocumentos(
   filtro: DocumentoFiltro,
+  opcoes?: { signal?: AbortSignal },
 ): Promise<ServiceResult<PaginatedResult<DocumentoListItem>>> {
   try {
-    // Escala: lista paginada nas tabelas (não carrega 11k na memória).
+    // Escala 100k+: lista SEMPRE paginada nas tabelas (inclui filtro por status).
+    // Proibido carregar o bundle/snapshot completo so para filtrar — rebenta a 90k+.
     if (hasSupabaseConfig()) {
       const page = await listDocumentosPlanejamentoPageFromCloud({
         busca: filtro.busca,
         status: filtro.status,
         offset: (filtro.page - 1) * filtro.pageSize,
         limit: filtro.pageSize,
+        page: filtro.page,
+        signal: opcoes?.signal,
       });
 
       // Nao chamar sync_from_snapshot aqui — em 1k+ desenhos causa timeout e lista vazia.
 
       if (!page.error && page.source === 'tables') {
         const items: DocumentoListItem[] = page.documentos.map((d) => {
-          const statusRaw = String(d.status ?? 'pendente');
-          const status = (
-            ['pendente', 'parcial', 'recebido', 'atendido', 'cancelado'].includes(statusRaw)
-              ? statusRaw
-              : 'pendente'
-          ) as Documento['status'];
+          const id = String(d.id ?? '');
+          const quantidadePlanejada = Number(d.quantidadePlanejada) || 0;
+          const quantidadeAtendida = Number(d.quantidadeAtendida) || 0;
           return {
-            id: String(d.id ?? ''),
+            id,
             numero: String(d.numero ?? ''),
             revisao: String(d.revisao ?? 'A'),
             descricao: String(d.descricao ?? ''),
             responsavel: String(d.responsavel ?? ''),
             dataDocumento: String(d.data ?? '').slice(0, 10),
-            status,
+            status: statusDocumentoListaComQuantidades(d.status, quantidadePlanejada, quantidadeAtendida),
             totalItens: Number(d.totalItens) || 0,
-            quantidadePlanejada: Number(d.quantidadePlanejada) || 0,
-            quantidadeAtendida: Number(d.quantidadeAtendida) || 0,
+            quantidadePlanejada,
+            quantidadeAtendida,
           };
         });
+
         return {
           success: true,
           data: {
@@ -835,31 +1149,29 @@ export async function listarDocumentos(
           },
           meta: {
             source: 'supabase',
-            ...(page.total === 0
+            ...(page.total === 0 && items.length === 0
               ? { fallbackReason: 'Nenhum desenho nas tabelas de escala para este filtro.' }
               : {}),
           },
         };
       }
 
-      // Nunca cair no seed local DOC-1001/1002 com Supabase ligado — mascara a nuvem.
+      // Timeout/falha: erro (nao success vazio) — UI mantém página anterior via keepPreviousData.
+      // Nunca devolver success+items=[] (zerava a grelha com «Fallback… tempo esgotado»).
+      if (page.error === 'AbortError') {
+        const abortErr = new Error('AbortError');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
       return {
-        success: true,
-        data: {
-          items: [],
-          total: 0,
-          page: filtro.page,
-          pageSize: filtro.pageSize,
-        },
-        meta: {
-          source: 'supabase',
-          fallbackReason:
-            page.error ||
-            'Nao foi possivel listar desenhos na nuvem. Saia, Ctrl+F5 e entre de novo.',
-        },
+        success: false,
+        error: traduzirErroOperacionalIsoPro(
+          page.error || 'Nao foi possivel listar desenhos na nuvem. Tente de novo.',
+        ),
       };
     }
 
+    // Offline / sem Supabase: copia local apenas.
     const { enriched: comStatusPlanejamento } = await obterBundlePlanejamentoDocumentos();
     const meta: NonNullable<ServiceResult<Documento[]>['meta']> = {
       source: shouldTryRemoteRead() ? 'supabase' : 'local',
@@ -880,6 +1192,7 @@ export async function listarDocumentos(
       meta,
     };
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
     return {
       success: false,
       error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
@@ -891,6 +1204,7 @@ export async function listarDocumentos(
 export async function obterIdsDocumentosFiltrados(filtro: DocumentoFiltro): Promise<ServiceResult<string[]>> {
   try {
     if (hasSupabaseConfig()) {
+      // RPC de IDs nas tabelas — nunca bundle completo (100k-safe).
       const cloud = await listDocumentosPlanejamentoIdsFromCloud({
         busca: filtro.busca,
         status: filtro.status,
@@ -898,6 +1212,14 @@ export async function obterIdsDocumentosFiltrados(filtro: DocumentoFiltro): Prom
       if (!cloud.error && cloud.source === 'tables') {
         return { success: true, data: cloud.ids, meta: { source: 'supabase' } };
       }
+      return {
+        success: true,
+        data: [],
+        meta: {
+          source: 'supabase',
+          fallbackReason: cloud.error || 'Nao foi possivel listar IDs na nuvem.',
+        },
+      };
     }
     const { enriched: comStatus } = await obterBundlePlanejamentoDocumentos();
     const filtered = aplicarFiltrosListaDocumentos(comStatus, filtro);
@@ -917,6 +1239,23 @@ export async function obterResumosDocumentosParaExclusao(
   const unique = [...new Set(ids)].filter(Boolean);
   if (!unique.length) return { success: true, data: [] };
   try {
+    // 100k-safe: so os IDs pedidos via RPC SoT — nao carregar o catálogo inteiro.
+    if (hasSupabaseConfig()) {
+      const rows = await Promise.all(
+        unique.map(async (id) => {
+          const cloud = await readDocumentoPlanejamentoFromCloud({ id, numero: null, revisao: null });
+          if (!cloud.documento) return null;
+          return {
+            numero: String(cloud.documento.numero ?? ''),
+            revisao: String(cloud.documento.revisao ?? 'A'),
+          };
+        }),
+      );
+      const res = rows
+        .filter((r): r is { numero: string; revisao: string } => Boolean(r?.numero))
+        .sort((a, b) => a.numero.localeCompare(b.numero) || a.revisao.localeCompare(b.revisao));
+      return { success: true, data: res, meta: { source: 'supabase' } };
+    }
     const { enriched } = await obterBundlePlanejamentoDocumentos();
     const idSet = new Set(unique);
     const res = enriched
@@ -935,6 +1274,7 @@ export async function obterResumosDocumentosParaExclusao(
 export async function salvarDocumento(
   payload: DocumentoFormData,
   currentId?: string,
+  opcoes?: { cancelarRevisoesAntigasActivas?: boolean; actorLogin?: string },
 ): Promise<ServiceResult<Documento>> {
   const validationError = validateDocumento(payload);
   if (validationError) {
@@ -983,6 +1323,7 @@ export async function salvarDocumento(
         if (comStatus[index].status === 'cancelado') {
           return { success: false, error: 'Documentos cancelados nao podem ser editados.' };
         }
+        const before = { ...comStatus[index], itens: [...(comStatus[index].itens ?? [])] };
         const mergeItens = preservarAtendimentoNosItens(comStatus[index].itens, normalized.itens);
         if (!mergeItens.ok) {
           return { success: false, error: mergeItens.error };
@@ -993,36 +1334,50 @@ export async function salvarDocumento(
           status: comStatus[index].status,
           itens: mergeItens.itens,
         };
+        if (opcoes?.cancelarRevisoesAntigasActivas) {
+          cancelarRevisoesActivasOutrasEmLista(items, normalized.numero, normalized.revisao, currentId, opcoes.actorLogin);
+        }
         items = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
         const bloqueioLocal = bloqueioSubstituicaoLocalDocumentos(items.length);
         if (bloqueioLocal) {
           return { success: false, error: bloqueioLocal };
         }
         const successData = items[index];
-        return executeWrite({
+        const writeResult = await executeWrite({
           shouldWriteRemote: true,
           writeRemote: () => writeSnapshotDocumentos(items),
           writeLocal: () => writeAll(items),
           successData,
           fallbackMessage: 'Falha ao salvar documento no Supabase.',
         });
+        if (writeResult.success && writeResult.data) {
+          auditarDocumentoSalvo(before, writeResult.data);
+        }
+        return writeResult;
       }
 
       const newId = crypto.randomUUID();
       items.push({ ...normalized, id: newId, status: 'pendente' });
+      if (opcoes?.cancelarRevisoesAntigasActivas) {
+        cancelarRevisoesActivasOutrasEmLista(items, normalized.numero, normalized.revisao, newId, opcoes.actorLogin);
+      }
       items = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
       const bloqueioLocalNovo = bloqueioSubstituicaoLocalDocumentos(items.length);
       if (bloqueioLocalNovo) {
         return { success: false, error: bloqueioLocalNovo };
       }
       const successData = items.find((d) => d.id === newId)!;
-      return executeWrite({
+      const writeResult = await executeWrite({
         shouldWriteRemote: true,
         writeRemote: () => writeSnapshotDocumentos(items),
         writeLocal: () => writeAll(items),
         successData,
         fallbackMessage: 'Falha ao salvar documento no Supabase.',
       });
+      if (writeResult.success && writeResult.data) {
+        auditarDocumentoSalvo(undefined, writeResult.data);
+      }
+      return writeResult;
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao salvar documento no Supabase.' };
     }
@@ -1048,6 +1403,7 @@ export async function salvarDocumento(
     if (comStatus[index].status === 'cancelado') {
       return { success: false, error: 'Documentos cancelados nao podem ser editados.' };
     }
+    const before = { ...comStatus[index], itens: [...(comStatus[index].itens ?? [])] };
     const mergeItensLocal = preservarAtendimentoNosItens(comStatus[index].itens, normalized.itens);
     if (!mergeItensLocal.ok) {
       return { success: false, error: mergeItensLocal.error };
@@ -1059,20 +1415,29 @@ export async function salvarDocumento(
       status: comStatus[index].status,
       itens: mergeItensLocal.itens,
     };
+    if (opcoes?.cancelarRevisoesAntigasActivas) {
+      cancelarRevisoesActivasOutrasEmLista(items, normalized.numero, normalized.revisao, currentId, opcoes.actorLogin);
+    }
     items = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
     const blockedDocEdit = whenBusinessWriteBlockedResult<Documento>();
     if (blockedDocEdit) return blockedDocEdit;
     writeAll(items);
+    auditarDocumentoSalvo(before, items[index]);
     return { success: true, data: items[index] };
   }
 
   const newId = crypto.randomUUID();
   items.push({ ...normalized, id: newId, status: 'pendente' });
+  if (opcoes?.cancelarRevisoesAntigasActivas) {
+    cancelarRevisoesActivasOutrasEmLista(items, normalized.numero, normalized.revisao, newId, opcoes.actorLogin);
+  }
   items = aplicarStatusPlanejamentoEmDocumentos(items, recebimentos);
   const blockedDocNovo = whenBusinessWriteBlockedResult<Documento>();
   if (blockedDocNovo) return blockedDocNovo;
   writeAll(items);
-  return { success: true, data: items.find((d) => d.id === newId)! };
+  const created = items.find((d) => d.id === newId)!;
+  auditarDocumentoSalvo(undefined, created);
+  return { success: true, data: created };
 }
 
 export async function cancelarDocumento(
@@ -1162,7 +1527,7 @@ export async function excluirDocumentosDefinitivamente(
       }
       const next = items.filter((item) => !idSet.has(item.id));
 
-      const bloqueioLocalExcluir = bloqueioSubstituicaoLocalDocumentos(next.length);
+      const bloqueioLocalExcluir = bloqueioSubstituicaoLocalDocumentos(items.length);
       if (bloqueioLocalExcluir) {
         return { success: false, error: bloqueioLocalExcluir };
       }
@@ -1257,25 +1622,127 @@ function localizarDocumentoNaLista(
   return undefined;
 }
 
+/** Converte wire da RPC/tabelas para o modelo de UI do planejamento. */
+function documentoFromPlanejamentoWire(
+  wire: {
+    id?: string | number;
+    numero?: string;
+    revisao?: string;
+    data?: string;
+    descricao?: string;
+    responsavel?: string;
+    status?: string;
+    observacao?: string;
+    itens?: Array<{
+      id?: string | number;
+      codigo?: string;
+      descricao?: string;
+      unidade?: string;
+      quantidade?: number;
+      quantidadeAtendida?: number;
+      localizacao?: string;
+    }>;
+  },
+  idFallback?: string,
+): Documento {
+  const itensRaw = Array.isArray(wire.itens) ? wire.itens : [];
+  const form: DocumentoFormData = {
+    numero: String(wire.numero ?? ''),
+    revisao: String(wire.revisao ?? 'A'),
+    descricao: String(wire.descricao ?? ''),
+    responsavel: String(wire.responsavel ?? ''),
+    dataDocumento: String(wire.data ?? '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+    observacao: String(wire.observacao ?? ''),
+    itens: itensRaw.map((it, index) => ({
+      id: String(it.id ?? `item-${index + 1}`),
+      codigoMaterial: String(it.codigo ?? ''),
+      descricaoMaterial: String(it.descricao ?? ''),
+      unidade: String(it.unidade ?? 'UN') || 'UN',
+      quantidadeProjeto: Number(it.quantidade) || 0,
+      quantidadeAtendida: Number(it.quantidadeAtendida) || 0,
+      localizacao: String(it.localizacao ?? '').trim(),
+    })),
+  };
+  return {
+    id: String(wire.id ?? idFallback ?? ''),
+    ...form,
+    status: statusDocumentoListaSeguro(wire.status) || deriveStatusSnapshot(form),
+  };
+}
+
+async function buscarDocumentoNasTabelasSoT(
+  id: string,
+  numeroFallback?: string | null,
+): Promise<Documento | null> {
+  if (!hasSupabaseConfig()) return null;
+  const idNorm = String(id ?? '').trim();
+  const num = String(numeroFallback ?? '').trim();
+  const cloud = await readDocumentoPlanejamentoFromCloud({
+    id: idNorm || null,
+    numero: idNorm ? null : num || null,
+    revisao: null,
+  });
+  if (!cloud.documento) return null;
+  return documentoFromPlanejamentoWire(cloud.documento, idNorm || undefined);
+}
+
 /**
- * Localiza documento por id (comparacao em string) ou, se nao achar, pelo numero do desenho.
- * Cobre snapshot mobile (id numerico vs string) e casos em que o id no atendimento nao bate mas o numero sim.
- *
- * Faz duas passagens: se a lista enriquecida nao encontrar o desenho, repete no snapshot bruto
- * (ex.: diferenca de id entre modulos) para ainda obter numero/revisao para o recibo.
+ * Detalhe / folha / modal: quantidadeAtendida por linha vem das tabelas SoT (mesma fonte da lista paginada).
+ * O snapshot JSON pode ficar stale apos baixa mobile (baixa rapida so espelha tabelas).
+ */
+async function buscarDocumentoPreferindoTabelasSoT(
+  id: string,
+  numeroFallback: string | null | undefined,
+  recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>> = [],
+): Promise<Documento | null> {
+  const fromTables = await buscarDocumentoNasTabelasSoT(id, numeroFallback);
+  if (!fromTables) return null;
+  // Sem as NFs, o recálculo zerava o estoque e gravava Pendente no objeto
+  // enquanto as linhas (métricas) continuavam Recebido.
+  if (recebimentos.length === 0) return fromTables;
+  const [enriched] = aplicarStatusPlanejamentoEmDocumentos([fromTables], recebimentos);
+  return enriched ?? fromTables;
+}
+
+export function documentoComStatusDasLinhas(
+  doc: Documento,
+  metricas: Map<string, MetricasPorCodigoMaterial>,
+): Documento {
+  if (doc.status === 'cancelado' || metricas.size === 0) return doc;
+  const status = resolverStatusDocumentoPlanejamento(doc, metricas);
+  return status === doc.status ? doc : { ...doc, status };
+}
+
+/**
+ * Ordem: tabelas SoT (qAt por linha) → snapshot reconciliado → snapshot bruto.
+ * A lista paginada ja usa tabelas; o snapshot sozinho deixava QTD ATENDIDA=0 no detalhe apos baixa mobile.
  */
 export async function buscarDocumentoPorIdOuNumero(
   id: string,
   numeroFallback?: string | null,
 ): Promise<ServiceResult<Documento>> {
+  const fromTables = await buscarDocumentoPreferindoTabelasSoT(id, numeroFallback, []);
+  if (fromTables) return { success: true, data: fromTables };
+
+  // Online: nao baixar catalogo + recebimentos so para 1 documento.
+  if (hasSupabaseConfig()) {
+    const snapshotDocs = await readSnapshotDocumentos();
+    const foundRaw = localizarDocumentoNaLista(snapshotDocs, id, numeroFallback);
+    if (foundRaw) {
+      const [enriched] = aplicarStatusPlanejamentoEmDocumentos([foundRaw], []);
+      return { success: true, data: enriched ?? foundRaw };
+    }
+    return { success: false, error: 'Documento nao encontrado.' };
+  }
+
   const { enriched, recebimentos } = await obterBundlePlanejamentoDocumentos();
   const foundClean = localizarDocumentoNaLista(enriched, id, numeroFallback);
   if (foundClean) return { success: true, data: foundClean };
 
   const snapshotDocs = await readSnapshotDocumentos();
   const brutos = aplicarStatusPlanejamentoEmDocumentos(snapshotDocs, recebimentos);
-  const foundRaw = localizarDocumentoNaLista(brutos, id, numeroFallback);
-  if (foundRaw) return { success: true, data: foundRaw };
+  const foundOffline = localizarDocumentoNaLista(brutos, id, numeroFallback);
+  if (foundOffline) return { success: true, data: foundOffline };
 
   return { success: false, error: 'Documento nao encontrado.' };
 }
@@ -1286,7 +1753,28 @@ export async function buscarDocumentoPorId(id: string): Promise<ServiceResult<Do
 
 export async function carregarTodosDocumentosOrdenados(): Promise<ServiceResult<Documento[]>> {
   try {
-    const { data, meta } = await carregarDocumentosBase();
+    // Exportacao / catalogo completo: ler tabelas SoT directo (sem corrida localStorage
+    // de 15s). A lista da UI ja e paginada nas tabelas; o Excel tem de usar a mesma fonte.
+    let data: Documento[];
+    let meta: NonNullable<ServiceResult<Documento[]>['meta']>;
+    if (hasSupabaseConfig()) {
+      const fromTables = await listAllDocumentosPlanejamentoCompletosFromCloud();
+      if (!fromTables.error && fromTables.documentos.length > 0) {
+        data = fromTables.documentos.map((wire) => documentoFromPlanejamentoWire(wire));
+        meta = { source: 'supabase' };
+      } else {
+        const base = await carregarDocumentosBase();
+        data = base.data;
+        meta = base.meta;
+        if (fromTables.error) {
+          meta = { ...meta, fallbackReason: fromTables.error };
+        }
+      }
+    } else {
+      const base = await carregarDocumentosBase();
+      data = base.data;
+      meta = base.meta;
+    }
     const recebimentos = await carregarRecebimentosCompletos();
     const enriched = aplicarStatusPlanejamentoEmDocumentos(data, recebimentos);
     const items = [...enriched].sort(
@@ -1301,10 +1789,57 @@ export async function carregarTodosDocumentosOrdenados(): Promise<ServiceResult<
   }
 }
 
+/**
+ * Catalogo para Excel/CSV: tabelas SoT sem carregar NFs completas (isso era o gargalo de minutos).
+ * Status do documento vem da coluna SoT; metricas/localizacoes vêm de RPC no montarExportacao.
+ */
+async function carregarDocumentosParaExportacaoCsv(): Promise<ServiceResult<Documento[]>> {
+  try {
+    let data: Documento[];
+    let meta: NonNullable<ServiceResult<Documento[]>['meta']>;
+    if (hasSupabaseConfig()) {
+      const fromTables = await listAllDocumentosPlanejamentoCompletosFromCloud();
+      if (!fromTables.error && fromTables.documentos.length > 0) {
+        data = fromTables.documentos.map((wire) => documentoFromPlanejamentoWire(wire));
+        meta = { source: 'supabase' };
+      } else {
+        const base = await carregarDocumentosBase();
+        data = base.data;
+        meta = base.meta;
+        if (fromTables.error) {
+          meta = { ...meta, fallbackReason: fromTables.error };
+        }
+      }
+    } else {
+      const base = await carregarDocumentosBase();
+      data = base.data;
+      meta = base.meta;
+    }
+    const items = [...data].sort(
+      (a, b) => b.dataDocumento.localeCompare(a.dataDocumento) || a.numero.localeCompare(b.numero),
+    );
+    return { success: true, data: items, meta };
+  } catch (error) {
+    return {
+      success: false,
+      error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
+    };
+  }
+}
+
+async function carregarMetricasPlanejamentoAgregadas(
+  codigos?: string[],
+): Promise<Map<string, MetricasPorCodigoMaterial>> {
+  const fromRpc = await fetchMetricasPlanejamentoPorCodigo(codigos).catch(() => null);
+  if (fromRpc) return fromRpc;
+  // 100k-safe: NUNCA fallback para bundle completo (catalogo + NFs).
+  // Sem RPC: mapa vazio → linhas mostram Pendente ate a RPC voltar.
+  return new Map();
+}
+
 /** Metragens globais por codigo (documentos + recebimentos) para colunas de status no editor e na visualizacao. */
 export async function carregarMetricasPlanejamentoPorCodigo(): Promise<Map<string, MetricasPorCodigoMaterial>> {
-  const { metricas } = await obterBundlePlanejamentoDocumentos();
-  return metricas;
+  return carregarMetricasPlanejamentoAgregadas();
 }
 
 /** Metricas de status + mapa de localizacoes agregadas por codigo (recebimentos), numa unica leitura. */
@@ -1312,53 +1847,551 @@ export async function carregarMetricasELocalizacoesPlanejamentoPorCodigo(): Prom
   metricas: Map<string, MetricasPorCodigoMaterial>;
   localizacoesRecebimentoPorCodigo: Map<string, string>;
 }> {
-  const { metricas, localizacoesRecebimentoPorCodigo } = await obterBundlePlanejamentoDocumentos();
-  return { metricas, localizacoesRecebimentoPorCodigo };
+  const [metricas, locs] = await Promise.all([
+    carregarMetricasPlanejamentoAgregadas(),
+    fetchLocalizacoesRecebimentoPorCodigo().catch(() => null),
+  ]);
+  return {
+    metricas,
+    localizacoesRecebimentoPorCodigo: locs ?? new Map(),
+  };
 }
 
-/** Aquece cache partilhado (documentos + recebimentos + metricas) ao entrar no modulo. */
+/**
+ * Aquece cache partilhado (documentos + recebimentos + metricas).
+ * Não chamar no mount da lista — com 4k+ desenhos bloqueava o ecrã.
+ * Usar sob demanda (ex.: primeiro «Visualizar»).
+ */
 export async function precarregarBundlePlanejamentoDocumentos(): Promise<void> {
-  await obterBundlePlanejamentoDocumentos();
+  // 100k-safe: aquece so agregados, nao o catalogo.
+  await Promise.all([
+    carregarMetricasPlanejamentoAgregadas().catch(() => undefined),
+    fetchLocalizacoesRecebimentoPorCodigo().catch(() => undefined),
+  ]);
 }
 
 export type DocumentoPlanejamentoVisualizacao = {
   documento: Documento;
   metricas: Map<string, MetricasPorCodigoMaterial>;
   localizacoesRecebimentoPorCodigo: Map<string, string>;
+  /** Quando as RPCs de estoque falham (ex.: sessao Auth), o status das linhas fica so com baixa. */
+  metricasAviso?: string;
+  /** EXE: documento ja esta pronto; metricas vao a carregar em segundo plano. */
+  metricasPending?: boolean;
 };
+
+type MetricasPorCodigoRpc = Record<
+  string,
+  { prevista?: unknown; recebido?: unknown; atendido?: unknown }
+>;
+
+function mapMetricasPorCodigo(
+  porCodigo: MetricasPorCodigoRpc | null | undefined,
+): Map<string, MetricasPorCodigoMaterial> {
+  const metricas = new Map<string, MetricasPorCodigoMaterial>();
+  if (!porCodigo) return metricas;
+  for (const [k, v] of Object.entries(porCodigo)) {
+    const key = k.trim().toLowerCase();
+    if (!key || !v || typeof v !== 'object') continue;
+    metricas.set(key, {
+      prevista: Number(v.prevista) || 0,
+      recebido: Number(v.recebido) || 0,
+      atendido: Number(v.atendido) || 0,
+    });
+  }
+  return metricas;
+}
+
+function mapLocalizacoesPorCodigo(
+  porLoc: Record<string, unknown> | null | undefined,
+): Map<string, string> {
+  const locs = new Map<string, string>();
+  if (!porLoc) return locs;
+  for (const [k, v] of Object.entries(porLoc)) {
+    const key = k.trim().toLowerCase();
+    const texto = String(v ?? '').trim();
+    if (key && texto) locs.set(key, texto);
+  }
+  return locs;
+}
+
+/** So metricas (status) — fatia cache; nao espera localizacoes. */
+export async function carregarSoMetricasPlanejamentoVisualizacao(
+  codes: string[],
+  opts?: { onPartial?: (metricas: Map<string, MetricasPorCodigoMaterial>) => void },
+): Promise<{
+  metricas: Map<string, MetricasPorCodigoMaterial>;
+  metricasAviso?: string;
+}> {
+  const tenantId = getActiveTenantId();
+  const fetched = await fetchMetricasPlanejamentoPorCodigos(tenantId, codes, {
+    onPartial: opts?.onPartial
+      ? (por) => opts.onPartial!(mapMetricasPorCodigo(por))
+      : undefined,
+  });
+  return {
+    metricas: mapMetricasPorCodigo(fetched.porCodigo),
+    ...(fetched.aviso ? { metricasAviso: fetched.aviso } : {}),
+  };
+}
+
+/** Estado em memoria do ultimo mapa de metricas (todas as empresas / Visualizar instantaneo). */
+export function peekMetricasPlanejamentoMemoria(codes: string[]): Map<string, MetricasPorCodigoMaterial> {
+  return mapMetricasPorCodigo(sliceMetricasMemoria(getActiveTenantId(), codes));
+}
+
+export async function carregarLocalizacoesPlanejamentoVisualizacao(
+  codes: string[],
+): Promise<Map<string, string>> {
+  const tenantId = getActiveTenantId();
+  const porLoc = await fetchLocalizacoesPlanejamentoPorCodigos(tenantId, codes);
+  return mapLocalizacoesPorCodigo(porLoc);
+}
+
+/** Estoque + localizacoes para o modal Visualizar / PDF (JWT sem fila de sessao). */
+export async function carregarMetricasPlanejamentoVisualizacao(codes: string[]): Promise<{
+  metricas: Map<string, MetricasPorCodigoMaterial>;
+  localizacoesRecebimentoPorCodigo: Map<string, string>;
+  metricasAviso?: string;
+}> {
+  const [met, locs] = await Promise.all([
+    carregarSoMetricasPlanejamentoVisualizacao(codes),
+    carregarLocalizacoesPlanejamentoVisualizacao(codes),
+  ]);
+  return {
+    metricas: met.metricas,
+    localizacoesRecebimentoPorCodigo: locs,
+    ...(met.metricasAviso ? { metricasAviso: met.metricasAviso } : {}),
+  };
+}
+
+const METRICAS_CODE_CHUNK = 120;
+/** Cache REST + RPC curtos — UI ja tem semente das linhas; nao bloquear 12s. */
+const METRICAS_LIVE_TIMEOUT_MS = 5_000;
+const METRICAS_CACHE_REST_TIMEOUT_MS = 3_500;
+const METRICAS_RPC_TIMEOUT_MS = METRICAS_LIVE_TIMEOUT_MS;
+const METRICAS_MEM_TTL_MS = 180_000;
+const LOCS_MEM_TTL_MS = 180_000;
+const LOCS_REST_TIMEOUT_MS = 4_000;
+
+type MetricasMemEntry = { tenantId: string; at: number; porCodigo: MetricasPorCodigoRpc };
+let metricasMemoria: MetricasMemEntry | null = null;
+
+type LocsMemEntry = { tenantId: string; at: number; porCodigo: Record<string, string> };
+let locsMemoria: LocsMemEntry | null = null;
+
+function rememberMetricasMemoria(tenantId: string, porCodigo: MetricasPorCodigoRpc): void {
+  const prev =
+    metricasMemoria?.tenantId === tenantId ? metricasMemoria.porCodigo : ({} as MetricasPorCodigoRpc);
+  metricasMemoria = {
+    tenantId,
+    at: Date.now(),
+    porCodigo: { ...prev, ...porCodigo },
+  };
+}
+
+function sliceMetricasMemoria(tenantId: string, codes: string[]): MetricasPorCodigoRpc | null {
+  if (!metricasMemoria || metricasMemoria.tenantId !== tenantId) return null;
+  if (Date.now() - metricasMemoria.at > METRICAS_MEM_TTL_MS) return null;
+  const wanted = new Set(codes.map((c) => c.trim().toLowerCase()).filter(Boolean));
+  if (!wanted.size) return {};
+  const out: MetricasPorCodigoRpc = {};
+  let hit = 0;
+  for (const [k, v] of Object.entries(metricasMemoria.porCodigo)) {
+    const key = k.trim().toLowerCase();
+    if (!wanted.has(key) || !v || typeof v !== 'object') continue;
+    out[key] = v;
+    hit += 1;
+  }
+  return hit > 0 ? out : null;
+}
+
+function rememberLocsMemoria(tenantId: string, porCodigo: Record<string, string>): void {
+  const prev = locsMemoria?.tenantId === tenantId ? locsMemoria.porCodigo : {};
+  locsMemoria = { tenantId, at: Date.now(), porCodigo: { ...prev, ...porCodigo } };
+}
+
+function sliceLocsMemoria(tenantId: string, codes: string[]): Record<string, string> | null {
+  if (!locsMemoria || locsMemoria.tenantId !== tenantId) return null;
+  if (Date.now() - locsMemoria.at > LOCS_MEM_TTL_MS) return null;
+  const wanted = new Set(codes.map((c) => c.trim().toLowerCase()).filter(Boolean));
+  if (!wanted.size) return {};
+  const out: Record<string, string> = {};
+  let hit = 0;
+  for (const [k, v] of Object.entries(locsMemoria.porCodigo)) {
+    const key = k.trim().toLowerCase();
+    const texto = String(v ?? '').trim();
+    if (!wanted.has(key) || !texto) continue;
+    out[key] = texto;
+    hit += 1;
+  }
+  return hit > 0 ? out : null;
+}
+
+/** Fatia o cache gravado (SELECT directo) — evita o scan lento das tabelas filtradas. */
+async function tryMetricasCacheSliceRest(
+  tenantId: string,
+  codes: string[],
+): Promise<MetricasPorCodigoRpc | null> {
+  const { data, error } = await restGetSemFilaAuth<Array<{ por_codigo?: MetricasPorCodigoRpc | null }>>(
+    `iso_pro_metricas_planejamento_cache?tenant_id=eq.${encodeURIComponent(tenantId)}&select=por_codigo`,
+    METRICAS_CACHE_REST_TIMEOUT_MS,
+  );
+  if (error || !data?.[0]?.por_codigo || typeof data[0].por_codigo !== 'object') return null;
+  const por = data[0].por_codigo;
+  const wanted = new Set(codes.map((c) => c.trim().toLowerCase()).filter(Boolean));
+  const out: MetricasPorCodigoRpc = {};
+  let hit = 0;
+  for (const [k, v] of Object.entries(por)) {
+    const key = k.trim().toLowerCase();
+    if (!wanted.has(key) || !v || typeof v !== 'object') continue;
+    out[key] = v;
+    hit += 1;
+  }
+  return hit > 0 ? out : null;
+}
+
+/** Localizacoes por codigo via REST (filtro in.) — nao depende da RPC pesada. */
+async function tryLocalizacoesRestPorCodigos(
+  tenantId: string,
+  codes: string[],
+): Promise<Record<string, string> | null> {
+  const unique = [...new Set(codes.map((c) => String(c ?? '').trim()).filter(Boolean))];
+  if (!unique.length) return {};
+  const merged: Record<string, Set<string>> = {};
+  let anyOk = false;
+  const chunkSize = 40;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    const inList = chunk
+      .map((c) => `"${c.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+      .join(',');
+    const { data, error } = await restGetSemFilaAuth<
+      Array<{ codigo?: string | null; localizacao?: string | null }>
+    >(
+      `iso_pro_recebimento_itens?tenant_id=eq.${encodeURIComponent(tenantId)}` +
+        `&codigo=in.(${inList})&select=codigo,localizacao&localizacao=not.is.null&limit=5000`,
+      LOCS_REST_TIMEOUT_MS,
+    );
+    if (error || !Array.isArray(data)) continue;
+    anyOk = true;
+    for (const row of data) {
+      const key = normalizeCodigoPlanejamento(String(row.codigo ?? ''));
+      const loc = String(row.localizacao ?? '').trim();
+      if (!key || !loc) continue;
+      if (!merged[key]) merged[key] = new Set();
+      merged[key]!.add(loc);
+    }
+  }
+  if (!anyOk) return null;
+  const out: Record<string, string> = {};
+  for (const [k, set] of Object.entries(merged)) {
+    out[k] = [...set]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }))
+      .join(' | ');
+  }
+  return out;
+}
+
+/**
+ * Evita a fila de sessao do supabase-js.
+ * Nunca usar `supabase.rpc()` aqui: no Electron o Auth lock (getSession) pode
+ * prender o abortSignal antes do HTTP — Visualizar ficava eternamente em «…»
+ * e o botão PDF desactivado (pior após trocar de empresa).
+ */
+async function rpcMetricasAuthPreferida<T>(
+  fn: string,
+  args: Record<string, unknown>,
+  timeoutMs = METRICAS_RPC_TIMEOUT_MS,
+): Promise<{ data: T | null; error: string | null }> {
+  const jwt = await rpcComJwtSemFila<T>(fn, args, timeoutMs);
+  if (!jwt.skipped) return { data: jwt.data, error: jwt.error };
+  return rpcSemFilaAuth<T>(fn, args, timeoutMs);
+}
+
+function mergePorCodigoMaps(
+  into: MetricasPorCodigoRpc,
+  chunk: MetricasPorCodigoRpc | null | undefined,
+): void {
+  if (!chunk || typeof chunk !== 'object') return;
+  for (const [k, v] of Object.entries(chunk)) {
+    if (k && v && typeof v === 'object') into[k] = v;
+  }
+}
+
+function metricasAvisoDeErro(lastMetError: string | null): string {
+  const errLow = (lastMetError ?? '').toLowerCase();
+  if (
+    errLow.includes('42501') ||
+    errLow.includes('permission') ||
+    errLow.includes('jwt') ||
+    errLow.includes('401')
+  ) {
+    return 'Sessao Auth em falta para o estoque. Saia e entre de novo no I.S.O PRO.';
+  }
+  // Timeout / rede: mensagem curta — a UI ja mostra status pelas linhas do documento.
+  return 'Estoque da nuvem indisponivel de momento. Status pelas quantidades do documento.';
+}
+
+/**
+ * Se o mapa veio sem recebido (cache velho), aplica o mesmo agregado vivo do CSV.
+ * So corre quando nenhum codigo do documento tem recebido>0 — evita baixar o mapa sempre.
+ */
+async function overlayRecebidoVivoSeTudoZero(
+  tenantId: string,
+  codes: string[],
+  into: MetricasPorCodigoRpc,
+): Promise<void> {
+  const wanted = [...new Set(codes.map((c) => c.trim().toLowerCase()).filter(Boolean))];
+  if (!wanted.length) return;
+  const algumRecebido = wanted.some((k) => Number(into[k]?.recebido) > 0);
+  if (algumRecebido) return;
+
+  const rpc = await rpcMetricasAuthPreferida<{
+    porCodigo?: Record<string, unknown>;
+    _error?: string;
+  }>('iso_pro_sum_quantidade_recebida_por_codigo', { p_tenant_id: tenantId });
+  if (rpc.error || rpc.data?._error || !rpc.data?.porCodigo || typeof rpc.data.porCodigo !== 'object') {
+    return;
+  }
+  const wantedSet = new Set(wanted);
+  for (const [k, v] of Object.entries(rpc.data.porCodigo)) {
+    const key = k.trim().toLowerCase();
+    if (!wantedSet.has(key)) continue;
+    const recebido = Number(v) || 0;
+    if (recebido <= 0) continue;
+    const cur = into[key] ?? { prevista: 0, atendido: 0, recebido: 0 };
+    into[key] = {
+      prevista: Number(cur.prevista) || 0,
+      atendido: Number(cur.atendido) || 0,
+      recebido,
+    };
+  }
+}
+
+/**
+ * Metricas para Visualizar (todas as empresas):
+ * 1) Memória local
+ * 2) Fatia do cache via REST (rapido; evita scan tabelas)
+ * 3) RPC filtrada em paralelo (quando cache_slice estiver no servidor, e instantanea)
+ * 4) onPartial assim que o 1.º dado chega
+ */
+async function fetchMetricasPlanejamentoPorCodigos(
+  tenantId: string,
+  codes: string[],
+  opts?: { onPartial?: (porCodigo: MetricasPorCodigoRpc) => void },
+): Promise<{ porCodigo: MetricasPorCodigoRpc | null; aviso?: string }> {
+  const unique = [...new Set(codes.map((c) => String(c ?? '').trim()).filter(Boolean))];
+  if (!unique.length) return { porCodigo: {} };
+
+  const mergedMet: MetricasPorCodigoRpc = {};
+  let metOk = false;
+  let lastMetError: string | null = null;
+
+  const emitPartial = () => {
+    if (!opts?.onPartial || !metOk) return;
+    opts.onPartial({ ...mergedMet });
+  };
+
+  const fromMem = sliceMetricasMemoria(tenantId, unique);
+  if (fromMem) {
+    mergePorCodigoMaps(mergedMet, fromMem);
+    metOk = true;
+    emitPartial();
+  }
+
+  // Cache REST em paralelo com RPC — o que chegar primeiro alimenta a UI.
+  const cachePromise = tryMetricasCacheSliceRest(tenantId, unique).then((fromCache) => {
+    if (!fromCache) return;
+    mergePorCodigoMaps(mergedMet, fromCache);
+    metOk = true;
+    rememberMetricasMemoria(tenantId, fromCache);
+    emitPartial();
+  });
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += METRICAS_CODE_CHUNK) {
+    chunks.push(unique.slice(i, i + METRICAS_CODE_CHUNK));
+  }
+
+  const rpcPromise = Promise.all(
+    chunks.map(async (chunk) => {
+      const met = await rpcMetricasAuthPreferida<{ porCodigo?: MetricasPorCodigoRpc; _error?: string }>(
+        'iso_pro_sum_metricas_planejamento_por_codigo',
+        { p_tenant_id: tenantId, p_codigos: chunk },
+        METRICAS_LIVE_TIMEOUT_MS,
+      );
+      if (met.error || met.data?._error) {
+        lastMetError = met.error || String(met.data?._error ?? '') || lastMetError;
+        return;
+      }
+      if (met.data?.porCodigo && typeof met.data.porCodigo === 'object') {
+        mergePorCodigoMaps(mergedMet, met.data.porCodigo);
+        metOk = true;
+        rememberMetricasMemoria(tenantId, met.data.porCodigo);
+        emitPartial();
+      }
+    }),
+  );
+
+  await Promise.all([cachePromise, rpcPromise]);
+
+  // Com semente/memoria/cache: nunca aviso vermelho agressivo.
+  if (!metOk) return { porCodigo: null, aviso: metricasAvisoDeErro(lastMetError) };
+
+  // Overlay recebido CSV — curto e só se ainda tudo a zero (não bloqueia partial).
+  void Promise.race([
+    overlayRecebidoVivoSeTudoZero(tenantId, unique, mergedMet).then(() => {
+      rememberMetricasMemoria(tenantId, mergedMet);
+    }),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 2_000);
+    }),
+  ]);
+
+  rememberMetricasMemoria(tenantId, mergedMet);
+  return { porCodigo: mergedMet };
+}
+
+async function fetchLocalizacoesPlanejamentoPorCodigos(
+  tenantId: string,
+  codes: string[],
+): Promise<Record<string, unknown> | null> {
+  const unique = [...new Set(codes.map((c) => String(c ?? '').trim()).filter(Boolean))];
+  if (!unique.length) return {};
+
+  const fromMem = sliceLocsMemoria(tenantId, unique);
+  if (fromMem && Object.keys(fromMem).length > 0) {
+    // Actualiza em fundo; devolve memoria ja.
+    void (async () => {
+      const rest = await tryLocalizacoesRestPorCodigos(tenantId, unique);
+      if (rest && Object.keys(rest).length) rememberLocsMemoria(tenantId, rest);
+    })();
+    return fromMem;
+  }
+
+  const fromRest = await tryLocalizacoesRestPorCodigos(tenantId, unique);
+  if (fromRest && Object.keys(fromRest).length > 0) {
+    rememberLocsMemoria(tenantId, fromRest);
+    return fromRest;
+  }
+
+  // Fallback RPC (pode ser lento) — timeout curto; falha silenciosa.
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += METRICAS_CODE_CHUNK) {
+    chunks.push(unique.slice(i, i + METRICAS_CODE_CHUNK));
+  }
+  const mergedLoc: Record<string, string> = {};
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      rpcMetricasAuthPreferida<{ porCodigo?: Record<string, unknown>; _error?: string }>(
+        'iso_pro_localizacoes_recebimento_por_codigo',
+        { p_tenant_id: tenantId, p_codigos: chunk },
+        METRICAS_LIVE_TIMEOUT_MS,
+      ),
+    ),
+  );
+  for (const loc of results) {
+    if (!loc.error && !loc.data?._error && loc.data?.porCodigo && typeof loc.data.porCodigo === 'object') {
+      for (const [k, v] of Object.entries(loc.data.porCodigo)) {
+        const key = k.trim().toLowerCase();
+        const texto = String(v ?? '').trim();
+        if (key && texto) mergedLoc[key] = texto;
+      }
+    }
+  }
+  if (Object.keys(mergedLoc).length) rememberLocsMemoria(tenantId, mergedLoc);
+  return mergedLoc;
+}
 
 /** Uma unica leitura do bundle para modal «Visualizar» (documento + metricas + localizacoes). */
 export async function carregarDocumentoPlanejamentoParaVisualizacao(
   id: string,
+  onDocumento?: (documento: Documento) => void,
+  options?: { deferMetricas?: boolean },
 ): Promise<ServiceResult<DocumentoPlanejamentoVisualizacao>> {
-  const bundle = await obterBundlePlanejamentoDocumentos();
-  const foundClean = localizarDocumentoNaLista(bundle.enriched, id, null);
-  if (foundClean) {
+  const tenantId = getActiveTenantId();
+  const lido = await rpcComJwtSemFila<{
+    documento?: Parameters<typeof documentoFromPlanejamentoWire>[0] | null;
+    _error?: string;
+  }>('iso_pro_read_documento_planejamento', {
+    p_tenant_id: tenantId,
+    p_documento_id: id,
+    p_numero: null,
+    p_revisao: null,
+  }, 20_000);
+  const lidoFinal =
+    lido.skipped || lido.error || !lido.data?.documento
+      ? await rpcSemFilaAuth<{
+          documento?: Parameters<typeof documentoFromPlanejamentoWire>[0] | null;
+          _error?: string;
+        }>(
+          'iso_pro_read_documento_planejamento',
+          {
+            p_tenant_id: tenantId,
+            p_documento_id: id,
+            p_numero: null,
+            p_revisao: null,
+          },
+          20_000,
+        )
+      : { data: lido.data, error: lido.error };
+
+  const wire = lidoFinal.data?.documento;
+  if (wire && typeof wire === 'object') {
+    const fromTables = documentoFromPlanejamentoWire(wire, id);
+    onDocumento?.(fromTables);
+    const codes = fromTables.itens.map((it) => it.codigoMaterial).filter(Boolean);
+
+    if (options?.deferMetricas && codes.length) {
+      return {
+        success: true,
+        data: {
+          documento: fromTables,
+          metricas: new Map(),
+          localizacoesRecebimentoPorCodigo: new Map(),
+          metricasPending: true,
+        },
+      };
+    }
+
+    let metricas = new Map<string, MetricasPorCodigoMaterial>();
+    let locs = new Map<string, string>();
+    let metricasAviso: string | undefined;
+    if (codes.length) {
+      const fetched = await carregarMetricasPlanejamentoVisualizacao(codes);
+      metricas = fetched.metricas;
+      locs = fetched.localizacoesRecebimentoPorCodigo;
+      metricasAviso = fetched.metricasAviso;
+    }
     return {
       success: true,
       data: {
-        documento: foundClean,
-        metricas: bundle.metricas,
-        localizacoesRecebimentoPorCodigo: bundle.localizacoesRecebimentoPorCodigo,
+        documento: documentoComStatusDasLinhas(fromTables, metricas),
+        metricas,
+        localizacoesRecebimentoPorCodigo: locs,
+        ...(metricasAviso ? { metricasAviso } : {}),
       },
     };
   }
 
-  const snapshotDocs = await readSnapshotDocumentos();
-  const brutos = aplicarStatusPlanejamentoEmDocumentos(snapshotDocs, bundle.recebimentos);
-  const foundRaw = localizarDocumentoNaLista(brutos, id, null);
-  if (foundRaw) {
-    return {
-      success: true,
-      data: {
-        documento: foundRaw,
-        metricas: bundle.metricas,
-        localizacoesRecebimentoPorCodigo: bundle.localizacoesRecebimentoPorCodigo,
-      },
-    };
+  if (!hasSupabaseConfig()) {
+    const bundle = await obterBundlePlanejamentoDocumentos();
+    const foundClean = localizarDocumentoNaLista(bundle.enriched, id, null);
+    if (foundClean) {
+      onDocumento?.(foundClean);
+      return {
+        success: true,
+        data: {
+          documento: foundClean,
+          metricas: bundle.metricas,
+          localizacoesRecebimentoPorCodigo: bundle.localizacoesRecebimentoPorCodigo,
+        },
+      };
+    }
   }
 
-  return { success: false, error: 'Documento nao encontrado.' };
+  return { success: false, error: lidoFinal.error ?? 'Documento nao encontrado.' };
 }
 
 /**
@@ -1372,21 +2405,18 @@ export async function visualizarPlanejamentoCampoPorId(
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
   void api?.beginHtmlPreviewLoading?.(titulo);
 
-  const bundle = await obterBundlePlanejamentoDocumentos();
-  let doc = bundle.enriched.find((d) => d.id === item.id) ?? null;
-  if (!doc) {
-    const fallback = await buscarDocumentoPorId(item.id);
-    if (!fallback.success || !fallback.data) {
-      return { ok: false, error: fallback.error ?? 'Documento nao encontrado.' };
-    }
-    doc = fallback.data;
+  const loaded = await buscarDocumentoPorIdOuNumero(item.id, item.numero);
+  if (!loaded.success || !loaded.data) {
+    return { ok: false, error: loaded.error ?? 'Documento nao encontrado.' };
   }
+  const codes = loaded.data.itens.map((it) => it.codigoMaterial).filter(Boolean);
+  // Mesmo caminho do Visualizar (JWT sem fila) — supabase.rpc no EXE deixava tudo Pendente.
+  const metPack = await carregarMetricasPlanejamentoVisualizacao(codes);
+  const metricas = metPack.metricas;
+  const locs = metPack.localizacoesRecebimentoPorCodigo;
+  const doc = documentoComStatusDasLinhas(loaded.data, metricas);
 
-  const ok = await imprimirPlanejamentoCampoHtml(
-    doc,
-    bundle.metricas,
-    bundle.localizacoesRecebimentoPorCodigo,
-  );
+  const ok = await imprimirPlanejamentoCampoHtml(doc, metricas, locs ?? new Map());
   return ok ? { ok: true } : { ok: false, error: 'Nao foi possivel abrir a pre-visualizacao.' };
 }
 
@@ -1499,6 +2529,59 @@ async function mapaCadastroMaterialPorCodigo(): Promise<Map<string, CadastroMate
   return map;
 }
 
+/** Export CSV: cadastro leve via RPC de materiais (evita listRemoteMaterials PostgREST ~10–40s). */
+async function mapaCadastroMaterialPorCodigoParaExportacao(): Promise<Map<string, CadastroMaterialExport>> {
+  const map = new Map<string, CadastroMaterialExport>();
+
+  if (hasSupabaseConfig()) {
+    try {
+      await ensureIsoProDataSessionReadable();
+      const supabase = getSupabase();
+      if (supabase) {
+        const cloud = await fetchAllExportRpcPages<{
+          codigo?: string;
+          peso?: number;
+          disciplina?: string;
+        }>({
+          supabase,
+          rpcName: 'iso_pro_export_materiais_page',
+          tenantId: getActiveTenantId(),
+        });
+        if (!cloud.missingRpc && !cloud.error) {
+          for (const r of cloud.rows) {
+            const cod = codigoMaterialKey(String(r.codigo ?? ''));
+            if (!cod) continue;
+            map.set(cod, {
+              peso: roundPesoKg(Number(r.peso) || 0),
+              disciplina: String(r.disciplina ?? '').trim(),
+              saldoAtual: 0,
+            });
+          }
+          return map;
+        }
+      }
+    } catch {
+      /* fallback abaixo */
+    }
+  }
+
+  try {
+    const materiais = await carregarMateriaisDoCadastro();
+    for (const m of materiais) {
+      const cod = codigoMaterialKey(m.codigo);
+      if (!cod) continue;
+      map.set(cod, {
+        peso: roundPesoKg(typeof m.peso === 'number' ? m.peso : parseDecimalFlexible(String(m.peso ?? 0))),
+        disciplina: String(m.disciplina ?? '').trim(),
+        saldoAtual: Number(m.saldoAtual) || 0,
+      });
+    }
+  } catch {
+    return mapaCadastroMaterialPorCodigo();
+  }
+  return map;
+}
+
 /**
  * Antes: ao carregar documentos, o sistema podia **gravar** remocao de linhas ou de desenhos inteiros se
  * julgasse que o codigo nao existia no cadastro de materiais — efeito colateral perigoso e redundante.
@@ -1536,6 +2619,26 @@ function coletarCodigosMateriaisDaListaImportDocumentos(list: unknown[]): string
 
 /** Preenche descricao_material vazia a partir do cadastro de materiais (mesmo codigo). */
 async function enriquecerListaDocumentosImportComMateriais(lista: unknown[]): Promise<void> {
+  let faltaDescricao = false;
+  for (const doc of lista) {
+    if (!doc || typeof doc !== 'object') continue;
+    const rawItens = (doc as { itens?: unknown }).itens;
+    if (!Array.isArray(rawItens)) continue;
+    for (const raw of rawItens) {
+      if (!raw || typeof raw !== 'object') continue;
+      const o = raw as Record<string, unknown>;
+      const cod = extrairCodigoMaterialDeObjetoImport(o);
+      if (!cod) continue;
+      const desc = String(o.descricaoMaterial ?? o.descricao_item ?? o.descricao ?? '').trim();
+      if (!desc) {
+        faltaDescricao = true;
+        break;
+      }
+    }
+    if (faltaDescricao) break;
+  }
+  if (!faltaDescricao) return;
+
   const matResult = await listarMateriais({
     busca: '',
     disciplina: '',
@@ -1644,21 +2747,6 @@ export async function montarExportacaoDocumentosJson(
 export async function montarExportacaoDocumentosCsvResumo(
   opcoes?: ExportacaoDocumentosOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const loaded = await carregarTodosDocumentosOrdenados();
-  if (!loaded.success || !loaded.data) {
-    return { success: false, error: loaded.error ?? 'Nao foi possivel carregar documentos para exportar.' };
-  }
-  const documentos = opcoes?.filtroLista
-    ? aplicarFiltrosListaDocumentos(loaded.data, opcoes.filtroLista)
-    : loaded.data;
-
-  const recebimentos = await carregarRecebimentosCompletos();
-  /** Metricas por codigo em todo o planejamento (documentos nao cancelados + recebimentos), como o relatorio legado. */
-  const metricasPorCodigo = montarMetricasPorCodigoMaterial(loaded.data, recebimentos);
-  const localizacoesRecebimentoPorCodigo = montarLocalizacoesPorCodigoMaterial(recebimentos);
-
-  const cadastroPorCodigo = await mapaCadastroMaterialPorCodigo();
-
   const header = [
     'numero',
     'revisao',
@@ -1685,6 +2773,168 @@ export async function montarExportacaoDocumentosCsvResumo(
     'saldo_material',
   ];
   const sep = ';';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const sufixo = exportacaoUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
+  const fileName = `iso-pro-documentos-itens-${stamp}${sufixo}.csv`;
+
+  // Um pedido: CSV final no servidor (tudo ou filtro) — sem full-fetch + filtro no browser.
+  if (hasSupabaseConfig()) {
+    try {
+      const finalCsv = await listExportDocumentosCsvFinalFromCloud({
+        busca: opcoes?.filtroLista?.busca,
+        status: opcoes?.filtroLista?.status,
+      });
+      if (!finalCsv.missingRpc && !finalCsv.error) {
+        const body = finalCsv.chunk;
+        const csv = `\uFEFF${header.join(sep)}${body ? `\r\n${body}` : ''}\r\n`;
+        return {
+          success: true,
+          data: { csv, fileName },
+          meta: { source: 'supabase' },
+        };
+      }
+    } catch {
+      /* cai no caminho paginado */
+    }
+  }
+
+  // Fallback legado: CSV leve paginado ou JSON + locs/cadastro/recebido.
+  if (hasSupabaseConfig()) {
+    const [exportCloud, locsRpc, cadastroPorCodigo, recebidoPorCodigo] = await Promise.all([
+      listExportDocumentosItensRowsFromCloud(),
+      fetchLocalizacoesRecebimentoPorCodigo().catch(() => null),
+      mapaCadastroMaterialPorCodigoParaExportacao(),
+      fetchQuantidadeRecebidaPorCodigo().catch(() => null),
+    ]);
+
+    // RPC presente (mesmo com 0 linhas): não descer para o caminho lento PostgREST.
+    if (!exportCloud.missingRpc && !exportCloud.error) {
+      let rows = exportCloud.rows;
+      const filtro = opcoes?.filtroLista;
+      if (filtro && (filtro.busca.trim() !== '' || filtro.status !== 'todos')) {
+        const busca = filtro.busca.trim().toLowerCase();
+        rows = rows.filter((r) => {
+          if (filtro.status !== 'todos' && String(r.status_documento) !== filtro.status) return false;
+          if (!busca) return true;
+          const blob = `${r.numero} ${r.descricao_documento} ${r.responsavel}`.toLowerCase();
+          return blob.includes(busca);
+        });
+      }
+
+      // prevista/atendido a partir das linhas exportadas; recebido via RPC leve.
+      const metricasPorCodigo = new Map<string, MetricasPorCodigoMaterial>();
+      for (const r of rows) {
+        const cod = codigoMaterialKey(r.codigo_material);
+        if (!cod) continue;
+        const cur = metricasPorCodigo.get(cod) ?? { prevista: 0, recebido: 0, atendido: 0 };
+        cur.prevista += Math.max(0, Number(r.quantidade_documento) || 0);
+        cur.atendido += Math.max(0, Number(r.quantidade_atendida) || 0);
+        metricasPorCodigo.set(cod, cur);
+      }
+      if (recebidoPorCodigo) {
+        for (const [cod, qtd] of recebidoPorCodigo) {
+          const key = codigoMaterialKey(cod);
+          if (!key) continue;
+          const cur = metricasPorCodigo.get(key) ?? { prevista: 0, recebido: 0, atendido: 0 };
+          cur.recebido = Number(qtd) || 0;
+          metricasPorCodigo.set(key, cur);
+        }
+      }
+
+      const localizacoesRecebimentoPorCodigo = locsRpc ?? new Map<string, string>();
+
+      const linhasDados: string[] = [];
+      for (const r of rows) {
+        const cod = codigoMaterialKey(r.codigo_material);
+        const cad = cadastroPorCodigo.get(cod);
+        const pesoUn = roundPesoKg(cad?.peso ?? 0);
+        const disciplina = cad?.disciplina ?? '';
+        const qDoc = Math.max(0, Number(r.quantidade_documento) || 0);
+        const qAtdLin = Math.max(0, Number(r.quantidade_atendida) || 0);
+        const qPendDoc = Math.max(0, qDoc - qAtdLin);
+        const m = metricasPorCodigo.get(cod) ?? { prevista: 0, recebido: 0, atendido: 0 };
+        const saldoMat = cad?.saldoAtual || Math.max(0, m.recebido - m.atendido);
+        const itemFake = {
+          id: String(r.item_id || ''),
+          codigoMaterial: r.codigo_material,
+          descricaoMaterial: r.descricao_material,
+          unidade: r.unidade,
+          quantidadeProjeto: qDoc,
+          quantidadeAtendida: qAtdLin,
+          localizacao: String(r.localizacao_planejamento ?? '').trim(),
+        };
+        const statusPl = resolverStatusLinhaDocumento(itemFake, metricasPorCodigo);
+        const pesoTotDoc = roundPesoKg(qDoc * pesoUn);
+        const pesoTotAtdDoc = roundPesoKg(qAtdLin * pesoUn);
+        const locPlan = String(r.localizacao_planejamento ?? '').trim();
+        const locConsol = resolverLocalizacaoExibicaoPlanejamento(itemFake, localizacoesRecebimentoPorCodigo);
+
+        linhasDados.push(
+          [
+            r.numero,
+            r.revisao,
+            r.descricao_documento,
+            r.responsavel,
+            r.data_documento ?? '',
+            r.status_documento,
+            r.codigo_material,
+            r.descricao_material,
+            locPlan,
+            locConsol,
+            disciplina,
+            r.unidade,
+            formatDecimalExcelPtBr(qDoc),
+            formatDecimalExcelPtBr(qAtdLin),
+            formatDecimalExcelPtBr(qPendDoc),
+            formatDecimalExcelPtBr(m.prevista),
+            formatDecimalExcelPtBr(m.atendido),
+            formatDecimalExcelPtBr(m.recebido),
+            labelStatusPlanejamentoCsv(statusPl),
+            formatDecimalExcelPtBr(pesoUn),
+            formatDecimalExcelPtBr(pesoTotDoc),
+            formatDecimalExcelPtBr(pesoTotAtdDoc),
+            formatDecimalExcelPtBr(saldoMat),
+          ]
+            .map((c) => escapeCsvCellSemicolon(String(c)))
+            .join(sep),
+        );
+      }
+
+      const csv = `\uFEFF${[header.join(sep), ...linhasDados].join('\r\n')}\r\n`;
+      return {
+        success: true,
+        data: { csv, fileName },
+        meta: { source: 'supabase' },
+      };
+    }
+  }
+
+  // Fallback: caminho antigo (tabelas paginadas / local).
+  const loaded = await carregarDocumentosParaExportacaoCsv();
+  if (!loaded.success || !loaded.data) {
+    return { success: false, error: loaded.error ?? 'Nao foi possivel carregar documentos para exportar.' };
+  }
+  const documentos = opcoes?.filtroLista
+    ? aplicarFiltrosListaDocumentos(loaded.data, opcoes.filtroLista)
+    : loaded.data;
+
+  const [metricasRpc, locsRpc, cadastroPorCodigo] = await Promise.all([
+    fetchMetricasPlanejamentoPorCodigo().catch(() => null),
+    fetchLocalizacoesRecebimentoPorCodigo().catch(() => null),
+    mapaCadastroMaterialPorCodigoParaExportacao(),
+  ]);
+
+  let metricasPorCodigo = metricasRpc;
+  let localizacoesRecebimentoPorCodigo = locsRpc ?? new Map<string, string>();
+
+  if (!metricasPorCodigo) {
+    const recebimentos = await carregarRecebimentosCompletos();
+    metricasPorCodigo = montarMetricasPorCodigoMaterial(loaded.data, recebimentos);
+    if (!locsRpc) {
+      localizacoesRecebimentoPorCodigo = montarLocalizacoesPorCodigoMaterial(recebimentos);
+    }
+  }
+
   const linhasDados: string[] = [];
 
   for (const doc of documentos) {
@@ -1737,11 +2987,7 @@ export async function montarExportacaoDocumentosCsvResumo(
     }
   }
 
-  const linhas = [header.join(sep), ...linhasDados];
-  const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const sufixo = exportacaoUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
-  const fileName = `iso-pro-documentos-itens-${stamp}${sufixo}.csv`;
+  const csv = `\uFEFF${[header.join(sep), ...linhasDados].join('\r\n')}\r\n`;
   return { success: true, data: { csv, fileName }, meta: loaded.meta };
 }
 
@@ -1749,6 +2995,12 @@ export type ImportarDocumentosOpcoes = {
   /** Remove atendimentos/historico que referenciam desenhos fora do planejamento importado. */
   substituirELimparHistoricoIncompativel?: boolean;
   actorLogin?: string;
+  /**
+   * Se true: ao criar/actualizar um numero+revisao, cancela outras revisões activas do mesmo número
+   * (não cancela a revisão importada). Pedido explícito na UI — nunca silencioso.
+   */
+  cancelarRevisoesAntigasActivas?: boolean;
+  onProgress?: (mensagem: string) => void;
 };
 
 export async function importarDocumentosDoArquivoJson(
@@ -1770,17 +3022,11 @@ export async function importarDocumentosDoArquivoJson(
     return { success: false, error: 'Nenhum documento encontrado no arquivo.' };
   }
 
+  opcoes?.onProgress?.('A preparar o planejamento…');
   await enriquecerListaDocumentosImportComMateriais(lista.list);
 
   const codigosImportTodos = coletarCodigosMateriaisDaListaImportDocumentos(lista.list);
-  const preflightMat = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
-    codigosImportTodos,
-    'import',
-    'documento',
-  );
-  if (preflightMat) {
-    return { success: false, error: preflightMat };
-  }
+  const usarRewriteCompleto = opcoes?.substituirELimparHistoricoIncompativel === true;
 
   const detalhes: string[] = [];
   let criados = 0;
@@ -1788,12 +3034,42 @@ export async function importarDocumentosDoArquivoJson(
   let ignorados = 0;
   const seenKeys = new Set<string>();
 
-  let working: Documento[];
-  let recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>>;
+  let indice: DocumentoIndiceImport[] = [];
+  let working: Documento[] = [];
+  let recebimentos: Awaited<ReturnType<typeof carregarRecebimentosCompletos>> = [];
+  const deltaPorId = new Map<string, Documento>();
+
   try {
-    working = [...(await carregarDocumentosBaselineParaImportacao())];
-    recebimentos = await carregarRecebimentosCompletos();
-    working = aplicarStatusPlanejamentoEmDocumentos(working, recebimentos);
+    const preflightPromise = validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
+      codigosImportTodos,
+      'import',
+      'documento',
+    );
+    if (usarRewriteCompleto) {
+      const [preflightMat, baseline, recs] = await Promise.all([
+        preflightPromise,
+        carregarDocumentosBaselineParaImportacao(),
+        carregarRecebimentosCompletos({ semCadastroMateriais: true }),
+      ]);
+      if (preflightMat) return { success: false, error: preflightMat };
+      recebimentos = recs;
+      working = aplicarStatusPlanejamentoEmDocumentos([...baseline], recebimentos);
+      indice = working.map((d) => ({
+        id: d.id,
+        numero: d.numero,
+        revisao: d.revisao,
+        status: d.status,
+      }));
+    } else {
+      const [preflightMat, indiceNuvem, recs] = await Promise.all([
+        preflightPromise,
+        carregarIndiceDocumentosParaImportacao(),
+        carregarRecebimentosCompletos({ semCadastroMateriais: true }),
+      ]);
+      if (preflightMat) return { success: false, error: preflightMat };
+      indice = indiceNuvem;
+      recebimentos = recs;
+    }
   } catch (error) {
     return {
       success: false,
@@ -1802,12 +3078,16 @@ export async function importarDocumentosDoArquivoJson(
   }
 
   const podeEditarDocImportPorChave = new Map<string, boolean>();
-  for (const d of working) {
+  for (const d of indice) {
     const k = `${d.numero.toLowerCase()}|${d.revisao.toLowerCase()}`;
     podeEditarDocImportPorChave.set(k, d.status === 'pendente');
   }
+  const indicePorChave = new Map<string, DocumentoIndiceImport>(
+    indice.map((d) => [`${d.numero.trim().toLowerCase()}|${d.revisao.trim().toLowerCase()}`, d]),
+  );
 
   const cooperativeMerge = lista.list.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
+  const chavesImportAplicadas: Array<{ numero: string; revisao: string }> = [];
 
   for (let i = 0; i < lista.list.length; i++) {
     const norm = normalizarDocumentoImportacao(lista.list[i], i);
@@ -1838,13 +3118,9 @@ export async function importarDocumentosDoArquivoJson(
       continue;
     }
 
-    const idx = working.findIndex(
-      (d) =>
-        d.numero.trim().toLowerCase() === form.numero.trim().toLowerCase() &&
-        d.revisao.trim().toLowerCase() === form.revisao.trim().toLowerCase(),
-    );
+    const existente = indicePorChave.get(key);
 
-    if (idx !== -1) {
+    if (existente) {
       if (!podeEditarDocImportPorChave.get(key)) {
         detalhes.push(
           `${form.numero} rev. ${form.revisao}: ja existe e nao esta pendente (apenas documentos pendentes sao atualizados por importacao).`,
@@ -1852,17 +3128,24 @@ export async function importarDocumentosDoArquivoJson(
         ignorados += 1;
         continue;
       }
-      const id = working[idx].id;
-      working[idx] = {
+      const mapped: Documento = {
         ...form,
-        id,
+        id: existente.id,
         status: 'pendente',
       };
+      if (usarRewriteCompleto) {
+        const idx = working.findIndex((d) => d.id === existente.id);
+        if (idx >= 0) working[idx] = mapped;
+      }
+      deltaPorId.set(mapped.id, mapped);
       atualizados += 1;
       detalhes.push(`${form.numero} rev. ${form.revisao}: atualizado.`);
+      chavesImportAplicadas.push({ numero: form.numero, revisao: form.revisao });
     } else {
-      let newId = idSugerido && !working.some((d) => d.id === idSugerido) ? idSugerido : crypto.randomUUID();
-      if (working.some((d) => d.id === newId)) {
+      let newId = idSugerido && !indicePorChave.has(key) && !indice.some((d) => d.id === idSugerido)
+        ? idSugerido
+        : crypto.randomUUID();
+      if (indice.some((d) => d.id === newId) || deltaPorId.has(newId)) {
         newId = crypto.randomUUID();
       }
       const created: Documento = {
@@ -1870,9 +3153,25 @@ export async function importarDocumentosDoArquivoJson(
         id: newId,
         status: 'pendente',
       };
-      working.push(created);
+      if (usarRewriteCompleto) {
+        working.push(created);
+      }
+      indicePorChave.set(key, {
+        id: created.id,
+        numero: created.numero,
+        revisao: created.revisao,
+        status: created.status,
+      });
+      indice.push({
+        id: created.id,
+        numero: created.numero,
+        revisao: created.revisao,
+        status: created.status,
+      });
+      deltaPorId.set(created.id, created);
       criados += 1;
       detalhes.push(`${form.numero} rev. ${form.revisao}: incluido.`);
+      chavesImportAplicadas.push({ numero: form.numero, revisao: form.revisao });
     }
 
     if (cooperativeMerge) {
@@ -1880,8 +3179,53 @@ export async function importarDocumentosDoArquivoJson(
     }
   }
 
-  if (criados > 0 || atualizados > 0) {
-    working = aplicarStatusPlanejamentoEmDocumentos(working, recebimentos);
+  let canceladosPorRevisao = 0;
+  if (opcoes?.cancelarRevisoesAntigasActivas && chavesImportAplicadas.length > 0) {
+    const antigas = coletarRevisoesActivasOutrasParaChaves(indice, chavesImportAplicadas);
+    const revisaoNovaPorNumero = new Map<string, string>();
+    for (const c of chavesImportAplicadas) {
+      revisaoNovaPorNumero.set(c.numero.trim().toLowerCase(), c.revisao.trim());
+    }
+    for (const antiga of antigas) {
+      const revisaoNova = revisaoNovaPorNumero.get(antiga.numero.trim().toLowerCase()) ?? '?';
+      const motivo = motivoCancelamentoSubstituidoPorRevisao(antiga.numero, revisaoNova);
+
+      let cancelado: Documento | null = null;
+      if (usarRewriteCompleto) {
+        const idx = working.findIndex((d) => d.id === antiga.id);
+        if (idx === -1 || working[idx].status === 'cancelado') continue;
+        working[idx] = { ...working[idx], status: 'cancelado' };
+        cancelado = working[idx];
+      } else {
+        const cloud = await readDocumentoPlanejamentoFromCloud({ id: antiga.id });
+        if (!cloud.documento) continue;
+        cancelado = {
+          ...documentoFromPlanejamentoWire(cloud.documento, antiga.id),
+          status: 'cancelado',
+        };
+      }
+      if (!cancelado) continue;
+
+      deltaPorId.set(cancelado.id, cancelado);
+      canceladosPorRevisao += 1;
+      detalhes.push(
+        `${antiga.numero} rev. ${antiga.revisao}: cancelado (substituida pela rev. ${revisaoNova}). Motivo: ${motivo}`,
+      );
+      auditarCancelamentoDocumento(cancelado, antiga.status, {
+        motivoAdministrativo: motivo,
+        actorLogin: opcoes?.actorLogin,
+      });
+    }
+  }
+
+  let delta = [...deltaPorId.values()];
+  if (delta.length > 0) {
+    delta = aplicarStatusPlanejamentoEmDocumentos(delta, recebimentos);
+    for (const d of delta) deltaPorId.set(d.id, d);
+    delta = [...deltaPorId.values()];
+    if (usarRewriteCompleto) {
+      working = aplicarStatusPlanejamentoEmDocumentos(working, recebimentos);
+    }
   }
 
   const resumo: DocumentosImportacaoResumo = {
@@ -1889,9 +3233,10 @@ export async function importarDocumentosDoArquivoJson(
     atualizados,
     ignorados,
     detalhes,
+    canceladosPorRevisao,
   };
 
-  if (criados === 0 && atualizados === 0) {
+  if (criados === 0 && atualizados === 0 && canceladosPorRevisao === 0) {
     return {
       success: false,
       error: 'Nenhuma alteracao aplicada. Revise o arquivo e os avisos acima.',
@@ -1901,18 +3246,33 @@ export async function importarDocumentosDoArquivoJson(
 
   if (hasSupabaseConfig()) {
     await yieldToMain();
-    const bloqueioImport = bloqueioSubstituicaoLocalDocumentos(working.length);
-    if (bloqueioImport) {
-      return { success: false, error: bloqueioImport, data: resumo };
+    opcoes?.onProgress?.('A gravar na nuvem…');
+    if (usarRewriteCompleto) {
+      const bloqueioImport = bloqueioSubstituicaoLocalDocumentos(working.length);
+      if (bloqueioImport) {
+        return { success: false, error: bloqueioImport, data: resumo };
+      }
+      return executeWrite({
+        shouldWriteRemote: true,
+        writeRemote: () =>
+          writeSnapshotDocumentos(working, {
+            limparHistoricoIncompativel: true,
+            actorLogin: opcoes?.actorLogin,
+          }),
+        writeLocal: () => writeAll(working),
+        successData: resumo,
+        fallbackMessage: 'Falha ao importar documentos no Supabase.',
+      });
     }
+
     return executeWrite({
       shouldWriteRemote: true,
       writeRemote: () =>
-        writeSnapshotDocumentos(working, {
-          limparHistoricoIncompativel: opcoes?.substituirELimparHistoricoIncompativel === true,
+        writeDocumentosImportDeltaOnCloud(delta, indice, {
           actorLogin: opcoes?.actorLogin,
+          onProgress: opcoes?.onProgress,
         }),
-      writeLocal: () => writeAll(working),
+      writeLocal: () => mesclarDeltaDocumentosNoLocalStorage(delta),
       successData: resumo,
       fallbackMessage: 'Falha ao importar documentos no Supabase.',
     });
@@ -1920,13 +3280,18 @@ export async function importarDocumentosDoArquivoJson(
 
   const blockedImport = whenBusinessWriteBlockedResult<DocumentosImportacaoResumo>();
   if (blockedImport) return blockedImport;
-  writeAll(working);
+  if (usarRewriteCompleto) {
+    writeAll(working);
+  } else {
+    mesclarDeltaDocumentosNoLocalStorage(delta);
+  }
   return { success: true, data: resumo, meta: { source: 'local' } };
 }
 
 /**
  * CSV modelo para importacao: cabecalho + linhas de exemplo (dois itens do mesmo documento e um segundo documento).
  * Separador ponto-e-virgula, UTF-8 com BOM — compativel com Excel em portugues.
+ * Todas as linhas do mesmo numero+revisao devem ficar juntas (sem intercalacoes).
  */
 export function montarModeloCsvImportacaoDocumentos(): { csv: string; fileName: string } {
   const sep = ';';
@@ -1999,9 +3364,105 @@ export async function importarDocumentosDoArquivoCsv(
   text: string,
   opcoes?: ImportarDocumentosOpcoes,
 ): Promise<ServiceResult<DocumentosImportacaoResumo>> {
+  opcoes?.onProgress?.('A preparar o planejamento…');
   const built = await construirJsonImportacaoDocumentosPlanoCsv(text);
   if (!built.ok) {
     return { success: false, error: built.error };
   }
   return importarDocumentosDoArquivoJson(built.json, opcoes);
+}
+
+/**
+ * Actualiza apenas o campo descricao de documentos ja existentes (qualquer status).
+ * Nao cria documentos, nao altera itens/quantidades — para corrigir descricoes em branco.
+ */
+export async function atualizarDescricoesDocumentosDoArquivoCsv(
+  text: string,
+): Promise<ServiceResult<DocumentosImportacaoResumo>> {
+  const extracted = await extrairDescricoesDocumentosDoCsv(text);
+  if (!extracted.ok) {
+    return { success: false, error: extracted.error };
+  }
+
+  let working = await loadDocumentos();
+  const detalhes: string[] = [];
+  let atualizados = 0;
+  let ignorados = 0;
+  const seen = new Set<string>();
+
+  for (const row of extracted.itens) {
+    const key = `${row.numero.toLowerCase()}|${row.revisao.toLowerCase()}`;
+    if (seen.has(key)) {
+      ignorados += 1;
+      detalhes.push(`${row.numero} rev. ${row.revisao}: duplicado no ficheiro (ignorado).`);
+      continue;
+    }
+    seen.add(key);
+
+    const desc = row.descricao.trim();
+    if (!desc) {
+      ignorados += 1;
+      detalhes.push(`${row.numero} rev. ${row.revisao}: descricao vazia (ignorado).`);
+      continue;
+    }
+
+    const idx = working.findIndex(
+      (d) =>
+        d.numero.trim().toLowerCase() === row.numero.trim().toLowerCase() &&
+        d.revisao.trim().toLowerCase() === row.revisao.trim().toLowerCase(),
+    );
+    if (idx === -1) {
+      ignorados += 1;
+      detalhes.push(`${row.numero} rev. ${row.revisao}: nao encontrado na base (ignorado).`);
+      continue;
+    }
+
+    const actual = (working[idx].descricao ?? '').trim();
+    if (actual === desc) {
+      ignorados += 1;
+      detalhes.push(`${row.numero} rev. ${row.revisao}: descricao ja estava correcta (sem alteracao).`);
+      continue;
+    }
+
+    working[idx] = { ...working[idx], descricao: desc };
+    atualizados += 1;
+    detalhes.push(
+      `${row.numero} rev. ${row.revisao}: descricao actualizada${actual ? ` (era «${actual}»)` : ' (estava vazia)'}.`,
+    );
+  }
+
+  const resumo: DocumentosImportacaoResumo = {
+    criados: 0,
+    atualizados,
+    ignorados,
+    detalhes,
+  };
+
+  if (atualizados === 0) {
+    return {
+      success: false,
+      error: 'Nenhuma descricao actualizada. Revise o ficheiro e os avisos abaixo.',
+      data: resumo,
+    };
+  }
+
+  if (hasSupabaseConfig()) {
+    await yieldToMain();
+    const bloqueio = bloqueioSubstituicaoLocalDocumentos(working.length);
+    if (bloqueio) {
+      return { success: false, error: bloqueio, data: resumo };
+    }
+    return executeWrite({
+      shouldWriteRemote: true,
+      writeRemote: () => writeSnapshotDocumentos(working),
+      writeLocal: () => writeAll(working),
+      successData: resumo,
+      fallbackMessage: 'Falha ao gravar descricoes no Supabase.',
+    });
+  }
+
+  const blocked = whenBusinessWriteBlockedResult<DocumentosImportacaoResumo>();
+  if (blocked) return blocked;
+  writeAll(working);
+  return { success: true, data: resumo, meta: { source: 'local' } };
 }

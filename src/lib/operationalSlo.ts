@@ -17,7 +17,12 @@ export type OperationalSloEvent =
   | 'estorno_conflict'
   | 'estorno_network'
   | 'estorno_late_confirm'
-  | 'estorno_idempotent_hit';
+  | 'estorno_idempotent_hit'
+  | 'sot_fallback'
+  | 'lock_long'
+  | 'reconcile_ok'
+  | 'reconcile_fail'
+  | 'sot_divergence';
 
 type SloBucket = {
   at: number;
@@ -63,6 +68,10 @@ export type OperationalSloSummary = {
   dualWriteFailures: number;
   outboxFlushFails: number;
   mfaChallenges: number;
+  sotFallbacks: number;
+  sotDivergences: number;
+  lockLong: number;
+  reconcileFails: number;
   tone: 'ok' | 'warn' | 'danger';
   label: string;
 };
@@ -72,16 +81,27 @@ export function getOperationalSloSummary(): OperationalSloSummary {
   const events = readStore().events.filter((e) => e.at >= cutoff);
   const count = (name: OperationalSloEvent) => events.filter((e) => e.event === name).length;
   const snapshotConflicts = count('snapshot_conflict');
+  // Só falhas reais de escrita/outbox — heal/divergência SoT vai em sot_divergence.
   const dualWriteFailures = count('dual_write_failure') + count('outbox_flush_fail');
   const outboxFlushFails = count('outbox_flush_fail');
   const mfaChallenges = count('mfa_challenge');
+  const sotFallbacks = count('sot_fallback');
+  const sotDivergences = count('sot_divergence');
+  const lockLong = count('lock_long');
+  const reconcileFails = count('reconcile_fail');
 
   let tone: OperationalSloSummary['tone'] = 'ok';
   let label = 'Estável (24h)';
-  if (dualWriteFailures >= 5 || snapshotConflicts >= 10) {
+  if (dualWriteFailures >= 5 || snapshotConflicts >= 10 || sotFallbacks >= 8) {
     tone = 'danger';
     label = 'Atenção (24h)';
-  } else if (dualWriteFailures >= 1 || snapshotConflicts >= 3) {
+  } else if (
+    dualWriteFailures >= 1 ||
+    snapshotConflicts >= 3 ||
+    sotFallbacks >= 1 ||
+    lockLong >= 3 ||
+    sotDivergences >= 20
+  ) {
     tone = 'warn';
     label = 'Oscilações (24h)';
   }
@@ -92,6 +112,10 @@ export function getOperationalSloSummary(): OperationalSloSummary {
     dualWriteFailures,
     outboxFlushFails,
     mfaChallenges,
+    sotFallbacks,
+    sotDivergences,
+    lockLong,
+    reconcileFails,
     tone,
     label,
   };

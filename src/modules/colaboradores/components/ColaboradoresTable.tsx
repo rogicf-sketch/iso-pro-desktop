@@ -1,8 +1,8 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconPencil, IconRefresh } from '../../../components/ui/TableActionIcons';
 import type { Colaborador } from '../types/colaborador.types';
 
 type Props = {
@@ -25,14 +25,14 @@ export function ColaboradoresTable({ items, canEdit, canAdminister, onEdit, onTo
             <div>
               <strong>{item.nome}</strong>
               <div className="panel-copy">
-                {item.tipo === 'interno' ? `Interno • ${item.matricula || 'Sem matricula'}` : `Externo • ${item.empresa || 'Sem empresa'}`}
+                {item.tipo === 'interno' ? `Interno · ${item.matricula || 'Sem matrícula'}` : `Externo · ${item.empresa || 'Sem empresa'}`}
               </div>
             </div>
           ),
         },
-        { key: 'funcao', header: 'Funcao', render: (item) => item.funcao || '-' },
-        { key: 'documento', header: 'Documento', render: (item) => item.documento || '-' },
-        { key: 'telefone', header: 'Telefone', render: (item) => item.telefone || '-' },
+        { key: 'funcao', header: 'Função', render: (item) => item.funcao || '—' },
+        { key: 'documento', header: 'Documento', render: (item) => item.documento || '—' },
+        { key: 'telefone', header: 'Telefone', render: (item) => item.telefone || '—' },
         {
           key: 'status',
           header: 'Status',
@@ -40,27 +40,29 @@ export function ColaboradoresTable({ items, canEdit, canAdminister, onEdit, onTo
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
               {canEdit ? (
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
+                <TableIconButton label="Editar colaborador" onClick={() => onEdit(item)}>
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
               {canAdminister ? (
-                <ActionButton
-                  enabledLabel={item.ativo ? 'Inativar' : 'Reativar'}
-                  enabledTitle={item.ativo ? 'Inativar colaborador para impedir selecao operacional.' : 'Reativar colaborador no sistema.'}
+                <TableIconButton
+                  label={item.ativo ? 'Inativar colaborador' : 'Reativar colaborador'}
                   onClick={() => onToggleStatus(item)}
-                  variant={item.ativo ? 'danger' : 'ghost'}
-                />
+                  tone={item.ativo ? 'danger' : 'neutral'}
+                >
+                  {item.ativo ? <IconBan /> : <IconRefresh />}
+                </TableIconButton>
               ) : null}
             </div>
           ),
         },
       ]}
-      emptyText="Nenhum colaborador encontrado."
+      emptyDescription="Cadastre um colaborador ou limpe o filtro de busca."
+      emptyText="Nenhum colaborador encontrado"
       items={items}
     />
   );

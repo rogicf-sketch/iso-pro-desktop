@@ -1,12 +1,14 @@
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconRefresh } from '../../../components/ui/TableActionIcons';
 import type { DesktopLicenseRegistryItem } from '../types/desktop-license-registry.types';
 
 type Props = {
   items: DesktopLicenseRegistryItem[];
   canAdminister: boolean;
+  showTenant?: boolean;
   onRevoke: (item: DesktopLicenseRegistryItem) => void;
   onRestore: (item: DesktopLicenseRegistryItem) => void;
 };
@@ -16,11 +18,25 @@ function formatDate(value: string) {
   return new Date(value).toLocaleString('pt-BR');
 }
 
-export function DesktopLicensesTable({ items, canAdminister, onRevoke, onRestore }: Props) {
+export function DesktopLicensesTable({ items, canAdminister, showTenant = false, onRevoke, onRestore }: Props) {
   return (
     <DataTable
       getRowClassName={(item) => getTableRowClassName(item.status === 'revoked' ? 'critical' : 'normal')}
       columns={[
+        ...(showTenant
+          ? [
+              {
+                key: 'empresa',
+                header: 'Empresa',
+                render: (item: DesktopLicenseRegistryItem) => (
+                  <div>
+                    <strong>{item.tenantName || '—'}</strong>
+                    <div className="panel-copy">{item.tenantSlug || item.tenantId || ''}</div>
+                  </div>
+                ),
+              },
+            ]
+          : []),
         {
           key: 'licenca',
           header: 'Licenca',
@@ -74,9 +90,20 @@ export function DesktopLicensesTable({ items, canAdminister, onRevoke, onRestore
             canAdminister ? (
               <div className="table-actions">
                 {item.status === 'active' ? (
-                  <ActionButton enabledLabel="Revogar" enabledTitle="Revogar licenca desktop centralmente." onClick={() => onRevoke(item)} variant="danger" />
+                  <TableIconButton
+                    label="Revogar licenca desktop centralmente."
+                    onClick={() => onRevoke(item)}
+                    tone="danger"
+                  >
+                    <IconBan />
+                  </TableIconButton>
                 ) : (
-                  <ActionButton enabledLabel="Reativar" enabledTitle="Reativar licenca desktop centralmente." onClick={() => onRestore(item)} variant="ghost" />
+                  <TableIconButton
+                    label="Reativar licenca desktop centralmente."
+                    onClick={() => onRestore(item)}
+                  >
+                    <IconRefresh />
+                  </TableIconButton>
                 )}
               </div>
             ) : null,

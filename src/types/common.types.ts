@@ -17,6 +17,8 @@ export type ServiceResult<T> = {
     syncMateriaisLocalBloqueado?: boolean;
     /** Leitura serviu cache local enquanto a nuvem ainda podia estar a responder (SWR). */
     staleWhileRevalidate?: boolean;
+    /** Bipe: material veio da copia local porque a query na nuvem falhou. */
+    fallbackLocalPorFalhaNuvem?: boolean;
     /** Estorno V2 (RPC transacional). */
     estornoV2?: boolean;
     idempotencyKey?: string;

@@ -31,10 +31,13 @@ Aplica-se ao **iso-pro-desktop** e ao **iso_pro_mobile** no mesmo projecto Supab
 | **Supabase Storage** (se usarem ficheiros): permissões alinhadas + caminho único por documento | [ ] | |
 | Plano do projecto com **backups automáticos** activos | [x] | 2026-07-11 — físicos diários OK; último `11 Jul 2026 07:35:06 UTC` |
 | **Teste de restauração** feito ao menos uma vez (registar data) | [x] | 2026-07-11 — smoke OK; projecto `iso-pro-staging-teste` **apagado** no mesmo dia |
-| Ambiente **staging** separado de produção (recomendado) | [x] | 2026-07-21 `iso-pro-staging` ref `blyrzngunpxxgpdmoypo` — cutover JWT staging OK |
+| Ambiente **staging** separado de produção (recomendado) | [x] | 2026-07-22 ref `vghbcwkvmmihakunvwqw` (seed + stress OK). Clone PHYSICAL = opcional trimestral — `docs/OPS-MENSAL-CAMPO.md` |
 | Retenção outbox / comandos (pruning) | [x] | Migration `20260711160000`; `ops:prune-retencao` (service role) — 2026-07-21 |
 | Smoke diário automatizado | [x] | Secrets GH + workflow OK 2026-07-11 — run #3 verde (`0e98b99`); cron 07:00 UTC |
-| Alertas infra Supabase (CPU/disco/pool ≥80%) | [ ] | `docs/CHECKLIST-ALERTAS-INFRA-SUPABASE.md`
+| Alertas infra Supabase (CPU/disco/pool ≥80%) | [x] | 2026-07-12 + `docs/CHECKLIST-ALERTAS-INFRA-SUPABASE.md`; Dashboard snapshot 5/15 MB |
+| Restauro staging recorrente (não apagar entre testes) | [x] | Política 2026-07-22 — trimestral com load-test |
+| Snapshot tamanho / retenção | [x] | `docs/POLITICA-RETENCAO-SNAPSHOT.md` |
+| Backup Storage / ficheiros | [x] | 1.ª cópia 2026-07-22 → `release/storage-exports/2026-07-23` (13 pdfs; evidencias vazio) |
 
 ### 2b. Criar staging Supabase (nível mundial)
 
@@ -42,14 +45,16 @@ Hoje só existe produção (`huvktaxsosxrfpvdigxq`). Staging evita testar migrat
 
 | # | Passo | Feito? |
 |---|-------|--------|
-| 1 | Dashboard → backups prod → **Restore to new project** (`iso-pro-staging`) — `docs/GUIA-RESTAURO-STAGING.md` | [ ] |
-| 2 | Anotar `project-ref` + anon key (nunca misturar com prod no mesmo `.env` de build) | [ ] |
-| 3–6 | `npm run staging:bootstrap -- -ProjectRef <REF> -AnonKey "<key>"` (link + `.env.staging` + db push + smoke) | [ ] |
-| 7 | Builds TI usam `.env.staging` — **nunca** apontar APK de campo para staging | [ ] |
+| 1 | Dashboard → backups prod → **Restore to new project** (`iso-pro-staging`) — `docs/GUIA-RESTAURO-STAGING.md` | [~] | 2026-07-22: staging fresco `vghbcwkvmmihakunvwqw` via preflight+push (stress OK). Restore opcional para clone de dados |
+| 2 | Anotar `project-ref` + anon key (nunca misturar com prod no mesmo `.env` de build) | [x] | `.env.staging` → `vghbcwkvmmihakunvwqw` |
+| 3–6 | `npm run staging:bootstrap` / preflight + db push + smoke | [x] | `scripts/preflight-empty-staging.sql` + `db push` 2026-07-22 |
+| 7 | Builds TI usam `.env.staging` — **nunca** apontar APK de campo para staging | [x] | |
 
 Modelo: `.env.staging.example` · Cutover JWT: `docs/GUIA-JWT-CUTOVER.md`
 
 *Até existir staging: usar tenant piloto + backups antes de cada migration arriscada em prod.*
+
+Rotina mensal / trimestral: **`docs/OPS-MENSAL-CAMPO.md`**.
 
 ---
 
@@ -57,9 +62,9 @@ Modelo: `.env.staging.example` · Cutover JWT: `docs/GUIA-JWT-CUTOVER.md`
 
 | Item | Feito? | Notas / data |
 |------|--------|----------------|
-| Equipa alinhada: evitar dois utilizadores a gravar o **mesmo** fluxo crítico ao mesmo tempo sem coordenação | [ ] | |
-| Mensagens de erro/conflito compreendidas (recarregar e tentar de novo quando aplicável) | [ ] | |
-| Gravação mobile usa controlo de versão do snapshot (`updated_at`, conflito + retry) — evitar PC e telemóvel a gravar o mesmo fluxo em simultâneo | [ ] | |
+| Equipa alinhada: evitar dois utilizadores a gravar o **mesmo** fluxo crítico ao mesmo tempo sem coordenação | [x] | Lock server: Atendimento + Recebimento/RIR/RNC (`docs/RESOURCE-EDIT-LOCKS.md`) — um posto por documento em edição |
+| Mensagens de erro/conflito compreendidas (recarregar e tentar de novo quando aplicável) | [x] | `SnapshotConflictHint` + mobile conflito |
+| Gravação mobile usa controlo de versão do snapshot (`updated_at`, conflito + retry) — evitar PC e telemóvel a gravar o mesmo fluxo em simultâneo | [x] | UX `SnapshotConflictHint` reforçada 2026-07-22 |
 
 ---
 
@@ -77,10 +82,11 @@ Modelo: `.env.staging.example` · Cutover JWT: `docs/GUIA-JWT-CUTOVER.md`
 
 | Item | Feito? | Notas / data |
 |------|--------|----------------|
-| Onde vive cada tipo de ficheiro (Storage vs payload vs mistura) **documentado** | [ ] | |
-| Política de backup inclui **ficheiros** ou cópia fora do Postgres | [ ] | |
+| Onde vive cada tipo de ficheiro (Storage vs payload vs mistura) **documentado** | [x] | `docs/POLITICA-BACKUP-STORAGE.md` |
+| Política de backup inclui **ficheiros** ou cópia fora do Postgres | [x] | Export mensal Storage ou risco aceite — mesma doc |
+| 1.ª corrida `npm run ops:export-storage` (ou “bucket vazio / risco aceite”) | [x] | 2026-07-22 |
 | Teste: criar / apagar documento de teste e validar referências | [ ] | |
 
 ---
 
-**Última revisão deste checklist:** _preencher_
+**Última revisão deste checklist:** 2026-07-22 — ops mensal em `docs/OPS-MENSAL-CAMPO.md`

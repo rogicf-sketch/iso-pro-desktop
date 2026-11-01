@@ -27,7 +27,10 @@ declare global {
       savePdfJanelaAtual?: () => Promise<{ ok: true } | { ok: false; error: string }>;
       /** IPC: pré-visualização de HTML numa janela (evita pop-up bloqueado / `window.open` null). */
       beginHtmlPreviewLoading?: (titulo: string) => Promise<{ ok: true }>;
-      previewHtml?: (html: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      previewHtml?: (
+        html: string,
+        assets?: Array<{ name: string; base64: string }>,
+      ) => Promise<{ ok: true } | { ok: false; error: string }>;
       /** IPC: RIR em PDF programático (pdf-lib) — guardar, imprimir, pré-visualizar. */
       saveRirPdf?: (base64: string, defaultName: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       printRirPdf?: (base64: string) => Promise<{ ok: true } | { ok: false; error: string }>;
@@ -141,6 +144,7 @@ declare global {
         statusText: string;
         headers: Record<string, string>;
         body: string;
+        bodyEncoding?: 'utf8' | 'base64';
       }>;
     };
   }

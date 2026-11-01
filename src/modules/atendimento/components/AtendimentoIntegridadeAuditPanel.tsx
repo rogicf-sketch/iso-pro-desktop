@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../../components/ui/Button';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { hasSupabaseConfig } from '../../../lib/supabase';
 import {
@@ -65,11 +66,13 @@ export function AtendimentoIntegridadeAuditPanel({ canAdminister }: Props) {
         </div>
       </div>
 
-      <OperationalNotice>
-        Varre o snapshot na nuvem: <strong>excesso no planejamento</strong>, <strong>mesmo material em varios lotes</strong> no
-        mesmo desenho (ex. /UT-187), <strong>desenhos com multiplos ATDs</strong> e divergencias entre lotes e planejamento.
-        Use antes de fechar obra ou apos suspeita de baixa duplicada.
-      </OperationalNotice>
+      <ModuleHelp>
+        <OperationalNotice>
+          Varre o snapshot na nuvem: <strong>excesso no planejamento</strong>, <strong>mesmo material em varios lotes</strong> no
+          mesmo desenho (ex. /UT-187), <strong>desenhos com multiplos ATDs</strong> e divergencias entre lotes e planejamento.
+          Use antes de fechar obra ou apos suspeita de baixa duplicada.
+        </OperationalNotice>
+      </ModuleHelp>
 
       {!cloudOk ? (
         <OperationalNotice tone="warning">Configure o Supabase em Configuracoes para executar a auditoria.</OperationalNotice>

@@ -1,7 +1,9 @@
 .app-shell {
   display: grid;
   grid-template-columns: 260px 1fr;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -9,9 +11,11 @@
   flex-direction: column;
   border-right: 1px solid var(--surface-border);
   background: var(--sidebar-bg);
-  padding: 24px 16px;
-  min-height: 100vh;
+  padding: 16px 12px;
+  height: 100vh;
+  min-height: 0;
   box-sizing: border-box;
+  overflow-y: auto;
 }
 
 .sidebar-titular-registro {
@@ -44,7 +48,7 @@
   flex-shrink: 0;
 }
 
-/* Marca lateral ó placa estruturada I.S.O | PRO */
+/* Marca lateral ÔøΩ placa estruturada I.S.O | PRO */
 .sidebar-brand-plate {
   position: relative;
   border-radius: 14px;
@@ -200,18 +204,101 @@ body.theme-neon .sidebar-link__badge {
 .main-content {
   display: grid;
   grid-template-rows: auto 1fr;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .topbar {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px 28px;
+  gap: 12px 28px;
   border-bottom: 1px solid var(--surface-border);
-  padding: 20px 28px;
+  padding: 12px 28px;
   flex-shrink: 0;
 }
+
+/* Topbar √∫til: t√≠tulo + meta √† esquerda, sess√£o compacta √† direita. */
+.topbar--app {
+  min-height: 48px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.topbar-title-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.topbar-page-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  letter-spacing: -0.015em;
+}
+
+.topbar-page-meta {
+  margin: 3px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.topbar-session--compact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  text-align: right;
+  max-width: 14rem;
+}
+
+.topbar-session-name {
+  font-weight: 700;
+  color: var(--accent, #22c55e);
+  font-size: 0.92rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.topbar-session-role {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.panel-header--actions-only {
+  justify-content: flex-end;
+}
+
+.panel-header--actions-only .panel-toolbar {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+/* T√≠tulo do m√≥dulo fica na topbar ‚Äî esconde o h2 repetido no painel. */
+.app-shell .panel-header.panel-header--toolbar > div:first-child:not(.panel-toolbar) {
+  display: none;
+}
+
+.app-shell .panel-header:not(.panel-header--toolbar):has(> div:only-child > h2:only-child) {
+  display: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 
 /* Esquerda: titulo do modulo ocupa o espaco restante (titulos longos). */
 .topbar-module-wrap {
@@ -257,7 +344,11 @@ body.theme-neon .sidebar-link__badge {
 }
 
 .page-content {
-  padding: 28px;
+  padding: 12px 20px 16px;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .local-storage-invalid-banner-stack {
@@ -288,7 +379,7 @@ body.theme-neon .sidebar-link__badge {
 }
 
 /**
- * Desktop: shell tipo app nativo (cf. NVIDIA App / CEF) ó
+ * Desktop: shell tipo app nativo (cf. NVIDIA App / CEF) ÔøΩ
  * coluna esquerda + barra superior estaveis; so a area central faz scroll.
  */
 @media (min-width: 981px) {
@@ -356,23 +447,26 @@ body.theme-neon .sidebar-link__badge {
 
 .panel-toolbar__group {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  border-radius: 16px;
-  border: 1px solid var(--surface-border);
-  background: var(--panel-bg-soft);
-  min-width: min(100%, 200px);
+  padding: 0;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  min-width: 0;
 }
 
 .panel-toolbar__label {
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-muted, #94a3b8);
-  line-height: 1.2;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .panel-toolbar__buttons {
@@ -538,7 +632,7 @@ body.theme-neon .sidebar-link__badge {
   margin-top: 24px;
 }
 
-/* Usuarios ó permissoes por modulo (cartoes refinados; evita reutilizar .metric-card aqui) */
+/* Usuarios ÔøΩ permissoes por modulo (cartoes refinados; evita reutilizar .metric-card aqui) */
 .usuario-perm-section {
   padding-top: 4px;
 }
@@ -622,7 +716,7 @@ body.theme-neon .sidebar-link__badge {
   }
 }
 
-/* Nome do modulo em linha propria; pastilha na linha seguinte ‡ direita ó evita sobreposicao */
+/* Nome do modulo em linha propria; pastilha na linha seguinte ÔøΩ direita ÔøΩ evita sobreposicao */
 .usuario-perm-card__head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -737,7 +831,7 @@ body.theme-neon .sidebar-link__badge {
   margin-top: 4px;
 }
 
-/* Tema claro ó cartoes e chips legiveis */
+/* Tema claro ÔøΩ cartoes e chips legiveis */
 body.theme-hibrido .usuario-perm-card {
   background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
   border: 1px solid rgba(15, 23, 42, 0.1);
@@ -789,7 +883,7 @@ body.theme-hibrido .usuario-perm-chip--off:hover:not(:disabled) {
   color: #9a3412;
 }
 
-/* Tema neon ó status sem texto gigante ìglowî; contido e legivel */
+/* Tema neon ÔøΩ status sem texto gigante ÔøΩglowÔøΩ; contido e legivel */
 body.theme-neon .usuario-perm-heading {
   color: var(--neon-fg);
   text-shadow: var(--neon-glow-text);
@@ -963,36 +1057,125 @@ body.theme-hibrido input[type='datetime-local'].input-control {
 .table-shell {
   overflow: auto;
   margin-top: 18px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--table-shell-bg, var(--panel-bg-soft, var(--panel-bg)));
+  /* ContÔøΩm sticky thead ÔøΩ evita cabeÔøΩalho a atravessar modais */
+  isolation: isolate;
 }
 
 .data-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .data-table th,
 .data-table td {
-  border-bottom: 1px solid var(--surface-border);
-  padding: 14px 12px;
+  border: none;
+  border-bottom: 1px solid var(--table-hairline, var(--surface-border));
+  padding: 12px 14px;
   text-align: left;
+  vertical-align: middle;
+  background: var(--table-cell-bg, transparent);
 }
 
 .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
+  /* Opaco: evita 1.¬™ linha ‚Äúpor baixo‚Äù do cabe√ßalho (bug sticky + fundo transparente) */
+  background: var(--table-header-bg, var(--panel-bg-strong, var(--panel-bg)));
+  border-bottom: 1px solid var(--table-header-hairline, var(--surface-border));
+  box-shadow: none;
+}
+
+.data-table tbody tr {
+  transition: background 0.15s ease;
+}
+
+.data-table tbody tr:hover:not(.table-row-warning):not(.table-row-critical) td {
+  background: var(--table-hover-bg, var(--hover-bg));
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .table-empty {
   color: var(--text-muted);
   text-align: center;
+  padding: 28px 16px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 20px 32px;
+  text-align: center;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.empty-state__mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--text-muted) 55%, transparent);
+  background: color-mix(in srgb, var(--hover-bg) 70%, transparent);
+  margin-bottom: 4px;
+}
+
+.empty-state__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.empty-state__desc {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.empty-state__action {
+  margin-top: 8px;
 }
 
 .table-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-start;
+  max-width: 320px;
+}
+
+.table-actions .button,
+.table-actions .button-primary,
+.table-actions .primary-button,
+.table-actions .button-ghost,
+.table-actions .ghost-button,
+.table-actions .button-danger,
+.table-actions button {
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  border-radius: var(--radius-sm, 8px);
+  white-space: nowrap;
+  min-height: 30px;
 }
 
 .status-badge {
@@ -1029,12 +1212,25 @@ body.theme-hibrido input[type='datetime-local'].input-control {
   color: #cbd5e1;
 }
 
-.table-row-critical {
-  background: rgba(127, 29, 29, 0.14);
+.table-row-critical,
+.table-row-warning {
+  background: transparent;
 }
 
-.table-row-warning {
-  background: rgba(245, 158, 11, 0.08);
+.data-table tbody tr.table-row-warning td {
+  background: var(--table-row-warning-bg);
+}
+
+.data-table tbody tr.table-row-critical td {
+  background: var(--table-row-critical-bg);
+}
+
+.data-table tbody tr.table-row-warning td:first-child {
+  box-shadow: inset 3px 0 0 0 var(--table-row-warning-bar);
+}
+
+.data-table tbody tr.table-row-critical td:first-child {
+  box-shadow: inset 3px 0 0 0 var(--table-row-critical-bar);
 }
 
 .recebimento-badge-divergencia {
@@ -1060,12 +1256,111 @@ body.theme-hibrido .recebimento-badge-divergencia {
   justify-content: space-between;
   gap: 16px;
   margin-top: 16px;
+  flex-wrap: wrap;
 }
 
 .pagination-actions {
   display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pagination--rich .pagination-range {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.pagination-ellipsis {
+  color: var(--text-muted);
+  padding: 0 4px;
+  user-select: none;
+}
+
+.pagination-page {
+  min-width: 2.25rem;
+  padding-left: 0.55rem;
+  padding-right: 0.55rem;
+}
+
+.pagination-page.is-active {
+  font-weight: 700;
+}
+
+.topbar-right--end {
+  margin-left: auto;
+  align-items: center;
+}
+
+/* Marca lateral alternativa (√≠cone de barras). */
+.sidebar-brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 8px 12px;
+}
+
+.sidebar-brand-mark-icon {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 28px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-mark-icon span {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent, #22c55e);
+}
+
+.sidebar-brand-mark-icon span:nth-child(1) {
+  width: 100%;
+  transform: skewX(-12deg);
+}
+
+.sidebar-brand-mark-icon span:nth-child(2) {
+  width: 82%;
+}
+
+.sidebar-brand-mark-icon span:nth-child(3) {
+  width: 100%;
+  transform: skewX(-12deg);
+}
+
+.sidebar-brand-mark-text {
+  min-width: 0;
+}
+
+.sidebar-brand-mark-row {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
+
+.sidebar-brand-mark .sidebar-brand-iso {
+  letter-spacing: 0.18em;
+  text-indent: 0;
+  font-size: 1rem;
+}
+
+.sidebar-brand-mark .sidebar-brand-pro {
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+}
+
+.sidebar-brand-mark .sidebar-brand-product {
+  margin: 4px 0 0;
+  letter-spacing: 0.14em;
+  font-size: 0.62rem;
+}
+
+.panel-header h2 {
+  letter-spacing: -0.01em;
+}
+
 
 @keyframes modal-backdrop-fade-in {
   from {
@@ -1090,6 +1385,7 @@ body.theme-hibrido .recebimento-badge-divergencia {
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  z-index: 50;
   display: grid;
   place-items: center;
   align-content: center;
@@ -1206,7 +1502,7 @@ body.theme-hibrido .panel-tab--active {
   color: var(--claro-texto-fosco);
 }
 
-/* Materiais ó consulta por codigo */
+/* Materiais ÔøΩ consulta por codigo */
 .materiais-consulta__search {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -1262,6 +1558,7 @@ body.theme-hibrido .panel-tab--active {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px 18px;
   margin: 14px 0 0;
+  width: 100%;
 }
 
 .materiais-consulta-dl dt {
@@ -1283,6 +1580,123 @@ body.theme-hibrido .panel-tab--active {
   font-size: 0.78rem;
   color: var(--muted);
   margin-top: 2px;
+}
+
+/* Consulta por codigo: tabelas de planejamento / atendimento */
+.materiais-consulta .table-wrap {
+  width: 100%;
+  overflow: auto;
+}
+
+.materiais-consulta-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.materiais-consulta-table th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--panel-bg-strong, var(--panel-bg));
+}
+
+.materiais-consulta-table th,
+.materiais-consulta-table td {
+  text-align: left;
+  vertical-align: middle;
+}
+
+.materiais-consulta-table__doc {
+  width: auto;
+  min-width: 12rem;
+  word-break: break-word;
+}
+
+.materiais-consulta-table__rev {
+  width: 4rem;
+  white-space: nowrap;
+}
+
+.materiais-consulta-table__num {
+  width: 6.5rem;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.materiais-consulta-table th.materiais-consulta-table__num {
+  text-align: right;
+}
+
+.materiais-consulta-table__status {
+  width: 7rem;
+  white-space: nowrap;
+}
+
+.materiais-consulta-table__lote {
+  width: 7rem;
+  white-space: nowrap;
+}
+
+.materiais-consulta-table__data {
+  width: 9rem;
+  white-space: nowrap;
+}
+
+/* Estoque critico: colunas alinhadas (sem valores ‚Äúao meio‚Äù em celulas largas) + thead opaco */
+.materiais-criticos-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.materiais-criticos-table th {
+  z-index: 3;
+  background: var(--panel-bg-strong, var(--panel-bg));
+  box-shadow: 0 1px 0 var(--surface-border);
+}
+
+.materiais-criticos-table th,
+.materiais-criticos-table td {
+  text-align: left;
+  vertical-align: middle;
+}
+
+.materiais-criticos-table__codigo {
+  width: 7.5rem;
+  white-space: nowrap;
+}
+
+.materiais-criticos-table__desc {
+  width: auto;
+  min-width: 12rem;
+  word-break: break-word;
+}
+
+.materiais-criticos-table__num {
+  width: 7.25rem;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.materiais-criticos-table th.materiais-criticos-table__num {
+  text-align: right;
+}
+
+.materiais-criticos-table__grav {
+  width: 6.5rem;
+  white-space: nowrap;
+}
+
+.materiais-criticos-table__acao {
+  width: 5.5rem;
+  white-space: nowrap;
+}
+
+.materiais-criticos-table__num .materiais-consulta-table-sub {
+  display: inline;
+  margin-top: 0;
+  margin-left: 0.25rem;
 }
 
 kbd {

@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { DataTable } from '../../../components/tables/DataTable';
 import { getTableRowClassName } from '../../../components/tables/tableRowState';
-import { ActionButton } from '../../../components/ui/ActionButton';
-import { Button } from '../../../components/ui/Button';
 import { StatusBadge } from '../../../components/ui/StatusBadge';
+import { TableIconButton } from '../../../components/ui/TableIconButton';
+import { IconBan, IconPencil, IconRefresh } from '../../../components/ui/TableActionIcons';
 import type { MetricasPorCodigoMaterial } from '../../documentos/services/documentoPlanejamento';
 import type { MaterialListItem } from '../types/material.types';
 import { codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
@@ -80,13 +80,13 @@ export function MateriaisTable({
               },
             ]
           : []),
-        { key: 'codigo', header: 'Codigo', render: (item) => item.codigo },
+        { key: 'codigo', header: 'Código', render: (item) => item.codigo },
         {
           key: 'codigoBarras',
-          header: 'Cod. barras',
-          render: (item) => (item.codigoBarras ? <span title="EAN / codigo de barras">{item.codigoBarras}</span> : '—'),
+          header: 'Cód. barras',
+          render: (item) => (item.codigoBarras ? <span title="EAN / código de barras">{item.codigoBarras}</span> : '—'),
         },
-        { key: 'descricao', header: 'Descricao', render: (item) => item.descricao },
+        { key: 'descricao', header: 'Descrição', render: (item) => item.descricao },
         { key: 'disciplina', header: 'Disciplina', render: (item) => item.disciplina },
         { key: 'unidade', header: 'Unidade', render: (item) => item.unidade },
         {
@@ -107,26 +107,29 @@ export function MateriaisTable({
         },
         {
           key: 'acoes',
-          header: 'Acoes',
+          header: 'Ações',
           render: (item) => (
             <div className="table-actions">
               {canEdit ? (
-                <Button onClick={() => onEdit(item)} variant="ghost">
-                  Editar
-                </Button>
+                <TableIconButton label="Editar material" onClick={() => onEdit(item)}>
+                  <IconPencil />
+                </TableIconButton>
               ) : null}
               {canAdminister ? (
-                <ActionButton
-                  enabledLabel={item.ativo ? 'Inativar' : 'Reativar'}
-                  enabledTitle={item.ativo ? 'Inativar material para impedir novo uso operacional.' : 'Reativar material para voltar ao fluxo.'}
+                <TableIconButton
+                  label={item.ativo ? 'Inativar material' : 'Reativar material'}
                   onClick={() => onToggleStatus(item)}
-                  variant={item.ativo ? 'danger' : 'ghost'}
-                />
+                  tone={item.ativo ? 'danger' : 'neutral'}
+                >
+                  {item.ativo ? <IconBan /> : <IconRefresh />}
+                </TableIconButton>
               ) : null}
             </div>
           ),
         },
       ]}
+      emptyDescription="Cadastre um material ou ajuste o filtro de busca."
+      emptyText="Nenhum material encontrado"
       items={items}
     />
   );

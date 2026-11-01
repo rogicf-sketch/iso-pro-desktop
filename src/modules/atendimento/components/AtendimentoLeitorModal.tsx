@@ -21,7 +21,7 @@ type Props = {
   recebedor: string;
   colaboradores: Colaborador[];
   avisoRetirante?: string;
-  onConfirmar: (documentoId: string, quantidade: number) => void;
+  onConfirmar: (documentoId: string, quantidade: number) => void | Promise<void>;
   onContinuarBipando: () => void;
   onCancelar: () => void;
   /** Abre a confirmacao da retirada (recibo unico) sem precisar rolar ate a tabela da sessao. */
@@ -108,7 +108,7 @@ export function AtendimentoLeitorModal({
 
   const confirmarInclusao = useCallback(() => {
     if (!documentoId || !candidato || !podeIncluir) return;
-    onConfirmar(documentoId, analiseQuantidade.quantidade);
+    void onConfirmar(documentoId, analiseQuantidade.quantidade);
   }, [analiseQuantidade.quantidade, candidato, documentoId, onConfirmar, podeIncluir]);
 
   useEffect(() => {
@@ -180,30 +180,47 @@ export function AtendimentoLeitorModal({
 
   const { material, candidatos, scan } = painel;
   const buscando = painel.passo === 'buscando';
+  const totalSessaoQtd = sessaoRetirada.reduce((acc, l) => acc + (Number(l.quantidade) || 0), 0);
 
   return (
     <Modal onClose={onCancelar} open={open} title="Atendimento via leitor" wide>
-      <div className="editor-block stack-grid">
-        <div className="info-card" style={{ margin: 0 }}>
-          <p className="panel-kicker">Retirada</p>
-          <p className="panel-copy">
-            <strong>Atendente:</strong> {atendente.trim() || '— (obrigatorio)'}
-            <br />
-            <strong>{recebedorTipo === 'interno' ? 'Colaborador atendido (quem retirou)' : 'Retirante (externo)'}:</strong>{' '}
-            {rotuloRetirante(recebedorTipo, recebedorColaboradorId, recebedor, colaboradores)}
-          </p>
+      <div className="atendimento-leitor">
+        <section className="atendimento-leitor__meta" aria-label="Retirada">
+          <div className="atendimento-leitor__meta-grid">
+            <div>
+              <span className="atendimento-leitor__label">Atendente</span>
+              <strong className="atendimento-leitor__value">
+                {atendente.trim() || '— (obrigatorio)'}
+              </strong>
+            </div>
+            <div>
+              <span className="atendimento-leitor__label">
+                {recebedorTipo === 'interno' ? 'Colaborador atendido' : 'Retirante (externo)'}
+              </span>
+              <strong className="atendimento-leitor__value">
+                {rotuloRetirante(recebedorTipo, recebedorColaboradorId, recebedor, colaboradores)}
+              </strong>
+            </div>
+          </div>
           {avisoRetirante ? <OperationalNotice tone="warning">{avisoRetirante}</OperationalNotice> : null}
-        </div>
+        </section>
 
-        <div className="document-summary">
-          <strong>{material ? material.codigo : 'A identificar material…'}</strong>
-          <p className="panel-copy">
-            {material ? material.descricao || 'Sem descricao no cadastro.' : 'A consultar o cadastro na nuvem.'}
+        <section className="atendimento-leitor__material" aria-label="Material lido">
+          <div className="atendimento-leitor__material-top">
+            <div className="atendimento-leitor__codigo">
+              {material ? material.codigo : 'A identificar…'}
+            </div>
+            <span className="atendimento-leitor__scan" title="Codigo lido pelo leitor">
+              <span className="atendimento-leitor__scan-label">Leitura</span>
+              <code>{scan}</code>
+            </span>
+          </div>
+          <p className="atendimento-leitor__descricao" title={material?.descricao || undefined}>
+            {material
+              ? material.descricao || 'Sem descricao no cadastro.'
+              : 'A consultar o cadastro na nuvem.'}
           </p>
-          <p className="panel-copy">
-            Leitura: <code>{scan}</code>
-          </p>
-        </div>
+        </section>
 
         {buscando || !material ? (
           <>
@@ -214,7 +231,7 @@ export function AtendimentoLeitorModal({
                 : 'A identificar o material no cadastro.'}{' '}
               Isto pode levar alguns segundos.
             </OperationalNotice>
-            <div className="form-actions">
+            <div className="atendimento-leitor__actions">
               <Button onClick={onCancelar} type="button" variant="ghost">
                 Cancelar
               </Button>
@@ -235,12 +252,11 @@ export function AtendimentoLeitorModal({
                 ? ` no documento ${candidatoConcluido.documento.numero} Rev. ${candidatoConcluido.documento.revisao}.`
                 : '.'}
             </OperationalNotice>
-            <p className="panel-copy">
-              Sessao atual: {sessaoRetirada.length} item(ns) ·{' '}
-              {sessaoRetirada.reduce((acc, l) => acc + (Number(l.quantidade) || 0), 0)} unidade(s). Deseja bipar o
-              proximo material ou finalizar? (Enter = continuar, Esc = fechar)
+            <p className="atendimento-leitor__hint">
+              Sessao atual: <strong>{sessaoRetirada.length}</strong> item(ns) ·{' '}
+              <strong>{totalSessaoQtd}</strong> unidade(s). Enter = continuar bipando · Esc = fechar.
             </p>
-            <div className="form-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+            <div className="atendimento-leitor__actions">
               <Button onClick={onContinuarBipando} ref={continuarRef} type="button">
                 Sim — continuar bipando
               </Button>
@@ -263,50 +279,95 @@ export function AtendimentoLeitorModal({
               </OperationalNotice>
             ) : null}
 
-            <p className="panel-kicker">Desenho / documento</p>
-            <ul className="stack-grid" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-              {candidatos.map(({ documento, linha }) => {
-                const ativo = documentoId === documento.id;
-                const naSessao = obterQuantidadeLinhaSessao(sessaoRetirada, documento.id, linha.documentoItemId);
-                const restante = quantidadeMaximaRestanteLeitor(linha, sessaoRetirada, documento.id);
-                return (
-                  <li key={documento.id}>
-                    <button
-                      className={`button${ativo ? ' button-primary' : ' ghost-button'}`}
-                      onClick={() => setDocumentoId(documento.id)}
-                      style={{ width: '100%', textAlign: 'left', whiteSpace: 'normal' }}
-                      type="button"
-                    >
-                      <strong>{documento.numero}</strong> Rev. {documento.revisao}
-                      <br />
-                      <span className="panel-copy">{documento.descricao}</span>
-                      <br />
-                      <span className="panel-copy">
-                        Pendente {linha.quantidadePendente} {linha.unidade} · Saldo {linha.saldoDisponivel}
-                        {naSessao > 0 ? (
-                          <>
-                            <br />
-                            Na sessao: {naSessao} {linha.unidade} · Restante: {restante} {linha.unidade}
-                          </>
+            <section className="atendimento-leitor__docs" aria-label="Desenho ou documento">
+              <div className="atendimento-leitor__docs-head">
+                <span className="atendimento-leitor__label">Desenho / documento</span>
+                <span className="atendimento-leitor__docs-count">
+                  {candidatos.length} opcao{candidatos.length === 1 ? '' : 'es'}
+                </span>
+              </div>
+              <ul className="atendimento-leitor__list" role="listbox" aria-label="Documentos candidatos">
+                {candidatos.map(({ documento, linha }) => {
+                  const ativo = documentoId === documento.id;
+                  const naSessao = obterQuantidadeLinhaSessao(
+                    sessaoRetirada,
+                    documento.id,
+                    linha.documentoItemId,
+                  );
+                  const restante = quantidadeMaximaRestanteLeitor(linha, sessaoRetirada, documento.id);
+                  const esgotado = restante <= 0;
+                  return (
+                    <li key={documento.id}>
+                      <button
+                        aria-selected={ativo}
+                        className={[
+                          'atendimento-leitor__doc',
+                          ativo ? 'is-selected' : '',
+                          esgotado ? 'is-exhausted' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        onClick={() => setDocumentoId(documento.id)}
+                        role="option"
+                        type="button"
+                      >
+                        <div className="atendimento-leitor__doc-main">
+                          <strong className="atendimento-leitor__doc-numero">{documento.numero}</strong>
+                          <span className="atendimento-leitor__doc-rev">Rev. {documento.revisao}</span>
+                        </div>
+                        {documento.descricao ? (
+                          <p className="atendimento-leitor__doc-desc" title={documento.descricao}>
+                            {documento.descricao}
+                          </p>
                         ) : null}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                        <div className="atendimento-leitor__chips">
+                          <span className="atendimento-leitor__chip">
+                            Pendente{' '}
+                            <b>
+                              {linha.quantidadePendente} {linha.unidade}
+                            </b>
+                          </span>
+                          <span className="atendimento-leitor__chip">
+                            Saldo <b>{linha.saldoDisponivel}</b>
+                          </span>
+                          {naSessao > 0 ? (
+                            <span className="atendimento-leitor__chip atendimento-leitor__chip--session">
+                              Na sessao{' '}
+                              <b>
+                                {naSessao} {linha.unidade}
+                              </b>
+                              {' · '}
+                              Restante{' '}
+                              <b>
+                                {restante} {linha.unidade}
+                              </b>
+                            </span>
+                          ) : null}
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
 
             {candidato ? (
               maxQtd > 0 ? (
-                <>
-                  <label className="field">
-                    <span>
-                      Quantidade nesta operacao (max. {maxQtd} {candidato.linha.unidade}
-                      {qtdNaSessao > 0 ? ` — ja ha ${qtdNaSessao} na sessao` : ''}) — Enter confirma
+                <section className="atendimento-leitor__qty" aria-label="Quantidade">
+                  <label className="atendimento-leitor__qty-field" htmlFor="atendimento-leitor-qtd">
+                    <span className="atendimento-leitor__label">
+                      Quantidade nesta operacao
+                      <span className="atendimento-leitor__qty-meta">
+                        max. {maxQtd} {candidato.linha.unidade}
+                        {qtdNaSessao > 0 ? ` · ja ha ${qtdNaSessao} na sessao` : ''}
+                        {' · '}
+                        Enter confirma
+                      </span>
                     </span>
                     <input
                       aria-invalid={Boolean(analiseQuantidade.mensagem)}
-                      className="input-control"
+                      className="atendimento-leitor__qty-input"
+                      id="atendimento-leitor-qtd"
                       inputMode="decimal"
                       min={0}
                       max={maxQtd}
@@ -324,7 +385,7 @@ export function AtendimentoLeitorModal({
                   {analiseQuantidade.mensagem ? (
                     <OperationalNotice tone="warning">{analiseQuantidade.mensagem}</OperationalNotice>
                   ) : null}
-                </>
+                </section>
               ) : analiseQuantidade.mensagem ? (
                 <OperationalNotice tone="warning">{analiseQuantidade.mensagem}</OperationalNotice>
               ) : null
@@ -332,7 +393,7 @@ export function AtendimentoLeitorModal({
               <OperationalNotice>Selecione um documento acima.</OperationalNotice>
             )}
 
-            <div className="form-actions">
+            <div className="atendimento-leitor__actions">
               <Button disabled={!podeIncluir} onClick={confirmarInclusao} type="button">
                 Incluir no atendimento
               </Button>

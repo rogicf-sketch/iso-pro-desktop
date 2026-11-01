@@ -45,7 +45,7 @@ function DashboardKpiCard({ item, replayKey }: { item: DashboardIndicator; repla
       <span className="metric-label">{item.label}</span>
       <strong className={`dashboard-kpi__value ${animating ? 'dashboard-kpi__value--animating' : ''}`}>{displayValue}</strong>
       <p className="panel-copy">{item.helper}</p>
-      {clickable ? <span className="dashboard-kpi__cta">Abrir modulo</span> : null}
+      {clickable ? <span className="dashboard-kpi__cta">Abrir</span> : null}
     </article>
   );
 }

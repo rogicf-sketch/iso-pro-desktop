@@ -20,12 +20,17 @@ electron/.dev-main.mjs.map
 # Secrets (Supabase, etc.)
 .env
 .env.local
+.env.staging
+.env.production
 !.env.example
+!.env.staging.example
 scripts/deploy-web.env
 scripts/backup-oci.env
 services/pdf-worker/pdf-worker.local.env
+services/atendimento-gateway/atendimento-gateway.local.env
+services/atendimento-gateway/.deploy-staging/
 
-# Supabase CLI estado local (não versionar)
+# Supabase CLI estado local (n�o versionar)
 supabase/.temp/
 
 # Export manual do snapshot (npm run snapshot:export)
@@ -36,7 +41,7 @@ test-results/
 playwright-report/
 blob-report/
 
-# PDFs de teste / revisão local (não versionar)
+# PDFs de teste / revis�o local (n�o versionar)
 .pdf-review/
 /test-*.pdf
 /*-review.pdf
@@ -62,3 +67,18 @@ scripts/restaurar-*.mjs
 scripts/fix-*.mjs
 scripts/estorno-baixas-*.mjs
 scripts/auditoria-planejamento-atendimento.mjs
+
+# Segredos locais (nao commitar)
+secrets/*.local.txt
+secrets/*.local
+secrets/*.local.env
+secrets/*rollback*
+
+# Dumps locais de ensaio (PII) ? nunca commit
+release/dumps/
+
+
+# Chaves na pasta monorepo (../chaves)
+../chaves/*.pem
+../chaves/*.key
+

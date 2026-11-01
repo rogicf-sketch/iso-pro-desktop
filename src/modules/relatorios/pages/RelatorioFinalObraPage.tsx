@@ -177,8 +177,8 @@ export function RelatorioFinalObraPage() {
     <div className="panel">
       <div className="panel-header">
         <div>
-          <p className="panel-kicker">Relatórios</p>
-          <h2>Relatório Final de Obra</h2>
+          <p className="panel-kicker">Relatórios · encerramento</p>
+          <h2>Relatório final de obra</h2>
         </div>
         <Link className="ghost-button" to="/relatorios">
           Voltar

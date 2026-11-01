@@ -1,5 +1,120 @@
+import { IsoProSnapshotConflictError } from './isoProSnapshot';
+import { isFeatureEnabled } from './isoProFeatureFlags';
 import { getActiveTenantId } from './isoProTenant';
+import { invalidateOperacaoContagensBestEffort } from './operacaoContagensCache';
+import { newTraceId, recordSotFallback } from './sotFallbackTelemetry';
+import { resolveSotUnavailable } from './sotWriteGuard';
 import { getSupabase, hasSupabaseConfig } from './supabase';
+
+function isRpcMissingError(message: string): boolean {
+  return /function .* does not exist|PGRST202|404|could not find the function/i.test(message);
+}
+
+export type WriteSotResult = {
+  updatedAt: string;
+  missing: boolean;
+  idempotentHit?: boolean;
+  traceId?: string;
+};
+
+/**
+ * SoT table-first RIR: tabelas + projecao snapshot (sem outbox).
+ * Com `sot_require_rpc` (default): RPC ausente → hard-fail (sem patch snapshot).
+ * Com flag off: `missing: true` → cliente pode usar legado (emergência).
+ */
+export async function writeRirSotOnCloud(opts: {
+  baselineUpdatedAt: string | null;
+  upsert?: unknown[] | null;
+  removeIds?: string[] | null;
+  replaceAll?: unknown[] | null;
+  idempotencyKey?: string | null;
+  traceId?: string;
+}): Promise<WriteSotResult> {
+  const traceId = opts.traceId ?? newTraceId('rir');
+  if (!isFeatureEnabled('sot_rir_rnc')) {
+    // Intencional: desligar domínio RIR/RNC SoT → legado permitido.
+    recordSotFallback({ domain: 'rir', reason: 'feature_flag_disabled', traceId });
+    return { updatedAt: new Date().toISOString(), missing: true, traceId };
+  }
+  if (!hasSupabaseConfig()) {
+    return resolveSotUnavailable({ domain: 'rir', reason: 'supabase_unavailable', traceId });
+  }
+  const supabase = getSupabase();
+  if (!supabase) {
+    return resolveSotUnavailable({ domain: 'rir', reason: 'supabase_unavailable', traceId });
+  }
+  const { data, error } = await supabase.rpc('iso_pro_write_rir_sot', {
+    p_tenant_id: getActiveTenantId(),
+    p_baseline: opts.baselineUpdatedAt,
+    p_upsert: opts.upsert ?? null,
+    p_remove_ids: opts.removeIds?.length ? opts.removeIds : null,
+    p_replace_all: opts.replaceAll ?? null,
+    p_idempotency_key: opts.idempotencyKey?.trim() || null,
+  });
+  if (error) {
+    if (isRpcMissingError(error.message)) {
+      return resolveSotUnavailable({
+        domain: 'rir',
+        reason: 'rpc_missing',
+        detail: error.message,
+        traceId,
+      });
+    }
+    if (String(error.message ?? '').includes('ISO_PRO_SNAPSHOT_CONFLICT')) {
+      throw new IsoProSnapshotConflictError(error.message);
+    }
+    throw new Error(error.message);
+  }
+  invalidateOperacaoContagensBestEffort();
+  return { updatedAt: data != null ? String(data) : new Date().toISOString(), missing: false, traceId };
+}
+
+/** SoT table-first RNC (idempotency_key opcional). */
+export async function writeRncSotOnCloud(opts: {
+  baselineUpdatedAt: string | null;
+  upsert?: unknown[] | null;
+  removeIds?: string[] | null;
+  replaceAll?: unknown[] | null;
+  idempotencyKey?: string | null;
+  traceId?: string;
+}): Promise<WriteSotResult> {
+  const traceId = opts.traceId ?? newTraceId('rnc');
+  if (!isFeatureEnabled('sot_rir_rnc')) {
+    recordSotFallback({ domain: 'rnc', reason: 'feature_flag_disabled', traceId });
+    return { updatedAt: new Date().toISOString(), missing: true, traceId };
+  }
+  if (!hasSupabaseConfig()) {
+    return resolveSotUnavailable({ domain: 'rnc', reason: 'supabase_unavailable', traceId });
+  }
+  const supabase = getSupabase();
+  if (!supabase) {
+    return resolveSotUnavailable({ domain: 'rnc', reason: 'supabase_unavailable', traceId });
+  }
+  const { data, error } = await supabase.rpc('iso_pro_write_rnc_sot', {
+    p_tenant_id: getActiveTenantId(),
+    p_baseline: opts.baselineUpdatedAt,
+    p_upsert: opts.upsert ?? null,
+    p_remove_ids: opts.removeIds?.length ? opts.removeIds : null,
+    p_replace_all: opts.replaceAll ?? null,
+    p_idempotency_key: opts.idempotencyKey?.trim() || null,
+  });
+  if (error) {
+    if (isRpcMissingError(error.message)) {
+      return resolveSotUnavailable({
+        domain: 'rnc',
+        reason: 'rpc_missing',
+        detail: error.message,
+        traceId,
+      });
+    }
+    if (String(error.message ?? '').includes('ISO_PRO_SNAPSHOT_CONFLICT')) {
+      throw new IsoProSnapshotConflictError(error.message);
+    }
+    throw new Error(error.message);
+  }
+  invalidateOperacaoContagensBestEffort();
+  return { updatedAt: data != null ? String(data) : new Date().toISOString(), missing: false, traceId };
+}
 
 export async function syncRirFromSnapshot(): Promise<{ ok: boolean; rir?: number; error?: string }> {
   if (!hasSupabaseConfig()) return { ok: false, error: 'Supabase nao configurado.' };

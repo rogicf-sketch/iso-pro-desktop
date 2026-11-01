@@ -3,7 +3,6 @@
  * Agrupa por fornecedor + data + nota + romaneio e monta JSON compativel com importarRecebimentosDoArquivoJson.
  */
 
-import { extrairCodigoMaterialDeObjetoImport } from '../../../lib/codigoMaterialImport';
 import { escapeCsvCellSemicolon, parseCsvToRecords, parseCsvToRecordsCooperative } from '../../../lib/csv';
 import { mensagemSeCabecalhoImportCsvIncompativel } from '../../../lib/csvImportHeaderGuard';
 import {
@@ -13,7 +12,6 @@ import {
 import { parseRecebimentosImportJsonRoot } from '../../../lib/schemas/importArquivoPlano.zod';
 import { normalizarDataFlexivelParaIso } from '../../../lib/normalizeFlexibleDateToIso';
 import { parseDecimalFlexible, roundPesoKg } from '../../../lib/parseDecimal';
-import { validarNomesFornecedoresCadastradosAtivos } from '../../fornecedores/services/fornecedores.service';
 import { validarCodigosMateriaisAtivosNoCadastroParaRecebimento } from '../../materiais/services/materiais.service';
 import type { RecebimentoItem } from '../types/recebimento.types';
 
@@ -200,7 +198,7 @@ export async function construirJsonImportacaoRecebimentosPlanoCsv(
   return { ok: true, json: JSON.stringify(payload) };
 }
 
-/** Pre-visualizacao antes de confirmar importacao em massa na lista de recebimentos. */
+/** Contagem local do CSV. A confirmacao nao espera fornecedor nem cadastro na nuvem. */
 export async function previewImportacaoRecebimentosCsv(
   text: string,
 ): Promise<{ ok: true; linhaCount: number; recebimentoCount: number } | { ok: false; error: string }> {
@@ -209,15 +207,13 @@ export async function previewImportacaoRecebimentosCsv(
     return { ok: false, error: built.error };
   }
   let recebimentoCount = 0;
-  let listaRecebimentos: unknown[];
   try {
     const parsed: unknown = JSON.parse(built.json);
     const list = parseRecebimentosImportJsonRoot(parsed);
     if (list === null) {
       return { ok: false, error: 'Formato invalido: esperado lista de recebimentos no plano de importacao.' };
     }
-    listaRecebimentos = list;
-    recebimentoCount = listaRecebimentos.length;
+    recebimentoCount = list.length;
   } catch {
     return { ok: false, error: 'Falha ao analisar o plano de importacao.' };
   }
@@ -227,36 +223,7 @@ export async function previewImportacaoRecebimentosCsv(
       error: 'Nenhum recebimento encontrado no arquivo (verifique fornecedor, data e NF ou romaneio por linha).',
     };
   }
-  const nomesFornecedores: string[] = [];
-  for (const raw of listaRecebimentos) {
-    if (!raw || typeof raw !== 'object') continue;
-    const o = raw as Record<string, unknown>;
-    const f = String(o.fornecedor ?? o.fornecedorNome ?? '').trim();
-    if (f) nomesFornecedores.push(f);
-  }
-  const fornecedorErro = await validarNomesFornecedoresCadastradosAtivos(nomesFornecedores);
-  if (fornecedorErro) {
-    return { ok: false, error: fornecedorErro };
-  }
-
-  const codigosMateriais: string[] = [];
-  for (const raw of listaRecebimentos) {
-    if (!raw || typeof raw !== 'object') continue;
-    const o = raw as Record<string, unknown>;
-    const itens = Array.isArray(o.itens) ? o.itens : [];
-    for (const it of itens) {
-      if (!it || typeof it !== 'object') continue;
-      const row = it as Record<string, unknown>;
-      const c = extrairCodigoMaterialDeObjetoImport(row);
-      if (c) codigosMateriais.push(c);
-    }
-  }
-  const materialErro = await validarCodigosMateriaisAtivosNoCadastroParaRecebimento(codigosMateriais, 'import');
-  if (materialErro) {
-    return { ok: false, error: materialErro };
-  }
-
-  const parsed = await parseCsvToRecordsCooperative(text);
+  const parsed = parseCsvToRecords(text);
   if (!parsed || parsed.rows.length === 0) {
     return { ok: false, error: 'CSV sem linhas de dados.' };
   }

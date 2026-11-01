@@ -5,14 +5,18 @@ import {
   notificarReparacaoLocalStorage,
 } from '../../../lib/localStoragePreservacao';
 import { escapeCsvCellSemicolon, formatDecimalExcelPtBr } from '../../../lib/csv';
-import { invalidateIsoProSnapshotCache, SNAPSHOT_SALDO_SLICE_KEYS } from '../../../lib/isoProSnapshot';
-import { readSnapshotRemoteSliceOrFull } from '../../../lib/snapshotSliceRead';
+import { invalidateIsoProSnapshotCache } from '../../../lib/isoProSnapshot';
+import { carregarSaldoMapFromAgregadosNuvem } from '../../../lib/operacaoEscalaContagens';
+import { writeMateriaisSotOnCloud } from '../../../lib/materiaisTabelas';
+import { assertNoSilentSotFallback } from '../../../lib/sotWriteGuard';
 import { registerSnapshotDerivedCacheInvalidator } from '../../../lib/snapshotDerivedCache';
 import { mensagemSeSubstituirLocalPerderiaCadastros } from '../../../lib/localSnapshotWriteGuard';
 import { fetchAllPagesFromSupabase, SUPABASE_FETCH_PAGE_SIZE } from '../../../lib/fetchAllSupabasePages';
 import { listMateriaisPageFromCloud } from '../../../lib/materiaisListaPaginada';
-import { REMOTE_READ_PREFER_MS, shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
+import { shouldTryRemoteRead, withRemoteReadTimeout } from '../../../lib/dataReadPolicy';
 import { getSupabase, hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
+import { ensureIsoProDataSessionReadable } from '../../../lib/isoProJwtSession';
+import { fetchAllExportRpcPages } from '../../../lib/exportRpcPages';
 import { getErrorMessage } from '../../../lib/service-result';
 import { MSG_ERRO_LEITURA_NUVEM, traduzirErroOperacionalIsoPro } from '../../../lib/traduzirErroOperacionalIsoPro';
 import { findMaterialComCodigoDuplicado } from '../utils/materiaisCodigoDuplicado';
@@ -20,9 +24,8 @@ import { whenBusinessWriteBlockedResult } from '../../../lib/writePolicy';
 import {
   IMPORT_COOPERATIVE_MIN_CSV_ROWS,
   yieldCooperativeEveryRows,
-  yieldToMain,
 } from '../../../lib/yieldCooperativeImport';
-import { buildSaldoMap, codigoMaterialKey, type SaldoSnapshotPayload } from '../../estoque/saldoFromSnapshot';
+import { codigoMaterialKey } from '../../estoque/saldoFromSnapshot';
 import type { PaginatedResult, ServiceResult } from '../../../types/common.types';
 import { getCurrentUser } from '../../auth/services/auth.service';
 import { appendAuthAuditEvent } from '../../auth/services/authAudit.service';
@@ -319,6 +322,49 @@ function mapRemoteMaterial(row: RemoteMaterialRow): Material {
   };
 }
 
+/** Espelha o cadastro da tabela no localStorage + fatia snapshot via SoT (sem dual-write silencioso). */
+async function espelharCadastroNuvemParaLocalESnapshot(opts: {
+  upsert?: Material;
+  removedIds?: string[];
+  replaceAllFromRemote?: boolean;
+}): Promise<void> {
+  if (opts.replaceAllFromRemote) {
+    const items = await aplicarSaldoCalculadoNosMateriais(await listRemoteMaterials());
+    writeAll(items);
+    notificarReparacaoLocalStorage(materiaisStorageKey());
+    const sot = await writeMateriaisSotOnCloud({
+      baselineUpdatedAt: null,
+      replaceAll: items,
+    });
+    assertNoSilentSotFallback('materiais', sot.missing);
+    invalidateIsoProSnapshotCache();
+    return;
+  }
+
+  const items = readAll({ silenciarAvisoCorrupto: true });
+  let next = [...items];
+  if (opts.removedIds?.length) {
+    const rem = new Set(opts.removedIds.map(String));
+    next = next.filter((m) => !rem.has(String(m.id)));
+  }
+  if (opts.upsert) {
+    const u = opts.upsert;
+    const idx = next.findIndex((m) => String(m.id) === String(u.id));
+    if (idx >= 0) next[idx] = { ...next[idx], ...u };
+    else next.push(u);
+  }
+  writeAll(next);
+  notificarReparacaoLocalStorage(materiaisStorageKey());
+
+  const sot = await writeMateriaisSotOnCloud({
+    baselineUpdatedAt: null,
+    upsert: opts.upsert ?? null,
+    deleteIds: opts.removedIds ?? null,
+  });
+  assertNoSilentSotFallback('materiais', sot.missing);
+  invalidateIsoProSnapshotCache();
+}
+
 async function listRemoteMaterials(): Promise<Material[]> {
   const supabase = getSupabase();
   if (!supabase) {
@@ -426,10 +472,11 @@ async function fetchMaxMaterialIdRemote(): Promise<number> {
   return Number(data?.[0]?.id ?? 0);
 }
 
-/** Insercoes em massa na tabela remota (menos round-trips que um insert por linha). */
-const IMPORT_MATERIAIS_CHUNK_INSERT = 400;
-/** Atualizacoes em paralelo controlado (evita saturar rede / limites). */
-const IMPORT_MATERIAIS_PARALLEL_UPDATES = 20;
+/**
+ * Gravacao na nuvem num unico RPC (ou poucos, se o lote for enorme).
+ * Nao escala com o numero de linhas: 50 ou 20 mil passam pelo mesmo caminho.
+ */
+const IMPORT_MATERIAIS_SOT_CHUNK = 2000;
 
 type PreparedMateriaisLinha = {
   numeroLinha: number;
@@ -492,9 +539,100 @@ async function loadMateriaisBase(): Promise<Material[]> {
   }
 }
 
+const materiaisPorCodigoInflight = new Map<string, Promise<Material[]>>();
+
+function chaveCodigosMateriais(codigos: string[]): string {
+  return [...new Set(codigos.map((c) => c.trim().toLowerCase()).filter(Boolean))].sort().join('\u0001');
+}
+
+/** Uma consulta indexada por codigo. Evita dezenas de filtros ilike na importacao. */
+async function carregarMateriaisPorCodigosNaNuvem(
+  supabase: NonNullable<ReturnType<typeof getSupabase>>,
+  tenantId: string,
+  codigos: string[],
+): Promise<Material[]> {
+  const { data, error } = await supabase.rpc('iso_pro_materiais_por_codigos', {
+    p_tenant_id: tenantId,
+    p_codigos: codigos,
+  });
+  if (error) throw new Error(error.message);
+  const rows = Array.isArray(data) ? data : [];
+  return rows.map((row) => mapRemoteMaterial(row as RemoteMaterialRow));
+}
+
 /**
- * Pre-aquece o indice O(1) do leitor a partir da copia local.
- * NUNCA baixa o catalogo completo aqui (listRemoteMaterials ~40s em obra grande).
+ * Carrega so os materiais pedidos (import/salvar recebimento) — evita listRemoteMaterials (~40s / 3k+).
+ * Ordem: cache RAM → indice bipe → localStorage → query indexada por codigo na nuvem.
+ */
+async function loadMateriaisPorCodigosParaRecebimento(codigos: string[]): Promise<Material[]> {
+  const unique = [...new Set(codigos.map((c) => c.trim()).filter(Boolean))];
+  if (!unique.length) return [];
+
+  const key = chaveCodigosMateriais(unique);
+  const existing = materiaisPorCodigoInflight.get(key);
+  if (existing) return existing;
+
+  const work = (async () => {
+    const byKey = new Map<string, Material>();
+    const addAll = (list: Material[]) => {
+      for (const m of list) {
+        const k = m.codigo.trim().toLowerCase();
+        if (k && !byKey.has(k)) byKey.set(k, m);
+      }
+    };
+    const missing = () => unique.filter((c) => !byKey.has(c.toLowerCase()));
+
+    if (materiaisBaseCache?.length) addAll(materiaisBaseCache);
+    if (missing().length === 0) {
+      return unique.map((c) => byKey.get(c.toLowerCase())!).filter(Boolean);
+    }
+
+    for (const c of missing()) {
+      const hit = lookupMaterialNoIndiceLeitura(c);
+      if (hit) byKey.set(c.toLowerCase(), hit);
+    }
+    if (missing().length === 0) {
+      return unique.map((c) => byKey.get(c.toLowerCase())!).filter(Boolean);
+    }
+
+    addAll(readAll({ silenciarAvisoCorrupto: true }));
+    if (missing().length === 0) {
+      return unique.map((c) => byKey.get(c.toLowerCase())!).filter(Boolean);
+    }
+
+    if (shouldUseCloudMaterials() && hasSupabaseConfig()) {
+      const supabase = getSupabase();
+      if (supabase) {
+        const tenantId = getActiveTenantId();
+        const need = missing();
+        const porCodigo = await carregarMateriaisPorCodigosNaNuvem(supabase, tenantId, need);
+        addAll(porCodigo);
+        if (!materiaisLeituraIndex) {
+          rebuildMateriaisLeituraIndex(porCodigo);
+        } else {
+          for (const m of porCodigo) {
+            const codigoKey = m.codigo.trim().toLowerCase();
+            if (codigoKey) materiaisLeituraIndex.porCodigo.set(codigoKey, m);
+          }
+        }
+      }
+    }
+
+    return unique.map((c) => byKey.get(c.toLowerCase())!).filter(Boolean);
+  })();
+
+  materiaisPorCodigoInflight.set(key, work);
+  try {
+    return await work;
+  } finally {
+    materiaisPorCodigoInflight.delete(key);
+  }
+}
+
+/**
+ * Pre-aquece o indice O(1) do leitor.
+ * Com materiais na nuvem: so usa cache RAM (preenchido pela nuvem) — nunca localStorage como autoridade.
+ * Sem nuvem: usa copia local. NUNCA baixa o catalogo completo aqui (listRemoteMaterials ~40s).
  * Miss no bipe usa query indexada por codigo/barras.
  */
 export async function aquecerIndiceLeituraMateriais(): Promise<void> {
@@ -504,9 +642,12 @@ export async function aquecerIndiceLeituraMateriais(): Promise<void> {
     return;
   }
   materiaisLeituraWarmPromise = (async () => {
+    if (shouldUseCloudMaterials()) {
+      if (materiaisBaseCache?.length) rebuildMateriaisLeituraIndex(materiaisBaseCache);
+      return;
+    }
     const local = readAll({ silenciarAvisoCorrupto: true });
     if (local.length > 0) rebuildMateriaisLeituraIndex(local);
-    // Se ja ha cache em memoria do cadastro, indexa sem rede.
     if (materiaisBaseCache?.length) rebuildMateriaisLeituraIndex(materiaisBaseCache);
   })().finally(() => {
     materiaisLeituraWarmPromise = null;
@@ -515,17 +656,15 @@ export async function aquecerIndiceLeituraMateriais(): Promise<void> {
 }
 
 /**
- * Saldo operacional a partir do snapshot `iso_pro_snapshot` (recebimentos, documentos, ajustes).
- * Importante: corre sempre que ha Supabase — nao exige «materiais na nuvem»; o cadastro pode ser local
- * e o saldo ainda vem do movimento consolidado na nuvem (mesma regra do atendimento).
+ * Saldo operacional via agregados SQL (100k-safe) — nao baixa documentos/recebimentos.
  */
 async function aplicarSaldoCalculadoNosMateriais(materiais: Material[]): Promise<Material[]> {
   if (!shouldTryRemoteRead()) {
     return materiais;
   }
   try {
-    const payload = await readSnapshotRemoteSliceOrFull<SaldoSnapshotPayload>(SNAPSHOT_SALDO_SLICE_KEYS);
-    const saldoMap = buildSaldoMap(payload);
+    const saldoMap = await carregarSaldoMapFromAgregadosNuvem();
+    if (!saldoMap) return materiais;
     return materiais.map((m) => ({
       ...m,
       saldoAtual: saldoMap.get(codigoMaterialKey(m.codigo)) ?? 0,
@@ -604,7 +743,8 @@ export async function sincronizarMateriaisNuvemParaArmazenamentoLocal(
 
 /**
  * Resolve material pelo codigo interno ou codigo de barras.
- * Caminho enterprise: indice Map O(1) em memoria → local → query indexada na nuvem.
+ * Com materiais na nuvem: indice RAM → query indexada Supabase → localStorage so se a nuvem falhar.
+ * Sem nuvem: indice RAM → localStorage (comportamento legado).
  * Nunca percorre O(n) a lista completa no bipe quando o indice esta aquecido.
  */
 export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<ServiceResult<Material | null>> {
@@ -617,7 +757,7 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
   const indexed = lookupMaterialNoIndiceLeitura(q);
   if (indexed) return { success: true, data: indexed };
 
-  const matchLocal = (items: Material[]): Material | null => {
+  const matchInList = (items: Material[]): Material | null => {
     for (const m of items) {
       if (!m.ativo) continue;
       if (m.codigo.trim().toLowerCase() === qLower) return m;
@@ -632,16 +772,17 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
     return null;
   };
 
-  // 2) Copia local + monta indice para os proximos bipes.
-  const localItems = readAll({ silenciarAvisoCorrupto: true });
-  if (localItems.length > 0) {
+  const tryLocalFallback = (): Material | null => {
+    const localItems = readAll({ silenciarAvisoCorrupto: true });
+    if (localItems.length === 0) return null;
     rebuildMateriaisLeituraIndex(localItems);
-    const localHit = lookupMaterialNoIndiceLeitura(q) ?? matchLocal(localItems);
-    if (localHit) return { success: true, data: localHit };
-  }
+    return lookupMaterialNoIndiceLeitura(q) ?? matchInList(localItems);
+  };
 
-  // 3) Materiais na nuvem: 1–2 queries indexadas (nao lista a tabela inteira).
-  if (shouldUseCloudMaterials() && hasSupabaseConfig()) {
+  const cloudOn = shouldUseCloudMaterials() && hasSupabaseConfig();
+
+  // 2) Materiais na nuvem: query indexada (nao lista a tabela inteira; nao usa local antes da nuvem).
+  if (cloudOn) {
     try {
       const supabase = getSupabase();
       if (supabase) {
@@ -666,7 +807,7 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
           rows = (byBar ?? []) as RemoteMaterialRow[];
         }
         const mapped = rows.map(mapRemoteMaterial);
-        const hit = matchLocal(mapped);
+        const hit = matchInList(mapped);
         if (hit) {
           if (!materiaisLeituraIndex) {
             rebuildMateriaisLeituraIndex(mapped);
@@ -678,8 +819,17 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
           }
           return { success: true, data: hit };
         }
+        return { success: true, data: null };
       }
     } catch (error) {
+      const localHit = tryLocalFallback();
+      if (localHit) {
+        return {
+          success: true,
+          data: localHit,
+          meta: { fallbackLocalPorFalhaNuvem: true },
+        };
+      }
       return {
         success: false,
         error: traduzirErroOperacionalIsoPro(getErrorMessage(error, MSG_ERRO_LEITURA_NUVEM)),
@@ -687,14 +837,20 @@ export async function buscarMaterialPorLeituraCodigo(scan: string): Promise<Serv
     }
   }
 
-  // 4) Sem hit: nao dispara listRemoteMaterials no bipe (pode levar 40s).
-  //    Devolve null; o operador pode abrir Materiais para sincronizar o cadastro.
+  // 3) Sem materiais na nuvem: copia local + indice para proximos bipes.
+  const localHit = tryLocalFallback();
+  if (localHit) return { success: true, data: localHit };
+
   return { success: true, data: null };
 }
 
 /** Codigo do material (trim + lower) -> peso unitario (kg) no cadastro. Usado em recebimentos para preencher peso quando a linha esta zerada. */
-export async function construirIndicePesoPorCodigoMaterial(): Promise<Map<string, number>> {
-  const base = await loadMateriaisBase();
+export async function construirIndicePesoPorCodigoMaterial(
+  codigos?: string[],
+): Promise<Map<string, number>> {
+  const base = codigos?.length
+    ? await loadMateriaisPorCodigosParaRecebimento(codigos)
+    : await loadMateriaisBase();
   const map = new Map<string, number>();
   for (const m of base) {
     const key = m.codigo.trim().toLowerCase();
@@ -707,10 +863,12 @@ export async function construirIndicePesoPorCodigoMaterial(): Promise<Map<string
 export type MaterialDisciplinaUnidadePorCodigo = { disciplina: string; unidade: string };
 
 /** Codigo do material (trim + lower) -> disciplina e unidade no cadastro. Usado em recebimentos para preencher linhas importadas sem esses campos. */
-export async function construirIndiceDisciplinaUnidadePorCodigoMaterial(): Promise<
-  Map<string, MaterialDisciplinaUnidadePorCodigo>
-> {
-  const base = await loadMateriaisBase();
+export async function construirIndiceDisciplinaUnidadePorCodigoMaterial(
+  codigos?: string[],
+): Promise<Map<string, MaterialDisciplinaUnidadePorCodigo>> {
+  const base = codigos?.length
+    ? await loadMateriaisPorCodigosParaRecebimento(codigos)
+    : await loadMateriaisBase();
   const map = new Map<string, MaterialDisciplinaUnidadePorCodigo>();
   for (const m of base) {
     const key = m.codigo.trim().toLowerCase();
@@ -762,7 +920,9 @@ export function listarMateriaisLocalSync(
 export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceResult<PaginatedResult<MaterialListItem>>> {
   const localPage = listarMateriaisLocalSync(filtro);
 
-  if (!shouldTryRemoteRead()) {
+  // Desktop EXE: com «Materiais em nuvem» activo, a lista tem de vir da tabela (igual à web).
+  const podeLerNuvem = shouldTryRemoteRead() || shouldUseCloudMaterials();
+  if (!podeLerNuvem) {
     return {
       success: true,
       data: {
@@ -776,27 +936,18 @@ export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceRe
   }
 
   if (shouldUseCloudMaterials()) {
-    const cloudPromise = withRemoteReadTimeout(
-      () =>
-        listMateriaisPageFromCloud({
-          busca: filtro.busca,
-          offset: (filtro.page - 1) * filtro.pageSize,
-          limit: filtro.pageSize,
-          disciplina: filtro.disciplina,
-          ativo: filtro.ativo,
-        }),
-      MATERIAIS_NUVEM_READ_TIMEOUT_MS,
-    );
-
-    const raced = await Promise.race([
-      cloudPromise.then((page) => ({ kind: 'cloud' as const, page })),
-      new Promise<{ kind: 'prefer' }>((resolve) => {
-        setTimeout(() => resolve({ kind: 'prefer' }), REMOTE_READ_PREFER_MS);
-      }),
-    ]);
-
-    if (raced.kind === 'cloud') {
-      const page = raced.page;
+    try {
+      const page = await withRemoteReadTimeout(
+        () =>
+          listMateriaisPageFromCloud({
+            busca: filtro.busca,
+            offset: (filtro.page - 1) * filtro.pageSize,
+            limit: filtro.pageSize,
+            disciplina: filtro.disciplina,
+            ativo: filtro.ativo,
+          }),
+        MATERIAIS_NUVEM_READ_TIMEOUT_MS,
+      );
       if (page.source === 'tables' && !page.error) {
         const mapped: Material[] = page.materiais.map((row) => ({
           id: String(row.id ?? ''),
@@ -812,65 +963,38 @@ export async function listarMateriais(filtro: MaterialFiltro): Promise<ServiceRe
           ativo: row.ativo !== false,
           observacao: String(row.observacao ?? ''),
         }));
-        const withSaldo = await aplicarSaldoCalculadoNosMateriais(mapped);
+        const saldoPromise = aplicarSaldoCalculadoNosMateriais(mapped);
+        const withSaldo = await Promise.race([
+          saldoPromise,
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 1_500);
+          }),
+        ]);
         return {
           success: true,
           data: {
-            items: withSaldo.map(toListItem),
+            items: (withSaldo ?? mapped).map(toListItem),
             total: page.total,
             page: filtro.page,
             pageSize: filtro.pageSize,
           },
-          meta: { source: 'supabase' },
+          meta: { source: 'supabase', staleWhileRevalidate: withSaldo == null },
         };
       }
-    } else if (localPage.total > 10) {
-      void cloudPromise.catch(() => undefined);
-      return {
-        success: true,
-        data: {
-          items: localPage.items,
-          total: localPage.total,
-          page: filtro.page,
-          pageSize: filtro.pageSize,
-        },
-        meta: { source: 'local', staleWhileRevalidate: true },
-      };
-    } else {
-      // Cache local parece seed/demo (≤10) — nao mascarar a nuvem; espera a RPC.
-      try {
-        const page = await cloudPromise;
-        if (page.source === 'tables' && !page.error && page.total > 0) {
-          const mapped: Material[] = page.materiais.map((row) => ({
-            id: String(row.id ?? ''),
-            codigo: String(row.codigo ?? ''),
-            codigoBarras: String(row.codigoBarras ?? ''),
-            descricao: String(row.descricao ?? ''),
-            diametro: String(row.diametro ?? ''),
-            disciplina: String(row.disciplina ?? ''),
-            unidade: String(row.unidade ?? 'UN'),
-            peso: Number(row.peso) || 0,
-            estoqueMinimo: Number(row.estoqueMinimo) || 0,
-            saldoAtual: 0,
-            ativo: row.ativo !== false,
-            observacao: String(row.observacao ?? ''),
-          }));
-          const withSaldo = await aplicarSaldoCalculadoNosMateriais(mapped);
-          return {
-            success: true,
-            data: {
-              items: withSaldo.map(toListItem),
-              total: page.total,
-              page: filtro.page,
-              pageSize: filtro.pageSize,
-            },
-            meta: { source: 'supabase' },
-          };
-        }
-      } catch {
-        /* cai no fallback abaixo */
-      }
+    } catch {
+      /* copia local so se a nuvem falhar — sem rotulo de nuvem */
     }
+
+    return {
+      success: true,
+      data: {
+        items: localPage.items,
+        total: localPage.total,
+        page: filtro.page,
+        pageSize: filtro.pageSize,
+      },
+      meta: { source: 'local' },
+    };
   }
 
   const base = await aplicarSaldoCalculadoNosMateriais(await loadMateriaisBase());
@@ -931,47 +1055,47 @@ export async function salvarMaterial(
     return { success: false, error: 'Ja existe um material com esse codigo.' };
   }
 
+  const before = currentId ? base.find((m) => String(m.id) === String(currentId)) : undefined;
+
   if (shouldUseCloudMaterials()) {
     try {
-      const supabase = getSupabase();
-      if (!supabase) throw new Error('Supabase nao configurado.');
-
       const normalizedPayload = {
         codigo: payload.codigo.trim(),
-        codigo_barras: codigoBarras,
+        codigoBarras,
         descricao: payload.descricao.trim(),
         diametro: payload.diametro.trim(),
         disciplina: payload.disciplina.trim(),
         unidade: payload.unidade.trim(),
         peso: payload.peso,
-        estoque_minimo: payload.estoqueMinimo,
+        estoqueMinimo: payload.estoqueMinimo,
         ativo: payload.ativo,
+        observacao: payload.observacao?.trim?.() ?? '',
       };
 
-      if (currentId) {
-        const { data, error } = await supabase
-          .from('materiais')
-          .update(normalizedPayload)
-          .eq('id', Number(currentId))
-          .eq('tenant_id', getActiveTenantId())
-          .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
-          .single();
+      const id = currentId ? String(currentId) : String(await getNextMaterialId());
+      const existing = currentId ? base.find((m) => String(m.id) === String(currentId)) : undefined;
+      const mapped: Material = {
+        id,
+        saldoAtual: existing?.saldoAtual ?? 0,
+        ...normalizedPayload,
+      };
 
-        if (error) return { success: false, error: error.message };
-        invalidateMateriaisBaseCache();
-        return { success: true, data: mapRemoteMaterial(data as RemoteMaterialRow) };
-      }
-
-      const nextId = await getNextMaterialId();
-      const { data, error } = await supabase
-        .from('materiais')
-        .insert({ id: nextId, tenant_id: getActiveTenantId(), ...normalizedPayload })
-        .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
-        .single();
-
-      if (error) return { success: false, error: error.message };
+      const sot = await writeMateriaisSotOnCloud({
+        baselineUpdatedAt: null,
+        upsert: [mapped],
+      });
+      assertNoSilentSotFallback('materiais', sot.missing);
+      invalidateIsoProSnapshotCache();
       invalidateMateriaisBaseCache();
-      return { success: true, data: mapRemoteMaterial(data as RemoteMaterialRow) };
+
+      const items = readAll({ silenciarAvisoCorrupto: true });
+      const idx = items.findIndex((m) => String(m.id) === String(id));
+      if (idx >= 0) items[idx] = { ...items[idx], ...mapped };
+      else items.push(mapped);
+      writeAll(items);
+      notificarReparacaoLocalStorage(materiaisStorageKey());
+      auditarMaterialSalvo(before, mapped);
+      return { success: true, data: mapped };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao salvar no Supabase.' };
     }
@@ -995,6 +1119,7 @@ export async function salvarMaterial(
     const bloqueioMatEdit = bloqueioSubstituicaoTotalMateriaisLocal(items.length);
     if (bloqueioMatEdit) return { success: false, error: bloqueioMatEdit };
     writeAll(items);
+    auditarMaterialSalvo(before, items[index]);
     return { success: true, data: items[index] };
   }
 
@@ -1011,6 +1136,7 @@ export async function salvarMaterial(
   const bloqueioMatNovo = bloqueioSubstituicaoTotalMateriaisLocal(items.length);
   if (bloqueioMatNovo) return { success: false, error: bloqueioMatNovo };
   writeAll(items);
+  auditarMaterialSalvo(undefined, created);
 
   return { success: true, data: created };
 }
@@ -1034,7 +1160,7 @@ export async function validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
         : 'Informe ao menos um material com codigo valido.';
   }
 
-  const base = await loadMateriaisBase();
+  const base = await loadMateriaisPorCodigosParaRecebimento(unique);
   const porCodigo = new Map<string, Material>();
   for (const m of base) {
     const k = m.codigo.trim().toLowerCase();
@@ -1070,28 +1196,24 @@ export async function validarCodigosMateriaisAtivosNoCadastroParaRecebimento(
 export async function toggleMaterialStatus(id: string, ativo: boolean): Promise<ServiceResult<Material>> {
   if (shouldUseCloudMaterials()) {
     try {
-      const supabase = getSupabase();
-      if (!supabase) throw new Error('Supabase nao configurado.');
-
-      const { data, error } = await supabase
-        .from('materiais')
-        .update({ ativo })
-        .eq('id', Number(id))
-        .eq('tenant_id', getActiveTenantId())
-        .select('id,codigo,codigo_barras,descricao,diametro,disciplina,unidade,peso,estoque_minimo,ativo')
-        .single();
-
-      if (error) return { success: false, error: error.message };
-
+      const base = await loadMateriaisBase();
+      const existing = base.find((m) => String(m.id) === String(id));
+      if (!existing) return { success: false, error: 'Material nao encontrado.' };
+      const mapped: Material = { ...existing, ativo };
+      const sot = await writeMateriaisSotOnCloud({
+        baselineUpdatedAt: null,
+        upsert: [mapped],
+      });
+      assertNoSilentSotFallback('materiais', sot.missing);
+      invalidateIsoProSnapshotCache();
       invalidateMateriaisBaseCache();
-      const row = data as RemoteMaterialRow & { ativo?: boolean | null };
-      return {
-        success: true,
-        data: {
-          ...mapRemoteMaterial(row),
-          ativo: Boolean(row.ativo),
-        },
-      };
+      const items = readAll({ silenciarAvisoCorrupto: true });
+      const idx = items.findIndex((item) => String(item.id) === String(id));
+      if (idx >= 0) items[idx] = { ...items[idx], ativo };
+      else items.push(mapped);
+      writeAll(items);
+      notificarReparacaoLocalStorage(materiaisStorageKey());
+      return { success: true, data: mapped };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Falha ao atualizar material.' };
     }
@@ -1170,6 +1292,49 @@ function mensagemErroExclusaoMateriais(message: string): string {
   return traduzirErroOperacionalIsoPro(message);
 }
 
+function resumoAuditoriaMaterial(
+  m: Pick<
+    Material,
+    'id' | 'codigo' | 'codigoBarras' | 'descricao' | 'disciplina' | 'unidade' | 'estoqueMinimo' | 'ativo' | 'saldoAtual'
+  >,
+) {
+  return {
+    id: m.id,
+    codigo: m.codigo,
+    codigoBarras: m.codigoBarras,
+    descricao: m.descricao,
+    disciplina: m.disciplina,
+    unidade: m.unidade,
+    estoqueMinimo: m.estoqueMinimo,
+    ativo: m.ativo,
+    saldoAtual: m.saldoAtual,
+  };
+}
+
+function auditarMaterialSalvo(before: Material | undefined, after: Material) {
+  const actorLogin = getCurrentUser()?.login?.trim() || 'desconhecido';
+  if (before) {
+    appendAuthAuditEvent({
+      type: 'material_editado',
+      actorLogin,
+      detail: `Material editado ${after.codigo} (${after.descricao})`,
+      entityType: 'material',
+      entityId: after.id,
+      before: resumoAuditoriaMaterial(before),
+      after: resumoAuditoriaMaterial(after),
+    });
+    return;
+  }
+  appendAuthAuditEvent({
+    type: 'material_criado',
+    actorLogin,
+    detail: `Material criado ${after.codigo} (${after.descricao})`,
+    entityType: 'material',
+    entityId: after.id,
+    after: resumoAuditoriaMaterial(after),
+  });
+}
+
 /** Remove linhas do cadastro (Supabase ou local). Requer confirmacao de senha na UI; apenas perfil com permissao administrar. */
 export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<ServiceResult<{ removidos: number }>> {
   const unique = [...new Set(ids)].filter(Boolean);
@@ -1211,16 +1376,28 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
         };
       }
 
+      const amostraAntes = readAll({ silenciarAvisoCorrupto: true })
+        .filter((m) => unique.includes(String(m.id)))
+        .slice(0, 40)
+        .map((m) => ({ id: m.id, codigo: m.codigo, descricao: m.descricao }));
+
       const { error } = await supabase.from('materiais').delete().eq('tenant_id', getActiveTenantId()).in('id', numericIds);
       if (error) {
         return { success: false, error: mensagemErroExclusaoMateriais(error.message) };
       }
       invalidateMateriaisBaseCache();
-      invalidateIsoProSnapshotCache();
+      await espelharCadastroNuvemParaLocalESnapshot({
+        removedIds: numericIds.map(String),
+      });
       appendAuthAuditEvent({
         type: 'materiais_excluidos_definitivamente',
         actorLogin,
         detail: `Excluidos ${numericIds.length} material(is) na nuvem. IDs: ${numericIds.slice(0, 80).join(',')}${numericIds.length > 80 ? '...' : ''}`,
+        entityType: 'material',
+        before: {
+          ids: numericIds.slice(0, 80),
+          amostra: amostraAntes,
+        },
       });
       return { success: true, data: { removidos: numericIds.length } };
     } catch (error) {
@@ -1233,6 +1410,7 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
 
   const all = readAll();
   const idSet = new Set(unique);
+  const removidosRows = all.filter((m) => idSet.has(m.id));
   const next = all.filter((m) => !idSet.has(m.id));
   const removidos = all.length - next.length;
   if (!removidos) {
@@ -1246,6 +1424,11 @@ export async function excluirMateriaisDefinitivamente(ids: string[]): Promise<Se
     type: 'materiais_excluidos_definitivamente',
     actorLogin,
     detail: `Excluidos ${removidos} material(is) localmente. IDs: ${unique.slice(0, 80).join(',')}${unique.length > 80 ? '...' : ''}`,
+    entityType: 'material',
+    before: {
+      ids: unique.slice(0, 80),
+      amostra: removidosRows.slice(0, 40).map((m) => ({ id: m.id, codigo: m.codigo, descricao: m.descricao })),
+    },
   });
   return { success: true, data: { removidos } };
 }
@@ -1274,9 +1457,18 @@ export function mergeDominiosComValoresEmUso(dominio: string[], emUso: string[])
   return [...porChave.values()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
+/**
+ * Filtros da lista. Nao chama loadMateriaisBase: isso baixava o catalogo inteiro
+ * (~40s em 6 mil materiais) e segurava a faixa amarela ate o fim.
+ */
+function materiaisParaDominiosDaLista(): Material[] {
+  if (materiaisBaseCache?.length) return materiaisBaseCache;
+  return readAll({ silenciarAvisoCorrupto: true });
+}
+
 /** Disciplinas: lista configurada + valores ja usados em materiais (filtros e formulario). */
 export async function listarDisciplinas(): Promise<string[]> {
-  const items = await loadMateriaisBase();
+  const items = materiaisParaDominiosDaLista();
   const emUso = items.map((item) => item.disciplina);
   const dom = readMateriaisDominiosListas();
   return mergeDominiosComValoresEmUso(dom.disciplinas, emUso);
@@ -1284,7 +1476,7 @@ export async function listarDisciplinas(): Promise<string[]> {
 
 /** Unidades: lista configurada + valores ja usados em materiais. */
 export async function listarUnidadesCadastro(): Promise<string[]> {
-  const items = await loadMateriaisBase();
+  const items = materiaisParaDominiosDaLista();
   const emUso = items.map((m) => m.unidade);
   const dom = readMateriaisDominiosListas();
   return mergeDominiosComValoresEmUso(dom.unidades, emUso);
@@ -1299,6 +1491,7 @@ export function salvarDominiosDisciplinasMateriais(disciplinas: string[]): void 
   if (whenBusinessWriteBlockedResult<void>()) return;
   const cur = readMateriaisDominiosListas();
   writeMateriaisDominiosListas({ ...cur, disciplinas });
+  void sincronizarDominiosMateriaisParaNuvem();
 }
 
 export function salvarDominiosUnidadesMateriais(
@@ -1312,6 +1505,19 @@ export function salvarDominiosUnidadesMateriais(
     unidades,
     unidadeDescricoes: unidadeDescricoes ?? cur.unidadeDescricoes,
   });
+  void sincronizarDominiosMateriaisParaNuvem();
+}
+
+async function sincronizarDominiosMateriaisParaNuvem(): Promise<void> {
+  try {
+    const { readConfiguracoes } = await import('../../configuracoes/services/configuracoes.service');
+    const { sincronizarConfigAlertaEstoqueParaNuvem } = await import(
+      '../../configuracoes/services/syncAlertaEstoqueConfigNuvem.service'
+    );
+    await sincronizarConfigAlertaEstoqueParaNuvem(readConfiguracoes());
+  } catch {
+    /* sync best-effort */
+  }
 }
 
 export async function buscarMaterialPorId(id: string): Promise<ServiceResult<Material>> {
@@ -1346,6 +1552,8 @@ export type MateriaisImportacaoResumo = {
   /** Linhas ignoradas por codigo repetido no mesmo arquivo (alem de erros de validacao). */
   ignoradosPorDuplicidadeNoArquivo: number;
   detalhes: string[];
+  mensagem?: string;
+  ficheiroOrigem?: string;
 };
 
 type ExportacaoMateriaisOpcoes = {
@@ -1395,13 +1603,35 @@ export function montarModeloCsvImportacaoMateriais(): { csv: string; fileName: s
     'disciplina',
     'unidade',
     'peso',
-    'estoque_minimo',
+    'estoque_minimo_percentual',
     'ativo',
     'observacao',
   ];
   const rows: string[][] = [
-    ['TB-0001', '', 'Tubo inox 2 pol', '2"', 'Tubulacao', 'UN', '2,5', '5', 'sim', 'Exemplo linha 1'],
-    ['EL-0102', '', 'Cabo eletrico 10mm', '', 'Eletrica', 'M', '0,15', '0', 'sim', 'Exemplo linha 2'],
+    [
+      'TB-0001',
+      '',
+      'Tubo inox 2 pol',
+      '2"',
+      'Tubulacao',
+      'UN',
+      '2,5',
+      '20',
+      'sim',
+      '20 = alerta se saldo <= 20% do planejado',
+    ],
+    [
+      'EL-0102',
+      '',
+      'Cabo eletrico 10mm',
+      '',
+      'Eletrica',
+      'M',
+      '0,15',
+      '0',
+      'sim',
+      '0 = alerta desligado (nao e quantidade)',
+    ],
   ];
   const lines = [
     header.join(sep),
@@ -1414,17 +1644,17 @@ export function montarModeloCsvImportacaoMateriais(): { csv: string; fileName: s
 export async function montarExportacaoMateriaisCsv(
   opcoes?: ExportacaoMateriaisOpcoes,
 ): Promise<ServiceResult<{ csv: string; fileName: string }>> {
-  const base = await aplicarSaldoCalculadoNosMateriais(await loadMateriaisBase());
-  const filtroLista =
-    opcoes?.filtroLista ??
-    ({
-      busca: '',
-      disciplina: '',
-      ativo: 'todos',
-      page: 1,
-      pageSize: 999999,
-    } as MaterialFiltro);
-  const items = aplicarFiltrosMateriais(base, filtroLista);
+  type ExportRow = {
+    codigo?: string;
+    codigo_barras?: string;
+    descricao?: string;
+    diametro?: string;
+    disciplina?: string;
+    unidade?: string;
+    peso?: number;
+    estoque_minimo?: number;
+    ativo?: boolean;
+  };
 
   const header = [
     'codigo',
@@ -1441,6 +1671,81 @@ export async function montarExportacaoMateriaisCsv(
   ];
 
   const sep = ';';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const sufixo = exportacaoMateriaisUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
+  const fileName = `iso-pro-materiais-${stamp}${sufixo}.csv`;
+
+  const filtroLista =
+    opcoes?.filtroLista ??
+    ({
+      busca: '',
+      disciplina: '',
+      ativo: 'todos',
+      page: 1,
+      pageSize: 999999,
+    } as MaterialFiltro);
+
+  if (hasSupabaseConfig()) {
+    try {
+      await ensureIsoProDataSessionReadable();
+      const supabase = getSupabase();
+      if (supabase) {
+        const [cloud, saldoMap] = await Promise.all([
+          fetchAllExportRpcPages<ExportRow>({
+            supabase,
+            rpcName: 'iso_pro_export_materiais_page',
+            tenantId: getActiveTenantId(),
+          }),
+          carregarSaldoMapFromAgregadosNuvem().catch(() => null),
+        ]);
+        if (!cloud.missingRpc && !cloud.error) {
+          const asMaterials: Material[] = cloud.rows.map((r, idx) => ({
+            id: `export-${idx}`,
+            codigo: String(r.codigo ?? ''),
+            codigoBarras: String(r.codigo_barras ?? ''),
+            descricao: String(r.descricao ?? ''),
+            diametro: String(r.diametro ?? ''),
+            disciplina: String(r.disciplina ?? ''),
+            unidade: String(r.unidade ?? 'UN'),
+            peso: Number(r.peso) || 0,
+            estoqueMinimo: Number(r.estoque_minimo) || 0,
+            saldoAtual: saldoMap?.get(codigoMaterialKey(String(r.codigo ?? ''))) ?? 0,
+            ativo: r.ativo !== false,
+            observacao: '',
+          }));
+          const items = aplicarFiltrosMateriais(asMaterials, filtroLista);
+          const linhas = [
+            header.join(sep),
+            ...items.map((m) =>
+              [
+                m.codigo,
+                m.codigoBarras,
+                m.descricao,
+                m.diametro,
+                m.disciplina,
+                m.unidade,
+                formatDecimalExcelPtBr(Number(m.peso)),
+                formatDecimalExcelPtBr(Number(m.estoqueMinimo)),
+                formatDecimalExcelPtBr(Number(m.saldoAtual)),
+                m.ativo ? 'sim' : 'nao',
+                m.observacao,
+              ]
+                .map((c) => escapeCsvCellSemicolon(String(c)))
+                .join(sep),
+            ),
+          ];
+          const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
+          return { success: true, data: { csv, fileName } };
+        }
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
+  const base = await aplicarSaldoCalculadoNosMateriais(await loadMateriaisBase());
+  const items = aplicarFiltrosMateriais(base, filtroLista);
+
   const linhas = [
     header.join(sep),
     ...items.map((m) =>
@@ -1463,15 +1768,14 @@ export async function montarExportacaoMateriaisCsv(
   ];
 
   const csv = `\uFEFF${linhas.join('\r\n')}\r\n`;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const sufixo = exportacaoMateriaisUsaFiltroRestrito(opcoes?.filtroLista) ? '-filtrado' : '';
-  const fileName = `iso-pro-materiais-${stamp}${sufixo}.csv`;
   return { success: true, data: { csv, fileName } };
 }
 
 export type ImportarMateriaisCsvOpcoes = {
   /** Login do usuario para auditoria (quem importou). */
   actorLogin?: string;
+  /** Texto curto para a janela, lote a lote. */
+  onProgress?: (mensagem: string) => void;
 };
 
 /** Leitura previa do CSV (contagem de linhas de dados) antes de confirmar importacao na UI. */
@@ -1596,9 +1900,9 @@ type UpdateMateriaisNuvemOp = {
 async function importarMateriaisCsvNuvemEmLotes(
   prepared: PreparedMateriaisLinha[],
   amostrasAuditoria: { codigo: string; tipo: 'criado' | 'atualizado'; antes: string; depois: string }[],
+  onProgress?: (mensagem: string) => void,
 ): Promise<ServiceResult<MateriaisImportacaoResumo>> {
-  const supabase = getSupabase();
-  if (!supabase) {
+  if (!getSupabase()) {
     return { success: false, error: 'Supabase nao configurado.' };
   }
 
@@ -1607,6 +1911,7 @@ async function importarMateriaisCsvNuvemEmLotes(
   let atualizados = 0;
   let ignorados = 0;
 
+  onProgress?.('A preparar o cadastro…');
   const base = await loadMateriaisBase();
   const working = base.map((m) => ({ ...m }));
   const byCodigo = new Map(working.map((m) => [m.codigo.toLowerCase(), m]));
@@ -1614,7 +1919,6 @@ async function importarMateriaisCsvNuvemEmLotes(
 
   const inserts: InsertMateriaisNuvemOp[] = [];
   const updates: UpdateMateriaisNuvemOp[] = [];
-  const cooperativeNuvem = prepared.length >= IMPORT_COOPERATIVE_MIN_CSV_ROWS;
 
   for (const p of prepared) {
     const existing = byCodigo.get(p.key);
@@ -1673,82 +1977,60 @@ async function importarMateriaisCsvNuvemEmLotes(
     }
   }
 
-  for (let i = 0; i < inserts.length; i += IMPORT_MATERIAIS_CHUNK_INSERT) {
-    const chunk = inserts.slice(i, i + IMPORT_MATERIAIS_CHUNK_INSERT);
-    const tid = getActiveTenantId();
-    const { error } = await supabase.from('materiais').insert(chunk.map((c) => ({ ...c.row, tenant_id: tid })));
-    if (error) {
-      for (const c of chunk) {
-        const { error: e2 } = await supabase.from('materiais').insert({ ...c.row, tenant_id: tid });
-        if (e2) {
-          detalhes.push(`Linha ${c.numeroLinha} (${c.codigo}): ${e2.message}`);
-          ignorados += 1;
-        } else {
-          criados += 1;
-          detalhes.push(`${c.codigo}: incluido.`);
-          const prep = prepared.find((x) => x.numeroLinha === c.numeroLinha);
-          const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
-          if (prep && depoisMat && amostrasAuditoria.length < 8) {
-            amostrasAuditoria.push({
-              codigo: c.codigo,
-              tipo: 'criado',
-              antes: prep.antes,
-              depois: snapshotMaterialResumo(depoisMat),
-            });
-          }
-        }
-      }
-    } else {
-      criados += chunk.length;
-      for (const c of chunk) {
-        detalhes.push(`${c.codigo}: incluido.`);
-        const prep = prepared.find((x) => x.numeroLinha === c.numeroLinha);
-        const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
-        if (prep && depoisMat && amostrasAuditoria.length < 8) {
-          amostrasAuditoria.push({
-            codigo: c.codigo,
-            tipo: 'criado',
-            antes: prep.antes,
-            depois: snapshotMaterialResumo(depoisMat),
-          });
-        }
-      }
+  const deltaIds = new Set<string>([
+    ...inserts.map((c) => String(c.row.id)),
+    ...updates.map((u) => String(u.id)),
+  ]);
+  const upsertDelta = working.filter((m) => deltaIds.has(String(m.id)));
+  const totalLotes = Math.max(1, Math.ceil(upsertDelta.length / IMPORT_MATERIAIS_SOT_CHUNK));
+
+  let lote = 0;
+  for (let i = 0; i < upsertDelta.length; i += IMPORT_MATERIAIS_SOT_CHUNK) {
+    lote += 1;
+    onProgress?.(`A gravar lote ${lote} de ${totalLotes}…`);
+    try {
+      const sot = await writeMateriaisSotOnCloud({
+        baselineUpdatedAt: null,
+        upsert: upsertDelta.slice(i, i + IMPORT_MATERIAIS_SOT_CHUNK),
+        timeoutMs: 45_000,
+      });
+      assertNoSilentSotFallback('materiais', sot.missing);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Falha ao gravar na nuvem.';
+      return {
+        success: false,
+        error: `Importacao nao concluida no lote ${lote} de ${totalLotes}. ${msg} Atualize a pagina e confira o total antes de importar de novo.`,
+      };
     }
-    if (cooperativeNuvem) {
-      await yieldToMain();
-    }
+    onProgress?.(`Lote ${lote} de ${totalLotes} gravado.`);
   }
 
-  for (let i = 0; i < updates.length; i += IMPORT_MATERIAIS_PARALLEL_UPDATES) {
-    const slice = updates.slice(i, i + IMPORT_MATERIAIS_PARALLEL_UPDATES);
-    const outcomes = await Promise.all(
-      slice.map((u) =>
-        supabase.from('materiais').update(u.payload).eq('id', u.id).eq('tenant_id', getActiveTenantId()),
-      ),
-    );
-    for (let j = 0; j < outcomes.length; j++) {
-      const u = slice[j];
-      const err = outcomes[j].error;
-      if (err) {
-        detalhes.push(`Linha ${u.numeroLinha} (${u.codigo}): ${err.message}`);
-        ignorados += 1;
-      } else {
-        atualizados += 1;
-        detalhes.push(`${u.codigo}: atualizado.`);
-        const prep = prepared.find((x) => x.numeroLinha === u.numeroLinha);
-        const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
-        if (prep && depoisMat && amostrasAuditoria.length < 8) {
-          amostrasAuditoria.push({
-            codigo: u.codigo,
-            tipo: 'atualizado',
-            antes: prep.antes,
-            depois: snapshotMaterialResumo(depoisMat),
-          });
-        }
-      }
+  criados = inserts.length;
+  atualizados = updates.length;
+  for (const c of inserts) {
+    if (amostrasAuditoria.length >= 8) break;
+    const prep = prepared.find((x) => x.numeroLinha === c.numeroLinha);
+    const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
+    if (prep && depoisMat) {
+      amostrasAuditoria.push({
+        codigo: c.codigo,
+        tipo: 'criado',
+        antes: prep.antes,
+        depois: snapshotMaterialResumo(depoisMat),
+      });
     }
-    if (cooperativeNuvem) {
-      await yieldToMain();
+  }
+  for (const u of updates) {
+    if (amostrasAuditoria.length >= 8) break;
+    const prep = prepared.find((x) => x.numeroLinha === u.numeroLinha);
+    const depoisMat = prep ? byCodigo.get(prep.key) : undefined;
+    if (prep && depoisMat) {
+      amostrasAuditoria.push({
+        codigo: u.codigo,
+        tipo: 'atualizado',
+        antes: prep.antes,
+        depois: snapshotMaterialResumo(depoisMat),
+      });
     }
   }
 
@@ -1824,7 +2106,7 @@ export async function importarMateriaisDoArquivoCsv(
   const amostrasAuditoria: { codigo: string; tipo: 'criado' | 'atualizado'; antes: string; depois: string }[] = [];
 
   const inner = shouldUseCloudMaterials()
-    ? await importarMateriaisCsvNuvemEmLotes(prepared, amostrasAuditoria)
+    ? await importarMateriaisCsvNuvemEmLotes(prepared, amostrasAuditoria, opcoes?.onProgress)
     : await importarMateriaisCsvLocalEmLote(prepared, amostrasAuditoria);
 
   if (!inner.success || !inner.data) {
@@ -1845,6 +2127,14 @@ export async function importarMateriaisDoArquivoCsv(
       error: 'Nenhuma alteracao aplicada. Revise o arquivo e os avisos acima.',
       data: resumo,
     };
+  }
+
+  if (shouldUseCloudMaterials()) {
+    resumo.mensagem = `Concluido. ${resumo.criados} novo(s) e ${resumo.atualizados} atualizado(s) no cadastro.`;
+    const supabase = getSupabase();
+    if (supabase) {
+      void supabase.rpc('iso_pro_project_materiais_snapshot', { p_tenant_id: getActiveTenantId() });
+    }
   }
 
   appendAuthAuditEvent({

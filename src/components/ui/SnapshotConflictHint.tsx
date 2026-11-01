@@ -14,7 +14,9 @@ export function SnapshotConflictHint({ show, onReload }: Props) {
   return (
     <div className="stack-grid">
       <OperationalNotice tone="warning">
-        Dados no servidor mudaram enquanto voce editava. Feche este formulario, atualize a lista e abra o registro novamente antes de salvar.
+        <strong>Conflito de concorrência.</strong> Outro posto (PC ou telemóvel) gravou este material enquanto
+        editava. Não continue no mesmo desenho sem actualizar — feche o formulário, toque em «Recarregar dados» e
+        só depois volte a bipar/registar. Evite dois operadores no mesmo desenho ao mesmo tempo.
       </OperationalNotice>
       {onReload ? (
         <div className="form-actions">

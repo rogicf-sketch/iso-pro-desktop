@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useState } from 'react';
 import { useDebouncedValue } from '../../../hooks/useDebouncedValue';
-import { LISTA_BUSCA_DEBOUNCE_MS } from '../../../lib/listaBuscaDebounce';
+import { listaBuscaDebounceMs } from '../../../lib/listaBuscaDebounce';
 import { useAuth } from '../../auth/hooks/useAuth';
 import {
   authorizeMobileDevice,
   blockMobileDevice,
+  deleteMobileDevice,
   getMobileDeviceIndicators,
   listMobileDevices,
   revokeMobileDevice,
@@ -15,7 +16,7 @@ import type { MobileDeviceFilter } from '../types/mobileDevice.types';
 
 export type PendingMobileConfirm =
   | null
-  | { kind: 'authorize' | 'block' | 'unblock' | 'revoke'; id: string };
+  | { kind: 'authorize' | 'block' | 'unblock' | 'revoke' | 'delete'; id: string };
 
 const initialFilters: MobileDeviceFilter = {
   busca: '',
@@ -36,7 +37,7 @@ export function useMobileDevices() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingMobileConfirm>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
-  const debouncedBusca = useDebouncedValue(filters.busca, LISTA_BUSCA_DEBOUNCE_MS);
+  const debouncedBusca = useDebouncedValue(filters.busca, listaBuscaDebounceMs(filters.busca));
   const filtersForLista = useMemo(() => ({ ...filters, busca: debouncedBusca }), [filters, debouncedBusca]);
 
   const listQuery = useQuery({
@@ -124,6 +125,15 @@ export function useMobileDevices() {
     [guardAdminOrSetError],
   );
 
+  const handleDelete = useCallback(
+    (id: string) => {
+      setError(null);
+      if (!guardAdminOrSetError()) return;
+      setPendingConfirm({ kind: 'delete', id });
+    },
+    [guardAdminOrSetError],
+  );
+
   const cancelPendingConfirmation = useCallback(() => {
     if (confirmLoading) return;
     setPendingConfirm(null);
@@ -148,12 +158,15 @@ export function useMobileDevices() {
         case 'revoke':
           await revokeMobileDevice(id);
           break;
+        case 'delete':
+          await deleteMobileDevice(id);
+          break;
         default:
           break;
       }
       setPendingConfirm(null);
-      // Revogar deixa o aparelho como pendente (pode sumir do filtro «autorizado»).
-      if (kind === 'revoke' && filters.status === 'autorizado') {
+      // Revogar (filtro autorizado) ou excluir: a linha some da pagina actual.
+      if (kind === 'delete' || (kind === 'revoke' && filters.status === 'autorizado')) {
         const nextPage = total > 1 && items.length === 1 && filters.page > 1 ? filters.page - 1 : filters.page;
         if (nextPage !== filters.page) {
           setFilters((prev) => ({ ...prev, page: nextPage }));
@@ -162,7 +175,13 @@ export function useMobileDevices() {
       }
       await invalidateMobileDevices();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Falha ao atualizar dispositivo mobile.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : kind === 'delete'
+            ? 'Falha ao excluir dispositivo mobile.'
+            : 'Falha ao atualizar dispositivo mobile.',
+      );
     } finally {
       setConfirmLoading(false);
     }
@@ -187,6 +206,7 @@ export function useMobileDevices() {
     handleBlock,
     handleUnblock,
     handleRevoke,
+    handleDelete,
     pendingConfirm,
     confirmPendingAction,
     cancelPendingConfirmation,

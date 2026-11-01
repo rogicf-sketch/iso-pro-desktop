@@ -7,11 +7,17 @@ import type { Colaborador } from '../../colaboradores/types/colaborador.types';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import { Button } from '../../../components/ui/Button';
 import { Input } from '../../../components/ui/Input';
+import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
 import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import { Select } from '../../../components/ui/Select';
 import type { AppModule, PermissionAction } from '../../auth/types/auth.types';
 import { executarIsoProLinkAuthUser } from '../services/isoProLinkAuthUser.service';
+import {
+  getVolatileSessionPassword,
+  setVolatileSessionPasswordAfterSuccessfulLogin,
+} from '../../auth/services/auth.service';
+import { isIsoProAdminUserEdgeConfigured } from '../services/isoProAdminUser.service';
 import type { UsuarioFormData, UsuarioPerfil } from '../types/usuario.types';
 
 const MODULO_LABELS: Record<AppModule, string> = {
@@ -44,6 +50,35 @@ function tituloAcao(acao: PermissionAction): string {
   return 'Administrar';
 }
 
+function IconEye() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function IconEyeOff() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M1 1l22 22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 type Props = {
   initialValue: UsuarioFormData;
   profiles: UsuarioPerfil[];
@@ -70,6 +105,10 @@ export function UsuarioForm({
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [actorSenhaOk, setActorSenhaOk] = useState(() => Boolean(getVolatileSessionPassword()));
+  const [actorSenhaSessao, setActorSenhaSessao] = useState('');
+  const [showActorPassword, setShowActorPassword] = useState(false);
   const guardedCancel = useModalGuardedClose(onCancel);
   useModalFormDirty(isPlainFormDirty(initialValue, form));
   const [authLinkDraft, setAuthLinkDraft] = useState('');
@@ -77,6 +116,7 @@ export function UsuarioForm({
   const [authLinkError, setAuthLinkError] = useState('');
   const isInactive = !form.ativo;
   const hasAnyPermission = form.permissoes.some((item) => item.permitido);
+  const needsActorSenha = isIsoProAdminUserEdgeConfigured() && !actorSenhaOk;
 
   const showAuthLinkPanel = Boolean(enableSupabaseAuthLink && remoteUsuarioId);
 
@@ -109,6 +149,15 @@ export function UsuarioForm({
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
+    if (needsActorSenha) {
+      const confirmacao = actorSenhaSessao.trim();
+      if (!confirmacao) {
+        setError('Informe a senha da sua sessao (administrador) para gravar na nuvem.');
+        return;
+      }
+      setVolatileSessionPasswordAfterSuccessfulLogin(confirmacao);
+      setActorSenhaOk(true);
+    }
     setSubmitting(true);
     const result = await onSubmit(form);
     if (!result.success) {
@@ -205,9 +254,11 @@ export function UsuarioForm({
 
   return (
     <form className="stack-grid" onSubmit={handleSubmit}>
-      <OperationalNotice tone="warning">
-        Regra de seguranca: cada usuario deve receber apenas os modulos e acoes estritamente necessarios para a sua funcao.
-      </OperationalNotice>
+      <ModuleHelp>
+        <OperationalNotice tone="warning">
+          Regra de seguranca: cada usuario deve receber apenas os modulos e acoes estritamente necessarios para a sua funcao.
+        </OperationalNotice>
+      </ModuleHelp>
       {isInactive ? (
         <OperationalNotice tone="critical">
           Usuario marcado como inativo: novos acessos devem permanecer bloqueados ate reativacao administrativa.
@@ -218,10 +269,12 @@ export function UsuarioForm({
           Nenhuma permissao liberada no momento. Se salvar assim, o usuario podera ficar sem acesso operacional ao sistema.
         </OperationalNotice>
       ) : null}
-      <OperationalNotice>
-        Vinculo opcional: pesquise o colaborador pelo nome, matricula, funcao ou iniciais (ex.: «js» para Joao Silva). Limpe o campo para
-        «Nenhum» — contas tecnicas, consultoria ou quando nao houver colaborador correspondente.
-      </OperationalNotice>
+      <ModuleHelp>
+        <OperationalNotice>
+          Vinculo opcional: pesquise o colaborador pelo nome, matricula, funcao ou iniciais (ex.: «js» para Joao Silva). Limpe o campo para
+          «Nenhum» — contas tecnicas, consultoria ou quando nao houver colaborador correspondente.
+        </OperationalNotice>
+      </ModuleHelp>
       <div className="form-columns">
         <SearchableSelect
           label="Colaborador (opcional)"
@@ -242,21 +295,77 @@ export function UsuarioForm({
           onChange={(event) => setForm((current) => ({ ...current, login: event.target.value }))}
           value={form.login}
         />
-        <Input
-          label="Senha"
-          onChange={(event) => setForm((current) => ({ ...current, senha: event.target.value }))}
-          placeholder="Preencha para novo usuario ou troca de senha"
-          type="password"
-          value={form.senha}
-        />
+        <label className="field">
+          <span>Senha</span>
+          <div className="login-password-wrap">
+            <input
+              autoComplete="new-password"
+              className="input-control"
+              onChange={(event) => setForm((current) => ({ ...current, senha: event.target.value }))}
+              placeholder="Preencha para novo usuario ou troca de senha"
+              type={showPassword ? 'text' : 'password'}
+              value={form.senha}
+            />
+            <button
+              aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+              aria-pressed={showPassword}
+              className="login-password-toggle"
+              onClick={() => setShowPassword((v) => !v)}
+              title={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+              type="button"
+            >
+              {showPassword ? <IconEyeOff /> : <IconEye />}
+            </button>
+          </div>
+        </label>
       </div>
+
+      {needsActorSenha ? (
+        <>
+          <OperationalNotice tone="warning">
+            Apos actualizar a pagina, a senha do administrador nao fica em memoria. Confirme a senha da sua sessao
+            abaixo (a mesma com que entrou) para criar ou editar utilizadores na nuvem.
+          </OperationalNotice>
+          <label className="field">
+            <span>Senha da sua sessao (administrador)</span>
+            <div className="login-password-wrap">
+              <input
+                autoComplete="current-password"
+                className="input-control"
+                onChange={(event) => setActorSenhaSessao(event.target.value)}
+                placeholder="Senha com que entrou neste posto"
+                type={showActorPassword ? 'text' : 'password'}
+                value={actorSenhaSessao}
+              />
+              <button
+                aria-label={showActorPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                aria-pressed={showActorPassword}
+                className="login-password-toggle"
+                onClick={() => setShowActorPassword((v) => !v)}
+                title={showActorPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                type="button"
+              >
+                {showActorPassword ? <IconEyeOff /> : <IconEye />}
+              </button>
+            </div>
+          </label>
+        </>
+      ) : null}
 
       {showAuthLinkPanel ? (
         <div className="section-block">
           <h3 className="usuario-perm-heading">Supabase Auth (JWT / tenant)</h3>
+          {form.ativo && !form.authUserIdSupabase ? (
+            <OperationalNotice tone="critical">
+              Utilizador <strong>activo sem ligacao Auth</strong> — com cutover JWT nao consegue entrar. Cole o UUID
+              do Authentication e clique em <strong>Ligar</strong>, ou recrie o utilizador (provisionamento automatico
+              no create).
+            </OperationalNotice>
+          ) : null}
           <OperationalNotice tone="warning">
             Liga este utilizador da base (<code>usuarios_sistema</code>) ao UUID criado em Authentication. O segredo da funcao fica em Configuracoes
-            &gt; Supabase; guarde-o apenas em postos de administracao confiaveis.
+            &gt; Supabase; guarde-o apenas em postos de administracao confiaveis. Novos utilizadores criados pela Edge
+            recebem Auth automaticamente (<code>login@isopro.local</code>).
           </OperationalNotice>
           <p className="panel-copy">
             <strong>Tenant activo:</strong> <code>{getActiveTenantId()}</code>

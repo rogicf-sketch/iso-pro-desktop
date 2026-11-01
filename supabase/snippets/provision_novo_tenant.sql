@@ -9,7 +9,9 @@
 --   snippets/fix_materiais_codigo_por_tenant.sql
 -- Erro materiais_pkey ao importar na segunda empresa: executar
 --   snippets/fix_materiais_pkey_per_tenant.sql
--- Pre-requisito: perfil codigo=admin no tenant default (00000000-0000-0000-0000-000000000001).
+-- Pre-requisito: perfis padrao no tenant default (admin, planejamento, operacao, consulta).
+-- A Edge Function iso_pro_create_tenant copia estes 4 perfis automaticamente.
+-- Para empresas ja criadas sem eles: node --use-system-ca scripts/sync-perfis-padrao-tenants.mjs
 --
 -- Ajuste: v_slug, v_nome_empresa, v_login, v_nome_user, v_senha.
 -- Copiar este ficheiro para o SQL Editor (evita caracteres estranhos do Word/email).

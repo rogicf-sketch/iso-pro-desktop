@@ -1,5 +1,32 @@
 import { LOGO_INSTITUCIONAL_PADRAO_FABRICA } from './logoInstitucional.constants';
 import { readConfiguracoes } from '../modules/configuracoes/services/configuracoes.service';
+import {
+  LOGO_ZOOM_PCT_FABRICA,
+  LOGO_ZOOM_PCT_PADRAO,
+  normalizarLogoInstitucionalZoomPct,
+} from './logoInstitucionalAjuste';
+import {
+  cssLogoInstitucionalImpressao,
+  LOGO_INSTITUCIONAL_FORMATO_PADRAO,
+  LOGO_INSTITUCIONAL_TAMANHO_PADRAO,
+  normalizarLogoInstitucionalAspecto,
+  normalizarLogoInstitucionalFormato,
+  normalizarLogoInstitucionalTamanho,
+  type LogoInstitucionalFormatoQuadro,
+  type LogoInstitucionalTamanhoRelatorio,
+} from './logoInstitucionalTamanho';
+
+function ehUrlLogoFabrica(url: string): boolean {
+  const u = url.trim().toLowerCase().replace(/\\/g, '/');
+  if (!u) return true;
+  return (
+    u === LOGO_INSTITUCIONAL_PADRAO_FABRICA.toLowerCase() ||
+    u === '/logo-institutional-default.svg' ||
+    u.endsWith('/logo-institutional-default.svg') ||
+    u.includes('logo-institutional-default') ||
+    u.includes('logo-institutional-print')
+  );
+}
 
 /** Base da chave legada em `localStorage` (antes do campo em Configuracoes); o valor efectivo é scoped por ambiente. */
 export const LEGACY_LOGO_STORAGE_KEY_BASE = 'iso-pro-desktop-recibo-logo-url';
@@ -52,4 +79,74 @@ export const normalizarUrlAssetPublicParaAmbiente = absolutizarUrlMidiaParaDocum
 /** Mesma resolucao que {@link resolverUrlLogoInstitucional}, com URL pronta para HTML em `blob:` (impressao). */
 export function resolverUrlLogoInstitucionalParaHtmlImpresso(override?: string | null): string {
   return absolutizarUrlMidiaParaDocumentoHtmlBlob(resolverUrlLogoInstitucional(override));
+}
+
+/** Escala do quadro (Configurações → Interface). */
+export function lerTamanhoLogoInstitucionalConfig(): LogoInstitucionalTamanhoRelatorio {
+  try {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return LOGO_INSTITUCIONAL_TAMANHO_PADRAO;
+    }
+    return normalizarLogoInstitucionalTamanho(readConfiguracoes().logoInstitucionalTamanhoRelatorio);
+  } catch {
+    return LOGO_INSTITUCIONAL_TAMANHO_PADRAO;
+  }
+}
+
+export function lerFormatoLogoInstitucionalConfig(): LogoInstitucionalFormatoQuadro {
+  try {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return LOGO_INSTITUCIONAL_FORMATO_PADRAO;
+    }
+    return normalizarLogoInstitucionalFormato(readConfiguracoes().logoInstitucionalFormatoQuadro);
+  } catch {
+    return LOGO_INSTITUCIONAL_FORMATO_PADRAO;
+  }
+}
+
+export function lerAspectoLogoInstitucionalConfig(): number {
+  try {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return 0;
+    }
+    return normalizarLogoInstitucionalAspecto(readConfiguracoes().logoInstitucionalAspecto);
+  } catch {
+    return 0;
+  }
+}
+
+export function lerZoomLogoInstitucionalConfig(): number {
+  try {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return LOGO_ZOOM_PCT_PADRAO;
+    }
+    return normalizarLogoInstitucionalZoomPct(readConfiguracoes().logoInstitucionalZoomPct);
+  } catch {
+    return LOGO_ZOOM_PCT_PADRAO;
+  }
+}
+
+/** CSS do slot de logo — incluir em todos os HTML de impressão. */
+export function cssLogoInstitucionalImpressaoDaConfig(): string {
+  let zoom = lerZoomLogoInstitucionalConfig();
+  let aspecto = lerAspectoLogoInstitucionalConfig();
+  let formato = lerFormatoLogoInstitucionalConfig();
+  try {
+    if (ehUrlLogoFabrica(readConfiguracoes().logoInstitucionalUrl ?? '')) {
+      zoom = LOGO_ZOOM_PCT_FABRICA;
+      // Chapa I.S.O PRO é horizontal larga.
+      formato = 'horizontal';
+      aspecto = 2.4;
+    }
+  } catch {
+    /* mantém valores lidos */
+  }
+  return cssLogoInstitucionalImpressao(
+    {
+      tamanho: lerTamanhoLogoInstitucionalConfig(),
+      formato,
+      aspecto,
+    },
+    zoom,
+  );
 }

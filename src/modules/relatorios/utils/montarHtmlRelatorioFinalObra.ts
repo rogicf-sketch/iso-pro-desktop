@@ -8,7 +8,10 @@ import {
   montarDocumentoHtmlInstitucionalPaged,
   montarRunningHeaderInstitucional,
 } from '../../../lib/relatorioPagedDocument';
-import { resolverUrlLogoInstitucionalParaHtmlImpresso } from '../../../lib/logoInstitucional';
+import {
+  cssLogoInstitucionalImpressaoDaConfig,
+  resolverUrlLogoInstitucionalParaHtmlImpresso,
+} from '../../../lib/logoInstitucional';
 import { readConfiguracoes } from '../../configuracoes/services/configuracoes.service';
 import {
   formatarDataRelatorioFinal,
@@ -26,6 +29,7 @@ type SecaoRfo = { id: string; num: string; titulo: string; corpo: string };
 
 function cssRelatorioFinalObra(): string {
   return `
+    ${cssLogoInstitucionalImpressaoDaConfig()}
     body.rfo-print-body {
       font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
       margin: 0; padding: 0; color: #1e293b; font-size: 10.5pt; line-height: 1.55;
@@ -56,7 +60,7 @@ function cssRelatorioFinalObra(): string {
     }
     .rfo-capa-brand { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
     .rfo-capa-brand .inst-logo-col { flex: none; min-height: 0; margin: 0; justify-content: flex-start; }
-    .rfo-capa-brand .inst-logo-img { max-width: 160px; max-height: 72px; width: auto; height: auto; }
+    .rfo-capa-brand .inst-logo-img { max-width: var(--iso-logo-slot-w, 178px); max-height: var(--iso-logo-slot-h, 68px); width: auto; height: auto; }
     .rfo-capa-brand .inst-logo-placeholder {
       width: 160px; min-height: 56px; padding: 10px 12px; margin: 0;
       border: 1px dashed #cbd5e1; background: #f8fafc; border-radius: 6px;

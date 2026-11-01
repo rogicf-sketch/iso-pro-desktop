@@ -7,6 +7,7 @@
 import { blobToDataUrl, dataUrlToBlob } from './mediaBlobCodec';
 import { isMediaRefKey, mediaBlobGet } from './mediaBlobStore';
 import { getActiveTenantId } from './isoProTenant';
+import { canUseDesktopSupabaseFetch, createDesktopSupabaseFetch } from './supabaseDesktopFetch';
 import { getSupabase, hasSupabaseConfig } from './supabase';
 
 export const EVIDENCIAS_BUCKET = 'evidencias';
@@ -57,6 +58,10 @@ function guessContentType(blob: Blob): string {
   return 'image/jpeg';
 }
 
+function contentTypeIsJson(blob: Blob): boolean {
+  return guessContentType(blob) === 'application/json';
+}
+
 /** Faz upload (upsert) e devolve a referência `iso-storage:...`. */
 export async function uploadEvidenciaBlob(path: string, blob: Blob): Promise<string> {
   const supabase = getSupabase();
@@ -65,7 +70,8 @@ export async function uploadEvidenciaBlob(path: string, blob: Blob): Promise<str
   const { error } = await supabase.storage.from(EVIDENCIAS_BUCKET).upload(clean, blob, {
     upsert: true,
     contentType: guessContentType(blob),
-    cacheControl: '3600',
+    // JSON de RIR muda em cada gravacao — cache longo faz a lista mostrar status antigo.
+    cacheControl: contentTypeIsJson(blob) ? '0' : '3600',
   });
   if (error) throw new Error(error.message);
   return makeStorageRef(clean);
@@ -93,15 +99,80 @@ export async function downloadEvidenciaJson<T = unknown>(ref: string): Promise<T
   }
 }
 
+async function withTimeoutOrNull<T>(p: PromiseLike<T>, ms: number): Promise<T | null> {
+  try {
+    return await Promise.race([
+      Promise.resolve(p),
+      new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), ms);
+      }),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 /** Descarrega evidência do Storage como data URL (para UI / impressão). */
 export async function downloadEvidenciaAsDataUrl(ref: string): Promise<string | null> {
   const parsed = parseStorageRef(ref);
   if (!parsed) return null;
   const supabase = getSupabase();
   if (!supabase) return null;
-  const { data, error } = await supabase.storage.from(parsed.bucket).download(parsed.path);
-  if (error || !data) return null;
-  return blobToDataUrl(data);
+
+  // EXE: signed URL + fetch IPC (binário em base64) — evita hang eterno do Auth lock.
+  const signedWrap = await withTimeoutOrNull(
+    supabase.storage.from(parsed.bucket).createSignedUrl(parsed.path, 60 * 60),
+    15_000,
+  );
+  if (signedWrap && !signedWrap.error && signedWrap.data?.signedUrl) {
+    try {
+      const fetchImpl = canUseDesktopSupabaseFetch() ? createDesktopSupabaseFetch() : fetch;
+      const res = await fetchImpl(signedWrap.data.signedUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.size > 24) return blobToDataUrl(blob);
+      }
+    } catch {
+      /* tenta download API */
+    }
+  }
+
+  const dl = await withTimeoutOrNull(
+    supabase.storage.from(parsed.bucket).download(parsed.path),
+    20_000,
+  );
+  if (!dl || dl.error || !dl.data) return null;
+  if (dl.data.size < 24) return null;
+  return blobToDataUrl(dl.data);
+}
+
+/**
+ * URL para pré-visualização HTML (rápido):
+ * - Storage → signed URL HTTPS (sem baixar + base64)
+ * - IndexedDB → data URL (necessário na janela Electron)
+ * - data: / http(s) → intacto
+ */
+export async function resolveEvidenciaToDisplayUrl(value: string): Promise<string | null> {
+  const s = value?.trim() ?? '';
+  if (!s) return null;
+  if (s.startsWith('data:image/') || s.startsWith('http://') || s.startsWith('https://')) return s;
+  if (isStorageRef(s)) {
+    const parsed = parseStorageRef(s);
+    if (!parsed) return null;
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    const { data, error } = await supabase.storage
+      .from(parsed.bucket)
+      .createSignedUrl(parsed.path, 60 * 60);
+    if (!error && data?.signedUrl) return data.signedUrl;
+    return downloadEvidenciaAsDataUrl(s);
+  }
+  if (isMediaRefKey(s)) {
+    const blob = await mediaBlobGet(s);
+    if (!blob) return null;
+    return blobToDataUrl(blob);
+  }
+  return null;
 }
 
 /**
@@ -136,6 +207,24 @@ export async function resolveEvidenciaToBlob(value: string): Promise<Blob | null
     if (!parsed) return null;
     const supabase = getSupabase();
     if (!supabase) return null;
+
+    // EXE: signed URL + fetch costuma funcionar quando storage.download falha na sessão.
+    const { data: signed, error: signErr } = await supabase.storage
+      .from(parsed.bucket)
+      .createSignedUrl(parsed.path, 60 * 60);
+    if (!signErr && signed?.signedUrl) {
+      try {
+        const fetchImpl = canUseDesktopSupabaseFetch() ? createDesktopSupabaseFetch() : fetch;
+        const res = await fetchImpl(signed.signedUrl);
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size > 0) return blob;
+        }
+      } catch {
+        /* tenta download API */
+      }
+    }
+
     const { data, error } = await supabase.storage.from(parsed.bucket).download(parsed.path);
     if (error || !data) return null;
     return data;

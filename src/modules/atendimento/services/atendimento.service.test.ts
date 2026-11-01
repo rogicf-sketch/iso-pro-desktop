@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IsoProSnapshotConflictError } from '../../../lib/isoProSnapshot';
+import { fetchQuantidadeRecebidaPorCodigo } from '../../../lib/operacaoEscalaContagens';
 import { isSnapshotConflictResult } from '../../../lib/service-result';
-import { hasSupabaseConfig } from '../../../lib/supabase';
+import { hasSupabaseConfig, shouldUseCloudMaterials } from '../../../lib/supabase';
 import {
   estornarAtendimento,
   listarHistoricoAtendimentos,
+  listarHistoricoAtendimentosPagina,
   mergeAtendimentoHistoricoPreservingLegacy,
   montarExportacaoAtendimentosCsvItens,
   montarExportacaoAtendimentosPacoteZip,
+  montarExportacaoEstornosCsv,
   normalizarCabecalhoDocumentoAtendimentoAgrupado,
   registrarAtendimento,
   registrarAtendimentosSessao,
+  resetSaldoOperacionalCacheForTests,
 } from './atendimento.service';
 import type { Atendimento } from '../types/atendimento.types';
 
@@ -19,12 +23,13 @@ const MATERIAIS_KEY = 'iso-pro-desktop-materiais';
 const ATENDIMENTOS_KEY = 'iso-pro-desktop-atendimentos';
 const ESTORNO_LOG_KEY = 'iso-pro-desktop-atendimento-estorno-log';
 
-const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, mockGravarComando } = vi.hoisted(() => ({
+const { mockReadPayload, mockReadForWrite, mockCommitWrite, mockCommitPatch, mockGravarComando, mockListAtendimentoLotes } = vi.hoisted(() => ({
   mockReadPayload: vi.fn(),
   mockReadForWrite: vi.fn(),
   mockCommitWrite: vi.fn(),
   mockCommitPatch: vi.fn(),
   mockGravarComando: vi.fn(),
+  mockListAtendimentoLotes: vi.fn(async (_args?: unknown) => ({ data: null as unknown, error: null as unknown })),
 }));
 
 vi.mock('../../../lib/supabase', () => ({
@@ -33,6 +38,12 @@ vi.mock('../../../lib/supabase', () => ({
   shouldUseCloudMaterials: vi.fn(() => false),
   getSupabase: vi.fn(() => ({
     rpc: async (name: string, args: Record<string, unknown>) => {
+      if (name === 'iso_pro_list_atendimento_lotes') {
+        return mockListAtendimentoLotes(args);
+      }
+      if (name === 'iso_pro_upsert_atendimento_lotes_from_json') {
+        return { data: null, error: null };
+      }
       if (name !== 'iso_pro_read_documento_planejamento') {
         return { data: null, error: null };
       }
@@ -509,6 +520,80 @@ describe('atendimento.service / listarHistoricoAtendimentos (fusao snapshot)', (
   beforeEach(() => {
     vi.clearAllMocks();
     wireSnapshotPatchMock();
+    mockListAtendimentoLotes.mockResolvedValue({ data: null, error: null });
+  });
+
+  it('funde lote so nas tabelas com lotes so no snapshot (Historico = CSV)', async () => {
+    mockListAtendimentoLotes.mockResolvedValue({
+      data: {
+        atendimentos: [
+          {
+            id: 'tab-aug',
+            numero: 'ATD-20260802-00003',
+            documentoId: 'd-aug',
+            documentoNumero: 'E.RAZN008-IE8-00042',
+            atendente: 'Administrador',
+            recebedorTipo: 'interno',
+            recebedor: 'Joao Silva',
+            origem: 'windows',
+            status: 'concluido',
+            dataAtendimento: '2026-08-02T16:50:07.000Z',
+            itens: [
+              {
+                id: 'i-aug',
+                documentoItemId: 'di-aug',
+                codigoMaterial: 'X',
+                descricaoMaterial: 'Item novo',
+                unidade: 'UN',
+                quantidadeAtendida: 9,
+              },
+            ],
+          },
+        ],
+        totalCount: 1,
+        limit: 200,
+        offset: 0,
+      },
+      error: null,
+    });
+    mockReadPayload.mockResolvedValue({
+      documentos: [],
+      materiais: [],
+      atendimentos: [
+        {
+          id: '6575dec6-6516-4c23-8e14-363c51530e84',
+          numero: 'ATD-20260726-00002',
+          documentoId: 'd-jul',
+          documentoNumero: 'E.RAZN008-IE8-00042',
+          atendente: 'Igor Sousa',
+          recebedorTipo: 'interno',
+          recebedor: 'Igor Sousa',
+          origem: 'windows',
+          status: 'concluido',
+          dataAtendimento: '2026-07-26T14:11:18.871Z',
+          itens: [
+            {
+              id: 'i-jul',
+              documentoItemId: 'di-jul',
+              codigoMaterial: 'LD3A0ZA2A15HEB',
+              descricaoMaterial: 'Luminaria',
+              unidade: 'PÇ',
+              quantidadeAtendida: 10,
+            },
+          ],
+        },
+      ],
+      atendimentoHistorico: [],
+    });
+
+    const list = await listarHistoricoAtendimentos();
+    const numeros = list.map((a) => a.numero).sort();
+    expect(numeros).toEqual(['ATD-20260726-00002', 'ATD-20260802-00003']);
+
+    const page = await listarHistoricoAtendimentosPagina({ page: 1, pageSize: 15 });
+    expect(page.success).toBe(true);
+    expect(page.data?.totalCount).toBe(2);
+    expect(page.data?.items.map((a) => a.numero).sort()).toEqual(numeros);
   });
 
   it('separa sessoes com mesmo loteNumero mas loteId distinto (colisao mobile x PC)', async () => {
@@ -779,6 +864,9 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSaldoOperacionalCacheForTests();
+    vi.mocked(fetchQuantidadeRecebidaPorCodigo).mockResolvedValue(null);
+    vi.mocked(shouldUseCloudMaterials).mockReturnValue(false);
     wireSnapshotPatchMock();
     store = {};
     vi.stubGlobal(
@@ -875,6 +963,77 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
     expect(atendimentos.some((a) => a.documentoId === 'doc-atd')).toBe(true);
   });
 
+  it('com saldo 0 na nuvem bloqueia atendimento (nao inventa estoque)', async () => {
+    vi.mocked(shouldUseCloudMaterials).mockReturnValue(true);
+    const { fetchQuantidadeRecebidaPorCodigo } = await import('../../../lib/operacaoEscalaContagens');
+    vi.mocked(fetchQuantidadeRecebidaPorCodigo).mockResolvedValue(new Map([['m1', 0]]));
+    mockReadPayload.mockResolvedValue({
+      ...snapshotAtendimentoBase(),
+      materiais: [{ id: 'mat-1', codigo: 'M1', descricao: 'Material 1', unidade: 'UN', saldoAtual: 0 }],
+      recebimentos: [],
+    });
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    store[MATERIAIS_KEY] = JSON.stringify([]);
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await registrarAtendimento({
+      documentoId: 'doc-atd',
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: '',
+      itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }],
+    });
+
+    expect(result.success).toBe(false);
+    expect(String(result.error ?? '')).toMatch(/saldo insuficiente/i);
+    expect(store[ATENDIMENTOS_KEY]).toBe(JSON.stringify([]));
+
+    vi.mocked(fetchQuantidadeRecebidaPorCodigo).mockResolvedValue(null);
+    vi.mocked(shouldUseCloudMaterials).mockReturnValue(false);
+  });
+
+  it('com materiais na nuvem nao bloqueia por catalogo residual no localStorage', async () => {
+    vi.mocked(shouldUseCloudMaterials).mockReturnValue(true);
+    mockReadForWrite.mockResolvedValue({
+      payload: {},
+      baselineUpdatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    mockCommitWrite.mockImplementation(async (fn: () => Promise<unknown>) => {
+      await fn();
+    });
+
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
+    // Catalogo antigo no PC (muito maior que os materiais sinteticos do Confirmar).
+    store[MATERIAIS_KEY] = JSON.stringify(
+      Array.from({ length: 500 }, (_, i) => ({
+        id: `mat-local-${i}`,
+        codigo: `LOC-${i}`,
+        descricao: `Residual ${i}`,
+        unidade: 'UN',
+        saldoAtual: 1,
+      })),
+    );
+    store[ATENDIMENTOS_KEY] = JSON.stringify([]);
+
+    const result = await registrarAtendimento({
+      documentoId: 'doc-atd',
+      atendente: 'Maria',
+      recebedorTipo: 'interno',
+      recebedorColaboradorId: 'colab-1',
+      recebedor: '',
+      itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }],
+    });
+
+    expect(result.success).toBe(true);
+    expect(String(result.error ?? '')).not.toMatch(/armazenamento deste navegador/i);
+    // Nao deve reescrever/encolher o JSON local de materiais quando o cadastro e na nuvem.
+    expect(JSON.parse(store[MATERIAIS_KEY] ?? '[]')).toHaveLength(500);
+
+    vi.mocked(shouldUseCloudMaterials).mockReturnValue(false);
+  });
+
   it('registrarAtendimentosSessao grava varios lotes em uma unica operacao', async () => {
     mockReadPayload.mockResolvedValue(snapshotDoisDocumentosAtendimento());
     mockReadForWrite.mockResolvedValue({
@@ -966,7 +1125,7 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
     expect(pedidosHistorico).toHaveLength(0);
   });
 
-  it('confirmar rele a nuvem e nao usa cache local frio de quantidadeAtendida', async () => {
+  it('confirmar prefere documentosSeed fresco sobre cache local frio de quantidadeAtendida', async () => {
     mockReadPayload.mockResolvedValue(snapshotAtendimentoBase());
     mockReadForWrite.mockResolvedValue({
       payload: {},
@@ -1009,41 +1168,45 @@ describe('atendimento.service / registrarAtendimento (Supabase)', () => {
     );
     store[ATENDIMENTOS_KEY] = JSON.stringify([]);
 
+    // Seed da UI (estado fresco da nuvem) prevalece sobre o JSON local frio.
+    const seedFresco = {
+      id: 'doc-atd',
+      numero: 'D1',
+      revisao: 'A',
+      descricao: 'Doc teste',
+      responsavel: 'Resp',
+      status: 'pendente' as const,
+      itens: [
+        {
+          id: 'doc-atd-item-1',
+          codigoMaterial: 'M1',
+          descricaoMaterial: 'Material 1',
+          unidade: 'UN',
+          localizacao: '',
+          quantidadeProjeto: 10,
+          quantidadeAtendida: 0,
+        },
+      ],
+    };
+
     const result = await registrarAtendimentosSessao({
       atendente: 'Maria',
       recebedorTipo: 'interno',
       recebedorColaboradorId: 'colab-1',
       recebedor: '',
       documentos: [{ documentoId: 'doc-atd', itens: [{ documentoItemId: 'doc-atd-item-1', quantidade: 2 }] }],
+      documentosSeed: [seedFresco],
     });
 
     expect(result.success).toBe(true);
     expect(result.data).toHaveLength(1);
   });
 
-  it('confirmar falha com mensagem clara se a nuvem nao responder a tempo', async () => {
+  it('confirmar falha com mensagem clara se faltar desenho e a nuvem nao responder a tempo', async () => {
+    // Sem seed e sem copia local → precisa refetch; RPC mock nao devolve o documento.
     mockReadPayload.mockResolvedValue({ documentos: [], materiais: [], atendimentos: [] });
     const snap = snapshotAtendimentoBase();
-    store[DOCUMENTOS_KEY] = JSON.stringify([
-      {
-        id: 'doc-atd',
-        numero: 'D1',
-        revisao: 'A',
-        descricao: 'Doc teste',
-        responsavel: 'Resp',
-        status: 'pendente',
-        itens: [
-          {
-            id: 'doc-atd-item-1',
-            codigoMaterial: 'M1',
-            descricaoMaterial: 'Material 1',
-            unidade: 'UN',
-            quantidadeProjeto: 10,
-            quantidadeAtendida: 0,
-          },
-        ],
-      },
-    ]);
+    store[DOCUMENTOS_KEY] = JSON.stringify([]);
     store[MATERIAIS_KEY] = JSON.stringify(
       (snap.materiais ?? []).map((m) => ({
         id: m.id,
@@ -1898,5 +2061,51 @@ describe('atendimento.service / montarExportacaoAtendimentosCsvItens', () => {
     expect(result.success).toBe(true);
     expect(result.data?.fileName).toMatch(/^iso-pro-atendimentos-export-/);
     expect(result.data?.zipBlob).toBeInstanceOf(Blob);
+  });
+
+  it('exporta estornos filtrados por desde', async () => {
+    store[ESTORNO_LOG_KEY] = JSON.stringify([
+      {
+        id: 'log-old',
+        dataEstorno: '2026-01-01T10:00:00.000Z',
+        loteNumero: 'ATD-OLD',
+        loteId: 'atd-old',
+        atendimentoItemId: 'item-old',
+        documentoNumero: 'DOC-1',
+        codigoMaterial: 'M1',
+        descricaoMaterial: 'Mat',
+        unidade: 'UN',
+        quantidadeEstornada: 1,
+        quantidadeRetiradaOriginal: 1,
+        quantidadeRestanteNoLote: 0,
+        nomeQuemEstorna: 'Admin',
+        nomeQuemDevolve: 'Op',
+        motivoEstorno: 'Erro',
+        estornoParcialLote: false,
+      },
+      {
+        id: 'log-new',
+        dataEstorno: '2026-09-18T10:00:00.000Z',
+        loteNumero: 'ATD-NEW',
+        loteId: 'atd-new',
+        atendimentoItemId: 'item-new',
+        documentoNumero: 'DOC-2',
+        codigoMaterial: 'M2',
+        descricaoMaterial: 'Mat2',
+        unidade: 'UN',
+        quantidadeEstornada: 2,
+        quantidadeRetiradaOriginal: 2,
+        quantidadeRestanteNoLote: 0,
+        nomeQuemEstorna: 'Admin',
+        nomeQuemDevolve: 'Op',
+        motivoEstorno: 'Erro',
+        estornoParcialLote: false,
+      },
+    ]);
+
+    const result = await montarExportacaoEstornosCsv({ desde: '2026-09-01T00:00:00.000Z' });
+    expect(result.success).toBe(true);
+    expect(result.data!.csv).toContain('ATD-NEW');
+    expect(result.data!.csv).not.toContain('ATD-OLD');
   });
 });

@@ -2,6 +2,8 @@ import { substituirPagedJsPorInline } from './relatorioPagedJsBundle';
 import { gerarHtmlRelatorioPdfBytes } from './pdfCloud/pdfHybridRouter';
 import { imprimirPdfBytesNoNavegador } from './pdfCloud/imprimirPdfBytesNoNavegador';
 import type { PdfJobTipo } from './pdfCloud/types';
+import { sairFullscreenDocumentoSeActivo } from './sairFullscreenDocumento';
+import { cssLogoInstitucionalImpressaoDaConfig } from './logoInstitucional';
 
 export function escapeHtmlRelatorio(s: string): string {
   return s
@@ -217,6 +219,57 @@ export function cssFontesNotoRelatorio(): string {
 `;
 }
 
+let cssFontesNotoInlineCache: string | null = null;
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Noto Sans em data-URL — fiável no «Guardar PDF» do browser (srcdoc/blob não resolve ./fonts/).
+ * Mantém a string `./fonts/noto-sans` no CSS de fallback para o Electron copiar as fontes.
+ */
+export async function cssFontesNotoRelatorioInline(): Promise<string> {
+  if (cssFontesNotoInlineCache) return cssFontesNotoInlineCache;
+  if (typeof fetch === 'undefined' || typeof window === 'undefined') {
+    return cssFontesNotoRelatorio();
+  }
+  try {
+    const [regRes, boldRes] = await Promise.all([
+      fetch(new URL('/fonts/noto-sans-regular.woff', window.location.origin).href),
+      fetch(new URL('/fonts/noto-sans-bold.woff', window.location.origin).href),
+    ]);
+    if (!regRes.ok || !boldRes.ok) return cssFontesNotoRelatorio();
+    const [reg, bold] = await Promise.all([regRes.arrayBuffer(), boldRes.arrayBuffer()]);
+    cssFontesNotoInlineCache = `
+/* fallback Electron: ./fonts/noto-sans */
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url(data:font/woff;base64,${arrayBufferToBase64(reg)}) format('woff');
+}
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url(data:font/woff;base64,${arrayBufferToBase64(bold)}) format('woff');
+}
+`;
+    return cssFontesNotoInlineCache;
+  } catch {
+    return cssFontesNotoRelatorio();
+  }
+}
+
 /** Estilos compartilhados: cabecalho com logo + titulo (impressao HTML). */
 export function cssRelatorioPreVisualizacaoClara(): string {
   return `
@@ -249,15 +302,16 @@ export function cssInstitucionalRelatorio(): string {
   return `
     ${cssFontesNotoRelatorio()}
     ${cssRelatorioPreVisualizacaoClara()}
+    ${cssLogoInstitucionalImpressaoDaConfig()}
     * { box-sizing: border-box; }
     body { font-family: 'Noto Sans', 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 20px 24px; background: #fff; color: #0f172a; font-size: 11pt; line-height: 1.4; }
     .inst-topbar { display: flex; justify-content: space-between; align-items: center; font-size: 9pt; color: #444; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
     .inst-topbar span:last-child { font-weight: 600; color: #111; }
     .inst-header { display: flex; gap: 20px; align-items: flex-start; margin-bottom: 16px; }
-    .inst-logo-col { flex: 0 0 150px; min-height: 76px; display: flex; align-items: center; justify-content: flex-start; }
-    .inst-logo-col--pequeno { flex-basis: 100px; min-height: 48px; }
-    .inst-logo-img { max-width: 150px; max-height: 76px; width: auto; height: auto; object-fit: contain; display: block; }
-    .inst-logo-col--pequeno .inst-logo-img { max-width: 100px; max-height: 48px; }
+    .inst-logo-col { flex: 0 0 var(--iso-logo-slot-w, 178px); min-height: var(--iso-logo-slot-h, 68px); display: flex; align-items: center; justify-content: flex-start; }
+    .inst-logo-col--pequeno { flex-basis: calc(var(--iso-logo-slot-w, 178px) * 0.68); min-height: calc(var(--iso-logo-slot-h, 68px) * 0.68); }
+    .inst-logo-img { max-width: var(--iso-logo-slot-w, 178px); max-height: var(--iso-logo-slot-h, 68px); width: auto; height: auto; object-fit: contain; display: block; }
+    .inst-logo-col--pequeno .inst-logo-img { max-width: calc(var(--iso-logo-slot-w, 178px) * 0.68); max-height: calc(var(--iso-logo-slot-h, 68px) * 0.68); }
     .inst-logo-placeholder { width: 150px; min-height: 76px; border: 1px dashed #bbb; border-radius: 4px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; background: #fafafa; }
     .inst-logo-col--pequeno .inst-logo-placeholder { width: 100px; min-height: 48px; padding: 4px; }
     .inst-logo-hint { font-size: 8.5pt; color: #777; line-height: 1.3; }
@@ -583,7 +637,9 @@ function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: s
   const hint = document.createElement('span');
   hint.style.cssText = 'color:#e2e8f0;font-size:13px;line-height:1.45;';
   hint.textContent =
-    'Pré-visualização web — «Guardar PDF» e «Imprimir / PDF» geram o PDF oficial na nuvem (Folha 1/N).';
+    typeof window !== 'undefined' && window.isoProDesktop?.platform === 'desktop'
+      ? '«Guardar PDF» e «Imprimir / PDF» usam o motor do desktop (mesmo documento).'
+      : 'Pré-visualização web — «Guardar PDF» e «Imprimir / PDF» geram o PDF oficial na nuvem (Folha 1/N).';
   const btnPrint = document.createElement('button');
   btnPrint.type = 'button';
   btnPrint.textContent = 'Imprimir / PDF';
@@ -679,9 +735,7 @@ function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: s
   };
 
   btn.addEventListener('click', cleanup);
-  root.addEventListener('click', (e) => {
-    if (e.target === root) cleanup();
-  });
+  // Não fechar ao clicar no fundo — utilizadores perdiam o relatório sem querer.
   document.addEventListener('keydown', onKeyDown, true);
 
   root.appendChild(bar);
@@ -699,8 +753,15 @@ function abrirPreVisualizacaoInAppOverlay(html: string, opts?: { pdfFileName?: s
  */
 export async function abrirPreVisualizacaoHtmlRelatorio(
   html: string,
-  opts?: { tituloCarregamento?: string; pdfFileName?: string; pdfTipo?: PdfJobTipo },
+  opts?: {
+    tituloCarregamento?: string;
+    pdfFileName?: string;
+    pdfTipo?: PdfJobTipo;
+    previewAssets?: Array<{ name: string; base64: string }>;
+  },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  await sairFullscreenDocumentoSeActivo();
+
   const api = typeof window !== 'undefined' ? window.isoProDesktop : undefined;
 
   /** Desktop: RFO grande — PDF gerado no main (evita ecrã branco do Paged.js). */
@@ -722,13 +783,28 @@ export async function abrirPreVisualizacaoHtmlRelatorio(
     }
   }
 
+  /**
+   * Relatório fotográfico: mesmo padrão da web (overlay + URLs assinadas).
+   * A janela IPC (file://) partia as fotos e abria loading a dobrar — lento e estranho.
+   */
+  if (opts?.pdfTipo === 'relatorio_fotografico') {
+    if (
+      abrirPreVisualizacaoInAppOverlay(html, {
+        pdfFileName: opts?.pdfFileName,
+        pdfTipo: opts.pdfTipo,
+      })
+    ) {
+      return { ok: true };
+    }
+  }
+
   /** Desktop: janela dedicada com preload — lista principal permanece visível; Imprimir/PDF fiáveis. */
   if (api?.previewHtml) {
     try {
       if (opts?.tituloCarregamento && api.beginHtmlPreviewLoading) {
         void api.beginHtmlPreviewLoading(opts.tituloCarregamento);
       }
-      const res = await api.previewHtml(html);
+      const res = await api.previewHtml(html, opts?.previewAssets);
       if (res.ok) return res;
       return {
         ok: false,

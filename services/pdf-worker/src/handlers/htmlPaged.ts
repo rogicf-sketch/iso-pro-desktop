@@ -1,8 +1,12 @@
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-
-type BrowserHandle = Awaited<ReturnType<Awaited<ReturnType<typeof importPlaywright>>['chromium']['launch']>>;
+type BrowserHandle = {
+  newPage: () => Promise<{
+    setContent: (html: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<void>;
+    evaluate: (pageFunction: string) => Promise<unknown>;
+    pdf: (opts?: Record<string, unknown>) => Promise<Buffer>;
+    close: () => Promise<void>;
+  }>;
+  close: () => Promise<void>;
+};
 
 let browserPromise: Promise<BrowserHandle> | null = null;
 
@@ -13,10 +17,17 @@ async function importPlaywright() {
 async function getBrowser(): Promise<BrowserHandle> {
   if (!browserPromise) {
     const { chromium } = await importPlaywright();
+    // Preferir Chrome do sistema — headless_shell no sandbox Cursor por vezes hang.
     browserPromise = chromium.launch({
       headless: true,
+      channel: 'chrome',
       args: ['--font-render-hinting=none', '--disable-dev-shm-usage'],
-    });
+    }).catch(async () =>
+      chromium.launch({
+        headless: true,
+        args: ['--font-render-hinting=none', '--disable-dev-shm-usage'],
+      }),
+    );
   }
   return browserPromise;
 }
@@ -35,15 +46,12 @@ export async function gerarHtmlPdfFromPayload(payload: unknown): Promise<Uint8Ar
     throw new Error('HTML vazio.');
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'iso-pro-pdf-'));
-  const htmlPath = path.join(tmpDir, 'relatorio.html');
-  await fs.writeFile(htmlPath, html, 'utf8');
-
   const browser = await getBrowser();
   const page = await browser.newPage();
 
   try {
-    await page.goto(`file:///${htmlPath.replace(/\\/g, '/')}`, { waitUntil: 'networkidle', timeout: 120_000 });
+    // setContent evita hang de networkidle em file:// (smoke e jobs HTML-first).
+    await page.setContent(html, { waitUntil: 'load', timeout: 60_000 });
 
     if (waitPagedJs) {
       await page.evaluate(`
@@ -68,7 +76,6 @@ export async function gerarHtmlPdfFromPayload(payload: unknown): Promise<Uint8Ar
     return new Uint8Array(pdfBuffer);
   } finally {
     await page.close().catch(() => undefined);
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

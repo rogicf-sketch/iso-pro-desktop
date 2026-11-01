@@ -1,9 +1,12 @@
-import { Pagination } from '../../../components/tables/Pagination';
+﻿import { Pagination } from '../../../components/tables/Pagination';
 import { Button } from '../../../components/ui/Button';
+import { FonteDadosNotice } from '../../../components/ui/FonteDadosNotice';
 import { Modal } from '../../../components/ui/Modal';
 import { ModuleHelp } from '../../../components/ui/ModuleHelp';
 import { OperationalNotice } from '../../../components/ui/OperationalNotice';
+import { resolveFonteNuvemOk } from '../../../lib/fonteNuvemLista';
 import { getSupabaseOperationalStatus } from '../../../lib/supabase';
+import { usePageChrome } from '../../../layouts/PageChromeContext';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { InventarioFilters } from '../components/InventarioFilters';
 import { InventarioForm } from '../components/InventarioForm';
@@ -22,6 +25,7 @@ export function InventarioPage() {
     success,
     fallbackReason,
     listSource,
+    staleWhileRevalidate,
     hasCloudConfig,
     filters,
     formInitialValue,
@@ -39,13 +43,26 @@ export function InventarioPage() {
   const canEdit = canAccessAction('inventario', 'editar');
   const canAdminister = canAccessAction('inventario', 'administrar');
 
+  const fonteNuvemOk = resolveFonteNuvemOk({
+    listSource,
+    hasCloudConfig,
+    staleWhileRevalidate,
+    fallbackReason,
+  });
+
+  usePageChrome(
+    {
+      meta:
+        loading && total === 0
+          ? 'A carregar…'
+          : `${total.toLocaleString('pt-BR')} inventários · ${fonteNuvemOk ? 'nuvem' : 'local'}`,
+    },
+    [loading, total, fonteNuvemOk],
+  );
+
   return (
     <div className="panel">
-      <div className="panel-header panel-header--toolbar">
-        <div>
-          <p className="panel-kicker">Modulo</p>
-          <h2>Inventario</h2>
-        </div>
+      <div className="panel-header panel-header--toolbar panel-header--actions-only">
         {canEdit ? (
           <div className="panel-toolbar">
             <div className="panel-toolbar__group" role="group" aria-label="Cadastro">
@@ -66,21 +83,22 @@ export function InventarioPage() {
         </p>
       </ModuleHelp>
 
-      <OperationalNotice>
-        {listSource === 'supabase' && hasCloudConfig
-          ? 'Fonte atual: Supabase. Inventarios sincronizados com a base em nuvem.'
-          : hasCloudConfig
-            ? 'Fonte atual: copia local (nuvem vazia ou indisponivel). Ao salvar, os inventarios passam para o Supabase e aparecem no mobile.'
+      <FonteDadosNotice
+        healthy={fonteNuvemOk}
+        fallbackMessage={
+          hasCloudConfig
+            ? 'Fonte atual: copia local (nuvem vazia ou indisponivel). Cadastros de exemplo nao sao enviados a nuvem.'
             : cloudStatus === 'partial'
               ? 'Fonte atual: fallback local. Configuracao do Supabase incompleta.'
-              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'}
-      </OperationalNotice>
+              : 'Fonte atual: fallback local. Supabase ainda nao esta configurado.'
+        }
+      />
       {fallbackReason ? <OperationalNotice tone="warning">{`Fallback ativo por falha de consulta: ${fallbackReason}`}</OperationalNotice> : null}
 
       <InventarioFilters filters={filters} onChange={setFilters} />
 
       {error ? <div className="error-box">{error}</div> : null}
-      {success ? <OperationalNotice>{success}</OperationalNotice> : null}
+      {success ? <OperationalNotice tone="success">{success}</OperationalNotice> : null}
 
       {loading ? (
         <OperationalNotice>Carregando inventarios...</OperationalNotice>
@@ -96,6 +114,7 @@ export function InventarioPage() {
             onExportCsv={(row) => void exportarInventarioCsv(row)}
           />
           <Pagination
+            itemLabel="inventários"
             onPageChange={(page) => setFilters({ ...filters, page })}
             page={filters.page}
             pageSize={filters.pageSize}

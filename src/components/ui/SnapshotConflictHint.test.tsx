@@ -11,7 +11,7 @@ describe('SnapshotConflictHint', () => {
 
   it('renderiza aviso quando show e true', () => {
     render(<SnapshotConflictHint show />);
-    expect(screen.getByText(/Dados no servidor mudaram/i)).toBeDefined();
+    expect(screen.getByText(/Conflito de concorrência/i)).toBeDefined();
   });
 
   it('nao exibe botao Recarregar sem onReload', () => {

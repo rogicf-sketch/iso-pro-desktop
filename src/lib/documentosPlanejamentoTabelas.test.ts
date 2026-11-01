@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DOCUMENTOS_UPSERT_CHUNK_SIZE } from './documentosPlanejamentoTabelas';
+import { DOCUMENTOS_UPSERT_CHUNK_SIZE, DOCUMENTOS_UPSERT_MAX_ITENS } from './documentosPlanejamentoTabelas';
 
 describe('documentosPlanejamentoTabelas', () => {
-  it('usa lotes pequenos o suficiente para import web/PC', () => {
-    expect(DOCUMENTOS_UPSERT_CHUNK_SIZE).toBeGreaterThan(0);
-    expect(DOCUMENTOS_UPSERT_CHUNK_SIZE).toBeLessThanOrEqual(100);
+  it('agrupa a importacao por volume, nao um pedido a cada 40 desenhos', () => {
+    expect(DOCUMENTOS_UPSERT_CHUNK_SIZE).toBeGreaterThanOrEqual(2000);
+    expect(DOCUMENTOS_UPSERT_MAX_ITENS).toBeGreaterThanOrEqual(2000);
   });
 });

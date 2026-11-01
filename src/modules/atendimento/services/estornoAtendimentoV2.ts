@@ -8,6 +8,7 @@ import { resolveFeatureEnabled } from '../../../lib/featureFlags';
 import { getSupabase, hasSupabaseConfig } from '../../../lib/supabase';
 import type { ServiceResult } from '../../../types/common.types';
 import type { Atendimento, AtendimentoItem, EstornoAtendimentoLinha } from '../types/atendimento.types';
+import { resolveDataAtendimentoIso } from '../utils/isSyntheticLoadTestAtendimento';
 
 const FLAG_STORAGE = 'iso-pro-desktop-estorno-v2-opt-in-v1';
 
@@ -124,7 +125,7 @@ function mapLoteToAtendimento(lote: NonNullable<EstornoV2RpcResult['lote']>, fal
     motivoRetirada: fallback?.motivoRetirada ?? '',
     origem: fallback?.origem ?? 'windows',
     status: lote.status === 'estornado' ? 'estornado' : 'concluido',
-    dataAtendimento: String(lote.dataAtendimento ?? fallback?.dataAtendimento ?? new Date().toISOString()),
+    dataAtendimento: resolveDataAtendimentoIso(lote.dataAtendimento, fallback?.dataAtendimento),
     itens,
   };
 }

@@ -1,25 +1,12 @@
-import { BrowserWindow, app, shell } from 'electron';
-import fs from 'node:fs';
+import { BrowserWindow, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyAppIconToWindow, loadAppIconImage } from './appIcon';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/**
- * Ícone da janela / barra de tarefas:
- * - Dev: `build/icon.ico` (gerado por `npm run build:icon`).
- * - Empacotado: `resources/icon.ico` (copiado pelo electron-builder — ver `extraResources`); sem isto o Electron usa o ícone por defeito.
- */
-function resolveOptionalWindowIcon(): string | undefined {
-  const devPath = path.join(__dirname, '..', 'build', 'icon.ico');
-  const packagedPath = path.join(process.resourcesPath, 'icon.ico');
-  const candidate = app.isPackaged ? packagedPath : devPath;
-  if (fs.existsSync(candidate)) {
-    return candidate;
-  }
-  return undefined;
-}
+export { loadAppIconImage, applyAppIconToWindow, resolveAppIconCandidates } from './appIcon';
 
 /**
  * - Dev (electron/.dev-main.mjs): preload em electron/preload/index.mjs
@@ -34,7 +21,7 @@ export function resolvePreloadPath(): string {
 }
 
 export function createMainWindow() {
-  const windowIcon = resolveOptionalWindowIcon();
+  const windowIcon = loadAppIconImage();
   const devServerUrl = process.env.VITE_DEV_SERVER_URL?.replace(/\/$/, '');
   const isDevServer = Boolean(devServerUrl);
 
@@ -53,12 +40,14 @@ export function createMainWindow() {
       preload: resolvePreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
-      /** Processo de renderização isolado (recomendado com preload + sem Node no renderer). */
       sandbox: true,
     },
   });
 
+  applyAppIconToWindow(window);
+
   window.once('ready-to-show', () => {
+    applyAppIconToWindow(window);
     window.show();
     window.focus();
     window.moveTop();
@@ -105,7 +94,6 @@ export function createMainWindow() {
       window.webContents.openDevTools({ mode: 'right' });
     }
   } else {
-    /** Dev: __dirname = electron/ | Packaged: __dirname = dist-electron/ (asar) — em ambos ../dist/index.html */
     void window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
